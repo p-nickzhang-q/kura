@@ -1,0 +1,19 @@
+{
+  "name": "kura",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "cli": "bun run packages/cli/src/main.ts",
+    "build:cli": "bun build packages/cli/src/main.ts --compile --minify --outfile dist/kura",
+    "build:cli:win": "bun build packages/cli/src/main.ts --compile --minify --target=bun-windows-x64 --outfile dist/kura.exe",
+    "dev": "node scripts/dev.mjs",
+    "build": "pnpm --filter @kura/desktop build && bun run build:cli",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "~5.9.3"
+  }
+}

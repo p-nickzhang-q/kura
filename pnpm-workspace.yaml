@@ -1,0 +1,13 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+
+allowBuilds:
+  electron: set this to true or false
+  esbuild: set this to true or false
+
+# pnpm 10+ 默认不执行依赖的构建脚本。这两个必须放行:
+# electron 的 postinstall 负责下载二进制, esbuild 需要装平台原生包。
+onlyBuiltDependencies:
+  - electron
+  - esbuild

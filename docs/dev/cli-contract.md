@@ -1,0 +1,90 @@
+# CLI 契约(面向 agent)
+
+> 改这个文件等于改 API。实现入口 `packages/cli/src/{main,args,output,commands}.ts`。
+
+## 三条铁律
+
+1. **stdout 是机器通道**。JSON 模式下每次执行写一行完整 JSON,成功与失败都在这里。
+2. **stderr 是人通道**。日志、进度、诊断;agent 可以整段丢弃。
+3. **退出码是主信号**。先看退出码,再看 `error.code`,不要靠匹配错误文本。
+
+## 输出信封
+
+成功:
+
+```json
+{"ok":true,"command":"scan","data":{"root":"/media","dryRun":false,"counts":{"added":12,"updated":0,"unchanged":340,"removed":1},"durationMs":88}}
+```
+
+失败:
+
+```json
+{"ok":false,"command":"scan","error":{"code":"NOT_FOUND","message":"不是目录: /nope","retryable":false,"details":{"root":"/nope"}}}
+```
+
+- `detail` 里只放**结构化**信息(路径、参数名),不放人类散文。
+- 未预期异常也走这个信封,栈只在 `KURA_DEBUG=1` 时进 stderr。
+
+## 退出码
+
+| 码 | 名称 | 含义 | agent 该做什么 |
+|---|---|---|---|
+| 0 | OK | 成功 | 读 `data` |
+| 2 | USAGE | 参数错、未知命令 | **修正参数后重试**,别原样重试 |
+| 3 | RETRYABLE | 数据库被占用、网络抖动 | **原样重试**(可退避) |
+| 4 | NEEDS_INPUT | 缺凭据、需人确认 | **停下来问人**,禁止重试 |
+| 5 | NOT_FOUND | 目标不存在 | 换参数,不要重试 |
+| 10 | INTERNAL | bug | 报告,不要重试 |
+
+`error.retryable` 是退出码 3 的布尔镜像,便于只读 JSON 的调用方。
+
+## 模式选择
+
+- 非 TTY(agent 管道调用)**自动进入 JSON 模式**,不需要显式 `--json`。
+- `--stream`:JSON 模式额外输出 JSONL 事件(每行一个对象),最后一行仍是结果信封。默认不输出事件,避免 agent 要过滤多行。
+- `--json` 在 TTY 下强制 JSON。
+
+## 工具发现
+
+```bash
+kura schema --json
+```
+
+返回命令清单、每个参数的 `name/type/required/default/description`、退出码表、相关环境变量。
+
+**这份输出与参数解析共用同一份 `COMMANDS` 声明**,所以不会出现"文档说有 `--dry-run`、实际不认"的情况。新增参数只改 `COMMANDS`。
+
+## 幂等与安全
+
+- 写操作必须幂等:同一输入重复执行,第二次应报告 `unchanged` 而不是重复写入。
+- 可能破坏数据的操作提供 `--dry-run`,并且**默认值写在 `COMMANDS` 里**,不靠文档口头约定。
+- 当前无交互命令。将来加确认时:`--yes` 跳过;没有 TTY 且没有 `--yes` → 退出码 4,不要阻塞等 stdin。
+
+## agent 调用示例
+
+```bash
+# 先探能力
+kura schema --json
+
+# 预演
+kura scan /media/library --dry-run --json
+
+# 真跑, 需要进度就加 --stream
+kura scan /media/library --json --stream
+
+# 自检(数据目录、schema 版本、条目数)
+kura doctor --json
+```
+
+## 环境变量
+
+| 变量 | 作用 |
+|---|---|
+| `KURA_DATA_DIR` | 覆盖数据目录(测试与多库场景) |
+| `KURA_DEBUG` | 异常栈打到 stderr |
+
+## 何时会失效
+
+- **输出字段改名** → 已经是对外契约,需要同步升 `version` 并在 `schema` 里标注。当前阶段(0.x)直接改,但要同步文档。
+- **加交互式确认** → 必须同时实现 `--yes` 与"无 TTY 直接退出 4",否则 agent 会挂死。
+- **加长任务** → 必须提供 `--stream` 事件 + 终态信封,不要让 agent 靠超时判断失败。
