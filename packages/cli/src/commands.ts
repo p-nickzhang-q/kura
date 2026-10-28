@@ -12,10 +12,15 @@ import {
   listItems,
   listLibraries,
   organize,
+  parseFieldList,
+  parseListValue,
   pendingKeys,
   scan,
   scrape,
+  updateItem,
+  exitCodeName,
   type ContentType,
+  type FieldKey,
   type ItemKey,
 } from "@kura/core";
 import type { ArgSpec, ParsedArgs } from "./args";
@@ -244,16 +249,29 @@ export const COMMANDS: Command[] = [
 
   {
     name: "item",
-    summary: "条目: get <番号> | list [--type] [--limit]",
+    summary: "条目: get <番号> | list [--type] | set <番号> --title ... | lock/unlock <番号> 字段,字段",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "get 或 list", positional: true, required: true },
-      { name: "number", type: "string", description: "番号 (get)", positional: true },
+      { name: "action", type: "string", description: "get | list | set | lock | unlock", positional: true, required: true },
+      { name: "number", type: "string", description: "番号 (get/set/lock/unlock)", positional: true },
+      { name: "fields", type: "string", description: "lock/unlock 的字段, 逗号分隔", positional: true },
       { name: "type", type: "string", description: "按类型筛选 (list)" },
       { name: "limit", type: "number", description: "条数 (list)", default: 20 },
+      { name: "title", type: "string", description: "set: 标题" },
+      { name: "plot", type: "string", description: "set: 简介" },
+      { name: "studio", type: "string", description: "set: 片商" },
+      { name: "label", type: "string", description: "set: 厂牌" },
+      { name: "series", type: "string", description: "set: 系列" },
+      { name: "release-date", type: "string", description: "set: 发行日期 YYYY-MM-DD" },
+      { name: "duration-min", type: "number", description: "set: 时长(分钟)" },
+      { name: "actors", type: "string", description: "set: 演员, 逗号分隔" },
+      { name: "directors", type: "string", description: "set: 导演, 逗号分隔" },
+      { name: "tags", type: "string", description: "set: 标签, 逗号分隔" },
+      { name: "pin", type: "boolean", description: "set 时同时锁定被改的字段", default: true },
     ],
     async run(ctx, args) {
       const action = args.positionals.action;
+
       if (action === "get") {
         const number = args.positionals.number;
         if (!number) throw new AppError("用法: item get <番号>", EXIT.USAGE);
@@ -261,6 +279,7 @@ export const COMMANDS: Command[] = [
         if (!item) throw new AppError(`条目不存在: ${number}`, EXIT.NOT_FOUND, { number });
         return { item };
       }
+
       if (action === "list") {
         const items = listItems(ctx.rt!, {
           limit: Number(args.options.limit ?? 20),
@@ -268,45 +287,157 @@ export const COMMANDS: Command[] = [
         });
         return { items };
       }
+
+      if (action === "set" || action === "lock" || action === "unlock") {
+        const number = args.positionals.number;
+        if (!number) throw new AppError(`用法: item ${action} <番号> ...`, EXIT.USAGE);
+        const key = number.toUpperCase();
+
+        if (action === "set") {
+          const patch: Partial<Record<FieldKey, string | string[] | number>> = {};
+          const single: [string, FieldKey][] = [
+            ["title", "title"],
+            ["plot", "plot"],
+            ["studio", "studio"],
+            ["label", "label"],
+            ["series", "series"],
+            ["release-date", "release_date"],
+          ];
+          for (const [option, field] of single) {
+            const value = args.options[option];
+            if (typeof value === "string") patch[field] = value;
+          }
+          if (typeof args.options["duration-min"] === "number") patch.duration_min = args.options["duration-min"];
+          for (const [option, field] of [
+            ["actors", "actors"],
+            ["directors", "directors"],
+            ["tags", "tags"],
+          ] as const) {
+            const value = args.options[option];
+            if (typeof value === "string") patch[field] = parseListValue(value);
+          }
+          if (Object.keys(patch).length === 0) {
+            throw new AppError("item set 至少要给一个字段, 如 --title", EXIT.USAGE);
+          }
+          const pin = Boolean(args.options.pin) ? (Object.keys(patch) as FieldKey[]) : [];
+          return { item: updateItem(ctx.rt!, { key, patch, pin }) };
+        }
+
+        const fields = parseFieldList(args.positionals.fields);
+        if (fields.length === 0) {
+          throw new AppError(`用法: item ${action} <番号> title,plot`, EXIT.USAGE);
+        }
+        const item =
+          action === "lock"
+            ? updateItem(ctx.rt!, { key, pin: fields })
+            : updateItem(ctx.rt!, { key, unpin: fields });
+        return { item };
+      }
+
       throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
     },
     render(data: { item?: Record<string, unknown>; items?: Record<string, unknown>[] }) {
       if (data.item) {
+        const pinned = (data.item.pinned as string[] | undefined) ?? [];
         return Object.entries(data.item)
-          .filter(([, value]) => value !== undefined && value !== null && String(value).length > 0)
-          .map(([key, value]) => `${key.padEnd(14)} ${Array.isArray(value) ? value.join(", ") : String(value)}`)
+          .filter(([key, value]) => key !== "pinned" && value !== undefined && value !== null && String(value).length > 0)
+          .map(([key, value]) => {
+            const lock = pinned.includes(key) ? "🔒" : "  ";
+            return `${lock} ${key.padEnd(13)} ${Array.isArray(value) ? value.join(", ") : String(value)}`;
+          })
           .join("\n");
       }
       const items = data.items ?? [];
       if (items.length === 0) return "没有条目。先 `kura scan <库>`。";
       return items
-        .map((item) => `${String(item.number).padEnd(14)} ${String(item.content_type).padEnd(11)} ${item.title ?? "(未刮削)"}`)
+        .map((item) => {
+          const pinned = ((item.pinned as string[] | undefined) ?? []).length > 0 ? "🔒" : "  ";
+          return `${pinned} ${String(item.number).padEnd(13)} ${String(item.contentType).padEnd(10)} ${item.title ?? "(未刮削)"}`;
+        })
         .join("\n");
     },
   },
 
   {
     name: "source",
-    summary: "来源: list (显示实现状态与路由)",
+    summary: "来源: list (状态与缺失配置) | test <id> [--probe 番号]",
     needsDb: false,
-    args: [{ name: "action", type: "string", description: "目前只有 list", positional: true, default: "list" }],
+    args: [
+      { name: "action", type: "string", description: "list 或 test", positional: true, default: "list" },
+      { name: "id", type: "string", description: "test 时指定来源 id", positional: true },
+      { name: "probe", type: "string", description: "test 用的探测番号", default: "SSIS-001" },
+    ],
     async run(_ctx, args) {
       const action = args.positionals.action ?? "list";
-      if (action !== "list") throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
-      return {
-        sources: defaultSources()
-          .list()
-          .map((source) => ({
+      const registry = defaultSources();
+
+      if (action === "list") {
+        return {
+          sources: registry.list().map((source) => ({
             id: source.id,
             label: source.label,
             status: source.status,
+            missing: source.requirements(),
             contentTypes: source.contentTypes,
           })),
-      };
+        };
+      }
+
+      if (action === "test") {
+        const id = args.positionals.id;
+        if (!id) throw new AppError("用法: source test <id> [--probe SSIS-001]", EXIT.USAGE);
+        const source = registry.get(id);
+        if (!source) throw new AppError(`未知来源: ${id}`, EXIT.NOT_FOUND, { id });
+        if (source.status !== "ready") return { id, ok: false, status: "todo" };
+
+        const missing = source.requirements();
+        if (missing.length > 0) return { id, ok: false, status: "missing-config", missing };
+
+        const probe = String(args.options.probe ?? "SSIS-001").toUpperCase();
+        const key = { value: probe, number: probe, contentType: detectContentType(probe) ?? "censored" } as const;
+        const started = Date.now();
+        try {
+          const fields = await source.fetch(key, { fixturesDir: null });
+          return {
+            id,
+            ok: Boolean(fields),
+            status: fields ? "ok" : "empty",
+            probe,
+            fields: fields ? Object.keys(fields) : [],
+            durationMs: Date.now() - started,
+          };
+        } catch (err) {
+          return {
+            id,
+            ok: false,
+            status: err instanceof AppError ? exitCodeName(err.exitCode) : "ERROR",
+            probe,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }
+
+      throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
     },
-    render(data: { sources: { id: string; label: string; status: string }[] }) {
-      return data.sources
-        .map((source) => `${source.id.padEnd(10)} ${source.status.padEnd(6)} ${source.label}`)
+    render(data: Record<string, unknown>) {
+      if (Array.isArray(data.sources)) {
+        return (data.sources as { id: string; label: string; status: string; missing: string[] }[])
+          .map(
+            (source) =>
+              `${source.id.padEnd(10)} ${source.status.padEnd(6)} ${source.label}${
+                source.missing.length ? `  缺: ${source.missing.join(", ")}` : ""
+              }`,
+          )
+          .join("\n");
+      }
+      const result = data as { id: string; ok: boolean; status: string; probe?: string; error?: string; fields?: string[] };
+      return [
+        `${result.id}: ${result.ok ? "通过" : "未通过"} (${result.status})`,
+        result.probe ? `  探测番号 ${result.probe}` : "",
+        result.fields?.length ? `  取到字段: ${result.fields.join(", ")}` : "",
+        result.error ? `  ${result.error}` : "",
+      ]
+        .filter(Boolean)
         .join("\n");
     },
   },

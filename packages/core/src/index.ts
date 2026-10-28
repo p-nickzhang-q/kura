@@ -2,7 +2,7 @@
  * core 的公开面 = 唯一的稳定 API。
  * GUI、CLI、未来的 MCP server 都只从这里导入; 内部文件路径不属于契约。
  */
-export { AppError, EXIT, isRetryable } from "./exit";
+export { AppError, EXIT, exitCodeName, isRetryable } from "./exit";
 export type { ExitCode } from "./exit";
 
 export { openRuntime, withRuntime } from "./runtime";
@@ -28,7 +28,11 @@ export { applyPlan, buildNfo, buildPlan, escapeXml, renderTemplate } from "./dom
 export type { ApplyResult, Library, Plan, PlanEntry, PlanInput } from "./domain/materialize";
 
 export { defaultSources, DEFAULT_ROUTES, createRegistry, fixtureSource, routeFor } from "./sources";
-export type { Registry, Source, SourceContext } from "./sources";
+export { buildUrl, createDmmSource, matchDmmItem, normalizeCode, toRawFields } from "./sources/dmm";
+export type { DmmEnv, DmmItem, DmmResponse } from "./sources/dmm";
+export type { DefaultSourcesOptions, Registry, Source, SourceConfig, SourceContext } from "./sources";
+export { HttpClient } from "./net/http";
+export type { HttpClientOptions } from "./net/http";
 
 export { createLibrary, findLibrary, listLibraries, pinnedFields, rowToMetadata } from "./db/rows";
 export type { ItemRow, MediaFileRow } from "./db/rows";
@@ -38,6 +42,9 @@ export type { ScanEvent, ScanOptions, ScanReport } from "./tasks/scan";
 
 export { getItem, listItems, pendingKeys, scrape } from "./tasks/scrape";
 export type { ItemView, ScrapeOptions, ScrapeReport } from "./tasks/scrape";
+
+export { parseFieldList, parseListValue, updateItem } from "./tasks/item";
+export type { UpdateItemOptions } from "./tasks/item";
 
 export { organize } from "./tasks/organize";
 export type { OrganizeOptions, OrganizeReport } from "./tasks/organize";

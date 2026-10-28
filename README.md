@@ -22,6 +22,10 @@
 
 前置:[Bun](https://bun.sh) ≥ 1.1(CLI / 主进程构建)、[pnpm](https://pnpm.io) ≥ 9(桌面端依赖)。
 
+网络受限时 `pnpm install` 会卡在 Electron 二进制下载, 加镜像:
+`ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ pnpm install`(打包时再加
+`ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/`)。
+
 ```bash
 # CLI
 kura library add 主库 ~/Videos
@@ -30,24 +34,40 @@ kura scrape ABC-123 --json
 kura organize 主库              # 只看计划
 kura organize 主库 --apply      # 真的移动
 
+# 手改字段并锁定(重新刮削不覆盖)
+kura item set ABC-123 --title "我改的标题" --plot "我改的简介"
+kura item unlock ABC-123 title
+
 # 开发
 bun run cli --help               # 零 install 跑 CLI
 pnpm install && pnpm dev         # 桌面端
 bun run build:cli                # -> dist/kura
 bun run build:cli:win            # -> dist/kura.exe (交叉编译)
-bun test                         # 28 个用例, 全部离线
+bun test                         # 47 个用例, 全部离线
+
+# 出 Windows 包
+pnpm --filter @kura/desktop package:win   # -> apps/desktop/release/Kura-x.y.z-portable.exe
 ```
+
+图标是脚本生成的占位图: `node scripts/make-icon.mjs`(手写 PNG/ICO 编码,零依赖)。
 
 ## 数据源现状
 
-| 来源 | 状态 |
-|---|---|
-| `javdb` / `javbus` / `dmm` | 接口就绪,抓取待实现(`source list` 如实显示 todo) |
-| `fixture` | 可用:从目录读离线样本,用于开发与测试 |
+| 来源 | 状态 | 说明 |
+|---|---|---|
+| `dmm` | **可用** | DMM/FANZA 官方 API,需 affiliate 凭据 |
+| `javdb` / `javbus` | todo | 网页版对非日本 IP 不可达,待在有网络条件的环境实现 |
+| `fixture` | 可用 | 从目录读离线样本,用于开发与测试 |
 
 ```bash
+export KURA_DMM_API_ID=...            # https://affiliate.dmm.com/api/
+export KURA_DMM_AFFILIATE_ID=...
+kura source test dmm                  # 一条命令验证凭据与解析
+kura scrape ABC-123                   # 默认路由: dmm → javdb → javbus
 kura scrape ABC-123 --source fixture --fixtures ./fixtures
 ```
+
+缺凭据时退出码是 **4(NEEDS_INPUT)**,不会静默返回空条目。
 
 聚合、整理、NFO 都走同一份代码,补站点时只改 `packages/core/src/sources/builtin.ts`。
 

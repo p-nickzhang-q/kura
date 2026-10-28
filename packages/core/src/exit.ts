@@ -32,6 +32,12 @@ export class AppError extends Error {
   }
 }
 
+/** 退出码 → 名字。CLI 的 error.code 与 scrape 报告里的 code 都用它, 避免两套拼写。 */
+export function exitCodeName(exitCode: number): string {
+  const found = Object.entries(EXIT).find(([, value]) => value === exitCode);
+  return found ? found[0] : "INTERNAL";
+}
+
 export function isRetryable(err: unknown): boolean {
   if (err instanceof AppError) return err.exitCode === EXIT.RETRYABLE;
   const code = (err as { code?: string } | null)?.code;

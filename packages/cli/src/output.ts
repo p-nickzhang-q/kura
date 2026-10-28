@@ -1,4 +1,4 @@
-import { AppError, EXIT, isRetryable } from "@kura/core";
+import { AppError, EXIT, exitCodeName, isRetryable } from "@kura/core";
 
 export type OutputMode = "json" | "text";
 
@@ -42,7 +42,7 @@ export class Output {
         : new AppError(err instanceof Error ? err.message : String(err), isRetryable(err) ? EXIT.RETRYABLE : EXIT.INTERNAL);
 
     const exitCode = appErr.exitCode;
-    const code = codeName(exitCode);
+    const code = exitCodeName(exitCode);
 
     if (this.mode === "json") {
       const error = {
@@ -65,11 +65,6 @@ export class Output {
   log(message: string): void {
     process.stderr.write(`${message}\n`);
   }
-}
-
-function codeName(exitCode: number): string {
-  const found = Object.entries(EXIT).find(([, v]) => v === exitCode);
-  return found ? found[0] : "INTERNAL";
 }
 
 function describeEvent(payload: Record<string, unknown>): string {

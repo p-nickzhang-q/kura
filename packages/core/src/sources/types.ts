@@ -15,6 +15,8 @@ export interface Source {
   /** todo 的源不参与刮削, 也不该被调用 —— 避免把未实现的代码伪装成可用。 */
   status: "ready" | "todo";
   contentTypes: ContentType[] | "all";
+  /** 缺哪些配置就无法工作(环境变量名), 供 `source list` 与 NEEDS_INPUT 报错共用。 */
+  requirements(): string[];
   fetch(key: ItemKey, ctx: SourceContext): Promise<RawFields | null>;
 }
 

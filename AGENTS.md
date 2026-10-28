@@ -40,6 +40,8 @@ bun test                           # 全部用例离线, 不依赖网络
 pnpm typecheck
 pnpm dev                           # 主进程 + Vite + Electron
 bun run build:cli                  # 单文件 CLI
+pnpm --filter @kura/desktop package:win   # Windows portable (Linux 上可构建, 未签名)
+node scripts/make-icon.mjs         # 占位图标(手写 PNG/ICO)
 ```
 
 ## 代码风格

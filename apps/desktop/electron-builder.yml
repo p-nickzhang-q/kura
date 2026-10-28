@@ -1,0 +1,30 @@
+appId: com.kura.desktop
+productName: Kura
+copyright: Copyright © 2026 Kura
+
+directories:
+  output: release
+  buildResources: build
+
+# 只打必要文件; 源码与 node_modules 一律不进 asar。
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - electron/preload.cjs
+  - package.json
+
+# 主进程是 bun 打出来的 ESM, 入口必须显式指定。
+extraMetadata:
+  main: dist-electron/main.mjs
+
+win:
+  target:
+    - target: portable
+      arch: [x64]
+  icon: build/icon.ico
+
+portable:
+  artifactName: Kura-${version}-portable.exe
+
+# 产物里不要带调试符号
+electronLanguages: [zh-CN, en-US]

@@ -1,4 +1,4 @@
-import { AppError, EXIT } from "../exit";
+import { AppError, EXIT, exitCodeName } from "../exit";
 import { aggregate, mergeWithPinned } from "../domain/aggregate";
 import type { ItemKey, Metadata, SourceRecord } from "../domain/types";
 import { metadataColumns, parseJson, pinnedFields, rowToMetadata, stringify, type ItemRow } from "../db/rows";
@@ -23,7 +23,7 @@ export interface ScrapeReport {
   skipped: string[];
   filled: string[];
   empty: string[];
-  failures: { site: string; error: string }[];
+  failures: { site: string; error: string; code?: string }[];
   metadata: Metadata | null;
   dryRun: boolean;
 }
@@ -51,16 +51,33 @@ export async function scrape(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRe
   );
 
   const records: SourceRecord[] = [];
-  const failures: { site: string; error: string }[] = [];
+  const failures: { site: string; error: string; code?: string }[] = [];
 
   settled.forEach((result, index) => {
     const site = usable[index]!.id;
     if (result.status === "rejected") {
-      failures.push({ site, error: result.reason instanceof Error ? result.reason.message : String(result.reason) });
+      const reason = result.reason;
+      failures.push({
+        site,
+        error: reason instanceof Error ? reason.message : String(reason),
+        code: reason instanceof AppError ? exitCodeName(reason.exitCode) : undefined,
+      });
       return;
     }
     if (result.value) records.push({ site, fields: result.value });
   });
+
+  // 一条记录都没拿到时不能落一个空条目: 那会让"缺凭据"看起来像"刮削成功但没字段"。
+  if (records.length === 0) {
+    const blocked = failures.find((failure) => failure.code === "NEEDS_INPUT");
+    if (blocked) {
+      throw new AppError(blocked.error, EXIT.NEEDS_INPUT, { source: blocked.site, failures });
+    }
+    if (failures.length > 0) {
+      throw new AppError(`所有来源都失败: ${failures.map((failure) => `${failure.site}(${failure.error})`).join("; ")}`, EXIT.RETRYABLE, { failures });
+    }
+    throw new AppError(`来源里没有这个番号: ${opts.key.value}`, EXIT.NOT_FOUND, { key: opts.key.value });
+  }
 
   const incoming = aggregate(records, usable.map((source) => source.id));
 

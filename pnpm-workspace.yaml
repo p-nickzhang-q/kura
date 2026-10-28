@@ -2,12 +2,10 @@ packages:
   - "packages/*"
   - "apps/*"
 
+# pnpm 11 默认不执行依赖的构建脚本。这三个必须放行:
+# electron 的 postinstall 下载二进制, esbuild 装平台原生包,
+# electron-winstaller 用于打包 Windows 目标。
 allowBuilds:
-  electron: set this to true or false
-  esbuild: set this to true or false
-
-# pnpm 10+ 默认不执行依赖的构建脚本。这两个必须放行:
-# electron 的 postinstall 负责下载二进制, esbuild 需要装平台原生包。
-onlyBuiltDependencies:
-  - electron
-  - esbuild
+  electron: true
+  esbuild: true
+  electron-winstaller: true

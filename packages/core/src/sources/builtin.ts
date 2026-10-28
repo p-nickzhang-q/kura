@@ -1,12 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { HttpClient } from "../net/http";
 import type { RawFields } from "../domain/types";
+import { createDmmSource, type DmmEnv } from "./dmm";
 import type { Source } from "./types";
 
 /**
  * 离线来源: 从 `fixturesDir/<站点键>.json` 读一份 RawFields。
  *
- * 存在的理由不是"测试专用", 而是: 站点实现会挂、会改版、会被墙,
+ * 存在的理由不是"测试专用", 而是: 站点会挂、会改版、会被墙,
  * 而聚合与整理必须能在没有网络的情况下被验证。它也是新增站点的样板。
  */
 export const fixtureSource: Source = {
@@ -14,6 +16,7 @@ export const fixtureSource: Source = {
   label: "离线样本",
   status: "ready",
   contentTypes: "all",
+  requirements: () => [],
   async fetch(key, ctx) {
     if (!ctx.fixturesDir) return null;
     const file = join(ctx.fixturesDir, `${key.value.replace(/[:/\\]/g, "_")}.json`);
@@ -27,9 +30,8 @@ export const fixtureSource: Source = {
 };
 
 /**
- * 三个真实站点。**故意标 todo**: 未实现的抓取代码不参与运行,
+ * 尚未实现的站点。**故意标 todo**: 未实现的抓取不参与运行,
  * `source list` 会如实显示, `scrape` 会跳过并报告。
- * 补实现时只改这一个文件 + 各自的解析函数, 聚合与整理不用动。
  */
 function unimplemented(id: string, label: string, contentTypes: Source["contentTypes"]): Source {
   return {
@@ -37,12 +39,22 @@ function unimplemented(id: string, label: string, contentTypes: Source["contentT
     label,
     status: "todo",
     contentTypes,
+    requirements: () => [],
     async fetch() {
       throw new Error(`来源 ${id} 尚未实现`);
     },
   };
 }
 
-export const javdbSource = unimplemented("javdb", "JavDB", "all");
-export const javbusSource = unimplemented("javbus", "JavBus", ["censored", "uncensored", "fc2", "amateur"]);
-export const dmmSource = unimplemented("dmm", "DMM", ["censored", "anime"]);
+export interface SourceConfig {
+  dmm: DmmEnv;
+}
+
+export function createSources(http: HttpClient, config: SourceConfig): Source[] {
+  return [
+    createDmmSource(http, config.dmm),
+    unimplemented("javdb", "JavDB", "all"),
+    unimplemented("javbus", "JavBus", ["censored", "uncensored", "fc2", "amateur"]),
+    fixtureSource,
+  ];
+}

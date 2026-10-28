@@ -73,9 +73,21 @@ kura scrape ABC-123 --json
 kura organize 主库 --json          # 只出计划
 kura organize 主库 --apply --json  # 真的移动
 
+# 手改字段并锁定: 锁定的字段重新刮削不覆盖
+kura item set ABC-123 --title "我改的标题" --json
+kura item lock ABC-123 title,plot --json
+kura item unlock ABC-123 title --json
+
+# 验证某个来源是否真的能用(缺凭据会如实报 missing-config)
+kura source test dmm --json
+
 # 自检(数据目录、schema 版本、库/条目/文件数)
 kura doctor --json
 ```
+
+`scrape` 的失败语义:
+- 有任一来源拿到数据 → 正常返回, 失败的来源进 `failures`(不中断);
+- **一条都没拿到** → 不落空条目: 缺凭据给 `4`, 网络/站点给 `3`, 确实没有这条给 `5`。
 
 三个动作**互不触发**。agent 要跑完整流程, 就按上面顺序调三次 —— 不要指望 `scan` 顺手刮削。
 
