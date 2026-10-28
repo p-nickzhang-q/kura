@@ -1,50 +1,110 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 
+const TYPE_LABEL: Record<string, string> = {
+  censored: "有码",
+  uncensored: "无码",
+  fc2: "FC2",
+  chinese: "国产",
+  amateur: "素人",
+  western: "欧美",
+  anime: "动漫",
+};
+
 const info = ref<KuraAppInfo | null>(null);
-const root = ref("");
-const dryRun = ref(true);
+const libraries = ref<KuraLibrary[]>([]);
+const selectedId = ref<number | null>(null);
+const items = ref<KuraItem[]>([]);
+const tab = ref<"items" | "plan">("items");
 const busy = ref(false);
-const events = ref<KuraScanEvent[]>([]);
-const report = ref<KuraScanReport | null>(null);
 const error = ref<string | null>(null);
+const note = ref<string | null>(null);
+const plan = ref<KuraPlan | null>(null);
+const events = ref<KuraScanEvent[]>([]);
+const confirmApply = ref(false);
 
 let unsubscribe: (() => void) | null = null;
 
+const selected = computed(() => libraries.value.find((library) => library.id === selectedId.value) ?? null);
+
 onMounted(async () => {
-  info.value = await window.kura.info();
-  // 事件在主进程产生, 渲染进程只订阅; 不在这里做任何业务判断。
   unsubscribe = window.kura.onScanEvent((event) => {
-    events.value = [event, ...events.value].slice(0, 300);
+    events.value = [event, ...events.value].slice(0, 200);
   });
+  await refreshAll();
 });
 
 onUnmounted(() => unsubscribe?.());
 
-const summary = computed(() => {
-  if (!report.value) return null;
-  const { counts } = report.value;
-  return `新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 删除 ${counts.removed}`;
-});
-
-async function pick(): Promise<void> {
-  const dir = await window.kura.pickDir();
-  if (dir) root.value = dir;
+async function refreshAll(): Promise<void> {
+  info.value = await window.kura.info();
+  libraries.value = await window.kura.libraries();
+  if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
+  items.value = await window.kura.items(100);
 }
 
-async function run(): Promise<void> {
-  if (!root.value || busy.value) return;
+async function run<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
   busy.value = true;
   error.value = null;
-  report.value = null;
-  events.value = [];
+  note.value = null;
   try {
-    report.value = await window.kura.scan(root.value, dryRun.value);
-    info.value = await window.kura.info();
+    return await fn();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err);
+    error.value = `${label}失败: ${err instanceof Error ? err.message : String(err)}`;
+    return null;
   } finally {
     busy.value = false;
+  }
+}
+
+async function addLibrary(): Promise<void> {
+  const library = await run("添加媒体库", () => window.kura.addLibrary());
+  if (library) {
+    await refreshAll();
+    selectedId.value = library.id;
+    note.value = `已添加 ${library.name}`;
+  }
+}
+
+async function doScan(): Promise<void> {
+  if (selectedId.value === null) return;
+  events.value = [];
+  const report = await run("扫描", () => window.kura.scan(selectedId.value!));
+  if (report) {
+    const { counts } = report;
+    note.value = `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}`;
+    await refreshAll();
+  }
+}
+
+async function doScrape(): Promise<void> {
+  const batch = await run("刮削", () => window.kura.scrapePending(20));
+  if (batch) {
+    const failed = batch.reports.filter((report) => !report.ok);
+    note.value = `刮削 ${batch.count} 条, 失败 ${failed.length} 条${failed[0]?.error ? ` (${failed[0].error})` : ""}`;
+    await refreshAll();
+  }
+}
+
+async function preview(): Promise<void> {
+  if (selectedId.value === null) return;
+  const report = await run("生成计划", () => window.kura.organizePreview(selectedId.value!));
+  if (report) {
+    plan.value = report.plan;
+    tab.value = "plan";
+    confirmApply.value = false;
+  }
+}
+
+async function apply(): Promise<void> {
+  if (selectedId.value === null) return;
+  const report = await run("整理", () => window.kura.organizeApply(selectedId.value!));
+  if (report) {
+    plan.value = report.plan;
+    const failed = (report.applied ?? []).filter((result) => !result.ok);
+    note.value = `已整理, 失败 ${failed.length} 项`;
+    confirmApply.value = false;
+    await refreshAll();
   }
 }
 </script>
@@ -54,45 +114,117 @@ async function run(): Promise<void> {
     <header class="top">
       <h1>Kura</h1>
       <span v-if="info" class="meta">
-        v{{ info.version }} · {{ info.dbRuntime }} · schema v{{ info.schemaVersion }} · 库内 {{ info.itemCount }} 条
+        v{{ info.version }} · {{ info.dbRuntime }} · schema v{{ info.schemaVersion }} · 条目 {{ info.items }} · 文件
+        {{ info.mediaFiles }}
       </span>
     </header>
 
-    <section class="card">
-      <label class="field">
-        <span>目录</span>
-        <input v-model="root" placeholder="选择或粘贴一个目录" spellcheck="false" />
-        <button class="ghost" type="button" @click="pick">选择…</button>
-      </label>
+    <div class="body">
+      <aside class="side">
+        <div class="side-head">
+          <span>媒体库</span>
+          <button class="ghost" type="button" :disabled="busy" @click="addLibrary">+</button>
+        </div>
+        <ul class="libs">
+          <li v-for="library in libraries" :key="library.id" :class="{ active: library.id === selectedId }">
+            <button type="button" @click="selectedId = library.id">
+              <strong>{{ library.name }}</strong>
+              <small :title="library.root">{{ library.root }}</small>
+            </button>
+          </li>
+          <li v-if="libraries.length === 0" class="muted">还没有媒体库</li>
+        </ul>
 
-      <div class="row">
-        <label class="check">
-          <input v-model="dryRun" type="checkbox" :disabled="busy" />
-          仅预演 (不写库)
-        </label>
-        <button class="primary" type="button" :disabled="busy || !root" @click="run">
-          {{ busy ? "扫描中…" : "开始扫描" }}
-        </button>
-      </div>
+        <div class="actions">
+          <button type="button" :disabled="busy || !selected" @click="doScan">扫描</button>
+          <button type="button" :disabled="busy" @click="doScrape">刮削待处理</button>
+          <button type="button" :disabled="busy || !selected" @click="preview">整理预览</button>
+        </div>
 
-      <p v-if="summary" class="summary">{{ summary }} · 耗时 {{ report?.durationMs }}ms</p>
-      <p v-if="error" class="error">{{ error }}</p>
-      <p v-if="info" class="path">{{ info.dataDir }}</p>
-    </section>
+        <p v-if="info" class="sources">
+          来源:
+          <span v-for="source in info.sources" :key="source.id" :class="source.status">
+            {{ source.id }}({{ source.status === "ready" ? "可用" : "待实现" }})
+          </span>
+        </p>
+      </aside>
 
-    <section class="card log">
-      <div class="log-head">
-        <span>事件</span>
-        <span class="muted">{{ events.length }}</span>
-      </div>
-      <ul>
-        <li v-for="(event, index) in events" :key="`${event.path}-${index}`">
-          <span class="tag" :data-type="event.type">{{ event.type.replace("file.", "") }}</span>
-          <span class="p" :title="event.path">{{ event.path }}</span>
-        </li>
-        <li v-if="events.length === 0" class="muted empty">暂无事件</li>
-      </ul>
-    </section>
+      <section class="main">
+        <nav class="tabs">
+          <button type="button" :class="{ on: tab === 'items' }" @click="tab = 'items'">条目</button>
+          <button type="button" :class="{ on: tab === 'plan' }" @click="tab = 'plan'">整理预览</button>
+          <span class="spacer" />
+          <span v-if="busy" class="muted">进行中…</span>
+        </nav>
+
+        <p v-if="error" class="error">{{ error }}</p>
+        <p v-else-if="note" class="note">{{ note }}</p>
+
+        <div v-if="tab === 'items'" class="pane">
+          <table>
+            <thead>
+              <tr>
+                <th>番号</th>
+                <th>类型</th>
+                <th>标题</th>
+                <th>片商</th>
+                <th>演员</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in items" :key="item.key">
+                <td class="mono">{{ item.number }}</td>
+                <td>{{ TYPE_LABEL[item.contentType] ?? item.contentType }}</td>
+                <td>{{ item.title ?? "未刮削" }}</td>
+                <td>{{ item.studio ?? "—" }}</td>
+                <td>{{ item.actors?.join("、") ?? "—" }}</td>
+              </tr>
+              <tr v-if="items.length === 0">
+                <td colspan="5" class="muted">没有条目。先扫描一个媒体库。</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-else class="pane">
+          <div v-if="!plan" class="muted">点左侧「整理预览」生成计划。</div>
+          <template v-else>
+            <p class="summary">
+              移动 {{ plan.summary.move }} · 写 NFO {{ plan.summary.writeNfo }} · 跳过 {{ plan.summary.skip }}
+              <span class="muted">(库根 {{ plan.libraryRoot }})</span>
+            </p>
+            <ul class="plan">
+              <li v-for="(entry, index) in plan.entries.slice(0, 200)" :key="index" :data-action="entry.action">
+                <span class="tag">{{ entry.action }}</span>
+                <span v-if="entry.action === 'move'" class="mono">
+                  {{ entry.from }} → {{ entry.to }}
+                </span>
+                <span v-else class="mono">{{ entry.to ?? entry.from }} {{ entry.reason ?? "" }}</span>
+              </li>
+            </ul>
+
+            <div class="apply">
+              <template v-if="!confirmApply">
+                <button type="button" class="primary" :disabled="busy || plan.summary.move === 0" @click="confirmApply = true">
+                  执行整理…
+                </button>
+              </template>
+              <template v-else>
+                <span class="warn">会移动 {{ plan.summary.move }} 个文件, 不可撤销。确认?</span>
+                <button type="button" class="danger" :disabled="busy" @click="apply">确认执行</button>
+                <button type="button" :disabled="busy" @click="confirmApply = false">取消</button>
+              </template>
+            </div>
+          </template>
+        </div>
+
+        <div v-if="events.length" class="events">
+          <span v-for="(event, index) in events.slice(0, 12)" :key="index" :data-type="event.type" class="mono">
+            {{ event.type.replace("file.", "") }} {{ event.path.split(/[\\/]/).pop() }}
+          </span>
+        </div>
+      </section>
+    </div>
   </main>
 </template>
 
@@ -119,9 +251,7 @@ body {
 .shell {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 20px 24px;
-  min-height: 100vh;
+  height: 100vh;
   box-sizing: border-box;
 }
 
@@ -129,11 +259,13 @@ body {
   display: flex;
   align-items: baseline;
   gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
 }
 
 h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: 18px;
   letter-spacing: 0.08em;
 }
 
@@ -143,35 +275,89 @@ h1 {
   font-size: 12px;
 }
 
-.card {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 16px;
-}
-
-.field {
+.body {
   display: flex;
-  gap: 8px;
-  align-items: center;
-}
-
-.field span {
-  color: var(--muted);
-  font-size: 13px;
-  width: 40px;
-}
-
-input[type="text"],
-input:not([type]) {
   flex: 1;
-  background: #0d0f14;
-  border: 1px solid var(--line);
+  min-height: 0;
+}
+
+.side {
+  width: 260px;
+  flex: none;
+  border-right: 1px solid var(--line);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+
+.side-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.libs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.libs button {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
   border-radius: 8px;
-  padding: 9px 12px;
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 13px;
+  cursor: pointer;
+}
+
+.libs li.active button {
+  background: #1d2431;
+  border-color: #2f3b52;
+}
+
+.libs small {
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sources {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.8;
+}
+
+.sources .ready {
+  color: var(--ok);
+  margin-right: 6px;
+}
+
+.sources .todo {
+  color: #6b7285;
+  margin-right: 6px;
+  text-decoration: line-through;
 }
 
 button {
@@ -179,7 +365,7 @@ button {
   border: 1px solid var(--line);
   background: #1e232d;
   color: var(--text);
-  padding: 9px 16px;
+  padding: 8px 12px;
   font-size: 13px;
   cursor: pointer;
 }
@@ -191,107 +377,165 @@ button.primary {
   font-weight: 600;
 }
 
+button.danger {
+  background: #b3403a;
+  border-color: #b3403a;
+  color: #fff;
+}
+
+button.ghost {
+  padding: 2px 8px;
+}
+
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-.row {
+.main {
+  flex: 1;
+  min-width: 0;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 14px;
+  flex-direction: column;
+  padding: 12px 20px;
+  gap: 10px;
 }
 
-.check {
+.tabs {
   display: flex;
   align-items: center;
   gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.tabs button {
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--muted);
+}
+
+.tabs button.on {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.pane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+}
+
+td {
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.error {
+  margin: 0;
+  color: #ff7b72;
+  font-size: 13px;
+}
+
+.note {
+  margin: 0;
+  color: var(--ok);
   font-size: 13px;
 }
 
 .summary {
-  margin: 14px 0 0;
-  color: var(--ok);
   font-size: 13px;
+  color: var(--text);
 }
 
-.error {
-  margin: 14px 0 0;
-  color: #ff7b72;
-  font-size: 13px;
-}
-
-.path {
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-  font-family: ui-monospace, monospace;
-}
-
-.log {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.log-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 8px;
-}
-
-.log ul {
+.plan {
   list-style: none;
   margin: 0;
   padding: 0;
-  overflow: auto;
-  flex: 1;
 }
 
-.log li {
+.plan li {
   display: flex;
   gap: 10px;
-  align-items: center;
+  align-items: baseline;
   padding: 5px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-  font-size: 12px;
 }
 
-.tag {
+.plan .tag {
   flex: none;
-  width: 68px;
+  width: 78px;
   text-align: center;
   border-radius: 999px;
-  padding: 2px 0;
   background: #232833;
   color: var(--muted);
   font-size: 11px;
+  padding: 2px 0;
 }
 
-.tag[data-type="file.added"] {
-  color: var(--ok);
-}
-.tag[data-type="file.updated"] {
+.plan li[data-action="move"] .tag {
   color: var(--warn);
 }
-.tag[data-type="file.removed"] {
-  color: #ff7b72;
+
+.apply {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
 }
 
-.p {
+.warn {
+  color: var(--warn);
+  font-size: 13px;
+}
+
+.events {
+  display: flex;
+  gap: 12px;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, monospace;
-  color: #b9c0d0;
+  color: var(--muted);
+  font-size: 11px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
 }
 
-.empty {
-  padding: 8px 0;
+.events [data-type="file.added"] {
+  color: var(--ok);
+}
+.events [data-type="file.removed"] {
+  color: #ff7b72;
 }
 </style>

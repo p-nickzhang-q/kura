@@ -66,15 +66,18 @@ kura schema --json
 # 先探能力
 kura schema --json
 
-# 预演
-kura scan /media/library --dry-run --json
+# 建库 → 扫描(只读磁盘) → 刮削(只读网络) → 整理(默认 dry-run)
+kura library add 主库 ~/Videos --json
+kura scan 主库 --json
+kura scrape ABC-123 --json
+kura organize 主库 --json          # 只出计划
+kura organize 主库 --apply --json  # 真的移动
 
-# 真跑, 需要进度就加 --stream
-kura scan /media/library --json --stream
-
-# 自检(数据目录、schema 版本、条目数)
+# 自检(数据目录、schema 版本、库/条目/文件数)
 kura doctor --json
 ```
+
+三个动作**互不触发**。agent 要跑完整流程, 就按上面顺序调三次 —— 不要指望 `scan` 顺手刮削。
 
 ## 环境变量
 

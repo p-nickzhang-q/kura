@@ -6,34 +6,99 @@ declare module "*.vue" {
   export default component;
 }
 
+interface KuraSourceInfo {
+  id: string;
+  label: string;
+  status: "ready" | "todo";
+}
+
 interface KuraAppInfo {
   version: string;
   dataDir: string;
-  dbFile: string;
   dbRuntime: "bun" | "node";
   schemaVersion: number;
-  itemCount: number;
-  electron: string;
-  node: string;
+  libraries: number;
+  items: number;
+  mediaFiles: number;
+  fixturesDir: string | null;
+  sources: KuraSourceInfo[];
+}
+
+interface KuraLibrary {
+  id: number;
+  name: string;
+  root: string;
+  template: string;
 }
 
 interface KuraScanEvent {
-  type: "file.added" | "file.updated" | "file.unchanged" | "file.removed";
+  type: "file.added" | "file.updated" | "file.unchanged" | "file.removed" | "file.unparsed";
   path: string;
-  size?: number;
+  number?: string | null;
 }
 
 interface KuraScanReport {
+  libraryId: number;
   root: string;
   dryRun: boolean;
-  counts: { added: number; updated: number; unchanged: number; removed: number };
+  counts: { added: number; updated: number; unchanged: number; removed: number; unparsed: number };
   durationMs: number;
+}
+
+interface KuraItem {
+  number: string;
+  key: string;
+  content_type?: string;
+  contentType: string;
+  title?: string;
+  plot?: string;
+  release_date?: string;
+  duration_min?: number;
+  studio?: string;
+  label?: string;
+  series?: string;
+  directors?: string[];
+  actors?: string[];
+  tags?: string[];
+  poster_urls?: string[];
+  fieldSources: Record<string, string>;
+  pinned: string[];
+}
+
+interface KuraPlanEntry {
+  action: "move" | "write-nfo" | "skip";
+  from?: string;
+  to?: string;
+  reason?: string;
+}
+
+interface KuraPlan {
+  libraryId: number;
+  libraryRoot: string;
+  entries: KuraPlanEntry[];
+  summary: { move: number; writeNfo: number; skip: number };
+}
+
+interface KuraOrganizeReport {
+  plan: KuraPlan;
+  applied: { ok: boolean; error?: string }[] | null;
+}
+
+interface KuraScrapeBatch {
+  count: number;
+  reports: { key: string; ok: boolean; filled: number; error?: string }[];
 }
 
 interface KuraBridge {
   info(): Promise<KuraAppInfo>;
-  pickDir(): Promise<string | null>;
-  scan(root: string, dryRun: boolean): Promise<KuraScanReport>;
+  libraries(): Promise<KuraLibrary[]>;
+  addLibrary(): Promise<KuraLibrary | null>;
+  scan(libraryId: number): Promise<KuraScanReport>;
+  scrapePending(limit?: number): Promise<KuraScrapeBatch>;
+  items(limit?: number): Promise<KuraItem[]>;
+  item(number: string): Promise<KuraItem | null>;
+  organizePreview(libraryId: number): Promise<KuraOrganizeReport>;
+  organizeApply(libraryId: number): Promise<KuraOrganizeReport>;
   onScanEvent(callback: (event: KuraScanEvent) => void): () => void;
 }
 

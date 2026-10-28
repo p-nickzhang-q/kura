@@ -1,0 +1,120 @@
+import type { ContentType, FileInfo, ItemKey } from "./types";
+
+/**
+ * 识别 = 纯函数。无 IO、无配置依赖 —— 这样它可以用几十个文件名样本穷举测试,
+ * 而不需要起数据库或打网络。
+ */
+
+/** 全角 → 半角, 统一大小写与分隔符。 */
+export function normalizeText(input: string): string {
+  return input
+    .replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/\u3000/g, " ")
+    .toUpperCase()
+    .replace(/[_]+/g, "-")
+    // "ABC 123" 与 "ABC-123" 视为同一番号
+    .replace(/([A-Z])\s+(\d)/g, "$1-$2")
+    .replace(/\s*-\s*/g, "-")
+    .trim();
+}
+
+const FC2_RE = /FC2[-_ ]?PPV[-_ ]?(\d{5,8})/;
+const UNCENSORED_RE = /(?:^|\D)(\d{6})-(\d{3})(?:\D|$)/;
+const CENSORED_RE = /(?:^|\W)([A-Z]{2,10})-?(\d{2,5})(?:\W|$)/;
+
+/** 从任意文本(通常是文件名)里抽出规范番号; 抽不到返回 null。 */
+export function extractNumber(text: string): string | null {
+  const normalized = normalizeText(text);
+
+  const fc2 = FC2_RE.exec(normalized);
+  if (fc2) return `FC2-PPV-${fc2[1]}`;
+
+  const uncensored = UNCENSORED_RE.exec(normalized);
+  if (uncensored) return `${uncensored[1]}-${uncensored[2]}`;
+
+  const censored = CENSORED_RE.exec(normalized);
+  if (censored) return `${censored[1]}-${censored[2]}`;
+
+  return null;
+}
+
+/** 无番号条目的站点键是另一个命名空间, 不允许和真番号混用。 */
+export function siteKey(site: string, id: string): string {
+  return `${site}:${id.toLowerCase()}`;
+}
+
+export function isSiteKey(value: string): boolean {
+  return value.includes(":");
+}
+
+const AMATEUR_HINTS = /\b(SIRO|LUXU|GACHI|PACOPACOMAMA|10MUSUME|HEYZO|TOKYO-HOT)\b/;
+const CHINESE_HINTS = /(国产|国产精品|麻豆|MD|91|天美|果冻|SWAG|CHINESE)/;
+const WESTERN_HINTS = /\b(XXX|PORN|BRAZZERS|BLACKED|VIXEN|PASSION)\b/;
+
+/**
+ * 类型判定顺序固定: fc2 → uncensored → amateur → chinese → western → censored。
+ * 只在建条目时跑一次, 落库后不可改 (见 ADR 0002)。
+ */
+export function detectContentType(number: string, hintText = ""): ContentType | null {
+  const text = `${number} ${normalizeText(hintText)}`;
+
+  if (number.startsWith("FC2-PPV-")) return "fc2";
+  if (/^\d{6}-\d{3}$/.test(number)) return "uncensored";
+  if (AMATEUR_HINTS.test(text)) return "amateur";
+  if (CHINESE_HINTS.test(text)) return "chinese";
+  if (WESTERN_HINTS.test(text)) return "western";
+  if (CENSORED_RE.test(normalizeText(number))) return "censored";
+  return null;
+}
+
+/** 站内 ID 形式的输入 (素人/国产), 需要调用方给 site。 */
+export function identify(input: { text: string; site?: string; siteId?: string }): ItemKey | null {
+  if (input.site && input.siteId) {
+    const contentType = detectContentType("", input.text) ?? "amateur";
+    return { value: siteKey(input.site, input.siteId), contentType, number: null };
+  }
+
+  const number = extractNumber(input.text);
+  if (!number) return null;
+  const contentType = detectContentType(number, input.text);
+  if (!contentType) return null;
+  return { value: number, contentType, number };
+}
+
+/**
+ * 相位从路径推导, 不是条目属性。
+ * JAV 命名约定: `-C` 中字, `-U` 无码, `-UC` 无码+中字, `-CD1` 分集。
+ */
+export function parseFileInfo(fileName: string): FileInfo {
+  const base = normalizeText(fileName.replace(/\.[^.]+$/, ""));
+
+  const cd = /(?:^|-)(?:CD|DISC)(\d{1,2})(?:\W|$)/.exec(base);
+  const part = /(?:^|-)(?:PT|PART)(\d{1,2})(?:\W|$)/.exec(base);
+
+  // `-C` = 中字, `-U` = 无码, `-UC` = 无码 + 中字; `-CD1` 是分集, 不算中字。
+  const hasSubtitle = /(?:^|-)(?:U?C)(?:\W|$)/.test(base);
+  const uncensored = /(?:^|-)(?:U|UC)(?:\W|$)/.test(base);
+  const leaked = /(流出|LEAKED)/.test(base);
+  const cracked = /(破解|CRACKED)/.test(base);
+
+  // 同时命中时优先级: 破解 > 流出 > 无码 (与 Amane 一致)
+  const mosaic = cracked ? "cracked" : leaked ? "leaked" : uncensored ? "uncensored" : null;
+
+  const definition = /\b(?:8K|4K|2160P)\b/.test(base)
+    ? "4k"
+    : /\b(?:1440P|2K)\b/.test(base)
+      ? "1440p"
+      : /\b1080P?\b/.test(base)
+        ? "1080p"
+        : /\b720P\b/.test(base)
+          ? "720p"
+          : null;
+
+  return {
+    cd: cd ? Number(cd[1]) : null,
+    part: part ? part[1]! : null,
+    hasSubtitle,
+    mosaic,
+    definition,
+  };
+}

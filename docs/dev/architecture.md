@@ -17,6 +17,29 @@ apps/desktop/src/*.vue  ──IPC──►  (渲染进程不碰 core, 也不碰 
 - **`apps/desktop/electron/main.ts` 是第二个宿主**:持有 runtime、注册 IPC、管窗口生命周期。
 - **渲染进程禁止 import core**:它没有 Node 内建模块,所有数据经 `preload.cjs` 暴露的 `window.kura` 走 IPC。
 
+## 三条接缝
+
+域逻辑只在三个纯函数接缝上,都在 `packages/core/src/domain/`:
+
+| 接缝 | 签名 | 不变量 |
+|---|---|---|
+| `identify` | `(文本) → ItemKey` | 无 IO、无配置;番号与站点键分命名空间 |
+| `aggregate` | `(SourceRecord[], 路由) → 字段 + 来源` | 单源取首个非空、列表不做并集、URL 拼接去重 |
+| `materialize` | `(Metadata, Library) → Plan` | 只算目标路径与 NFO 内容,不碰磁盘 |
+
+`tasks/` 只负责把这三条接缝接到 IO 上(磁盘/网络/DB),自己不做判定。
+扩到第二个域时新增的是另一套 `domain/`,而不是把这三个函数改成万能函数 —— 原因见 ADR 0002。
+
+## 任务与 IO 的边界
+
+| 任务 | 读 | 写 |
+|---|---|---|
+| `scan` | 磁盘 | `media_files` + 条目占位行 |
+| `scrape` | 网络 | `items` + `snapshots` |
+| `organize` | 无(只读 DB) | 磁盘(仅 `apply`)+ `media_files.path` |
+
+`organize` 移动成功后必须同步索引路径,否则下一次 `scan` 会把同一文件判成 removed + added。
+
 ## 组合根
 
 `openRuntime()` / `withRuntime()` 是唯一允许 `new Database` 的地方。规则:
