@@ -139,7 +139,9 @@ async function openDetail(item: KuraItem): Promise<void> {
 
 async function scrapePicked(): Promise<void> {
   if (picked.value.length === 0) return;
-  const result = await run("刮削", () => window.kura.scrapeKeys(picked.value));
+  // 必须展开成普通数组: Vue 的 ref 背后是 Proxy, 结构化克隆(IPC)会直接抛
+  // "An object could not be cloned"。
+  const result = await run("刮削", () => window.kura.scrapeKeys([...picked.value]));
   if (result) {
     const failed = result.results.filter((entry) => !entry.ok);
     note.value = `刮削 ${result.count} 条, 失败 ${failed.length} 条${failed[0]?.error ? ` (${failed[0].error})` : ""}`;

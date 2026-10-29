@@ -22,6 +22,8 @@ Kura —— 番号制本地影片库管理器。Electron 桌面应用 + 面向 a
 ## 硬性约束
 
 1. **渲染进程不得 import `@kura/core`**。加功能 = 加 IPC 方法。
+   传给 IPC 的必须是普通值: Vue 的 `ref`/`reactive` 背后是 Proxy, 直接传会抛
+   `An object could not be cloned`。数组要 `[...arr]`, 对象要显式构造。
 2. **只有 `openRuntime()` 能建数据库连接**。下游函数接收 `Runtime`,不读全局环境变量。
 3. **只有 `packages/core/src/db/driver.ts` 知道 `bun:sqlite` 与 `node:sqlite` 的差异**。
 4. **CLI 的 stdout 只放数据**。日志走 `out.log()`(stderr)。
