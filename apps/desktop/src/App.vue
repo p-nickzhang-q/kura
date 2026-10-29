@@ -11,6 +11,24 @@ const TYPE_LABEL: Record<string, string> = {
   anime: "动漫",
 };
 
+const FIELD_LABEL: Record<string, string> = {
+  title: "标题",
+  plot: "简介",
+  release_date: "发行日期",
+  duration_min: "时长(分钟)",
+  studio: "片商",
+  label: "厂牌",
+  series: "系列",
+  directors: "导演",
+  actors: "演员",
+  tags: "标签",
+  poster_urls: "海报",
+  cover_urls: "封面",
+  thumb_urls: "缩略图",
+};
+
+const FIELDS = Object.keys(FIELD_LABEL);
+
 const info = ref<KuraAppInfo | null>(null);
 const libraries = ref<KuraLibrary[]>([]);
 const selectedId = ref<number | null>(null);
@@ -22,6 +40,10 @@ const note = ref<string | null>(null);
 const plan = ref<KuraPlan | null>(null);
 const events = ref<KuraScanEvent[]>([]);
 const confirmApply = ref(false);
+
+const picked = ref<string[]>([]);
+const detail = ref<KuraItem | null>(null);
+
 const config = ref<KuraConfig | null>(null);
 const apiIdInput = ref("");
 const affiliateInput = ref("");
@@ -46,7 +68,10 @@ async function refreshAll(): Promise<void> {
   config.value = await window.kura.configGet();
   libraries.value = await window.kura.libraries();
   if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
-  items.value = await window.kura.items(100);
+  items.value = await window.kura.items(200);
+  // 选中项里可能有已经被删掉的条目
+  picked.value = picked.value.filter((key) => items.value.some((item) => item.key === key));
+  if (detail.value) detail.value = await window.kura.item(detail.value.key);
 }
 
 async function run<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
@@ -92,6 +117,63 @@ async function doScrape(): Promise<void> {
   }
 }
 
+/* ---------- 条目选择与详情 ---------- */
+
+function toggle(key: string): void {
+  picked.value = picked.value.includes(key) ? picked.value.filter((item) => item !== key) : [...picked.value, key];
+}
+
+function toggleAll(): void {
+  picked.value = picked.value.length === items.value.length ? [] : items.value.map((item) => item.key);
+}
+
+async function openDetail(item: KuraItem): Promise<void> {
+  const fresh = await run("读取条目", () => window.kura.item(item.key));
+  if (fresh) detail.value = fresh;
+}
+
+async function scrapePicked(): Promise<void> {
+  if (picked.value.length === 0) return;
+  const result = await run("刮削", () => window.kura.scrapeKeys(picked.value));
+  if (result) {
+    const failed = result.results.filter((entry) => !entry.ok);
+    note.value = `刮削 ${result.count} 条, 失败 ${failed.length} 条${failed[0]?.error ? ` (${failed[0].error})` : ""}`;
+    await refreshAll();
+  }
+}
+
+async function postersPicked(): Promise<void> {
+  if (picked.value.length === 0) return;
+  const result = await run("下载海报", async () => {
+    const outputs = [];
+    for (const key of picked.value) outputs.push(await window.kura.fetchPoster(key));
+    return outputs;
+  });
+  if (result) note.value = `海报已缓存 ${result.length} 张, 整理时会复制进库`;
+}
+
+async function togglePin(field: string): Promise<void> {
+  if (!detail.value) return;
+  const pinned = detail.value.pinned.includes(field);
+  const updated = await run("更新锁定", () =>
+    window.kura.updateItem(pinned ? { key: detail.value!.key, unpin: [field] } : { key: detail.value!.key, pin: [field] }),
+  );
+  if (updated) {
+    detail.value = updated;
+    // 列表里的锁标记也要跟着变, 不然要等下次刷新才更新。
+    items.value = items.value.map((item) => (item.key === updated.key ? { ...item, pinned: updated.pinned } : item));
+  }
+}
+
+function fieldValue(item: KuraItem, field: string): string {
+  const value = (item as unknown as Record<string, unknown>)[field];
+  if (value === undefined || value === null || value === "") return "";
+  if (Array.isArray(value)) return value.join("、");
+  return String(value);
+}
+
+/* ---------- 整理 ---------- */
+
 async function preview(): Promise<void> {
   if (selectedId.value === null) return;
   const report = await run("生成计划", () => window.kura.organizePreview(selectedId.value!));
@@ -102,9 +184,22 @@ async function preview(): Promise<void> {
   }
 }
 
+async function apply(): Promise<void> {
+  if (selectedId.value === null) return;
+  const report = await run("整理", () => window.kura.organizeApply(selectedId.value!));
+  if (report) {
+    plan.value = report.plan;
+    const failed = (report.applied ?? []).filter((result) => !result.ok);
+    note.value = `已整理, 失败 ${failed.length} 项`;
+    confirmApply.value = false;
+    await refreshAll();
+  }
+}
+
+/* ---------- 设置 ---------- */
+
 async function saveConfig(): Promise<void> {
   const patch: { apiId?: string; affiliateId?: string; proxy?: string } = {};
-  // 凭据留空 = 保持原值; 代理留空 = 显式清空(回落系统代理)。
   if (apiIdInput.value.trim()) patch.apiId = apiIdInput.value.trim();
   if (affiliateInput.value.trim()) patch.affiliateId = affiliateInput.value.trim();
   patch.proxy = proxyInput.value.trim();
@@ -124,18 +219,6 @@ async function saveConfig(): Promise<void> {
 
 async function testDmm(): Promise<void> {
   dmmTest.value = await run("测试 DMM", () => window.kura.testDmm("SSIS-001"));
-}
-
-async function apply(): Promise<void> {
-  if (selectedId.value === null) return;
-  const report = await run("整理", () => window.kura.organizeApply(selectedId.value!));
-  if (report) {
-    plan.value = report.plan;
-    const failed = (report.applied ?? []).filter((result) => !result.ok);
-    note.value = `已整理, 失败 ${failed.length} 项`;
-    confirmApply.value = false;
-    await refreshAll();
-  }
 }
 </script>
 
@@ -191,20 +274,141 @@ async function apply(): Promise<void> {
         <p v-if="error" class="error">{{ error }}</p>
         <p v-else-if="note" class="note">{{ note }}</p>
 
-        <div v-else-if="tab === 'settings'" class="pane settings">
+        <!-- 条目 -->
+        <div v-if="tab === 'items'" class="pane items">
+          <div class="toolbar">
+            <label class="check">
+              <input
+                type="checkbox"
+                :checked="picked.length > 0 && picked.length === items.length"
+                @change="toggleAll"
+              />
+              全选
+            </label>
+            <span class="muted">已选 {{ picked.length }}</span>
+            <span class="spacer" />
+            <button type="button" :disabled="busy || picked.length === 0" @click="scrapePicked">
+              刮削选中 ({{ picked.length }})
+            </button>
+            <button type="button" :disabled="busy || picked.length === 0" @click="postersPicked">
+              下载海报 ({{ picked.length }})
+            </button>
+          </div>
+
+          <div class="split">
+            <div class="list">
+              <table>
+                <thead>
+                  <tr>
+                    <th class="pick" />
+                    <th>番号</th>
+                    <th>类型</th>
+                    <th>标题</th>
+                    <th>片商</th>
+                    <th>演员</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="item in items"
+                    :key="item.key"
+                    :class="{ active: detail?.key === item.key }"
+                    @click="openDetail(item)"
+                  >
+                    <td class="pick" @click.stop>
+                      <input
+                        type="checkbox"
+                        :checked="picked.includes(item.key)"
+                        @change="toggle(item.key)"
+                      />
+                    </td>
+                    <td class="mono">
+                      {{ item.number }}
+                      <span v-if="item.pinned.length" title="有锁定字段">🔒</span>
+                    </td>
+                    <td>{{ TYPE_LABEL[item.contentType] ?? item.contentType }}</td>
+                    <td>{{ item.title ?? "未刮削" }}</td>
+                    <td>{{ item.studio ?? "—" }}</td>
+                    <td>{{ item.actors?.slice(0, 3).join("、") ?? "—" }}</td>
+                  </tr>
+                  <tr v-if="items.length === 0">
+                    <td colspan="6" class="muted">没有条目。先扫描一个媒体库。</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <aside v-if="detail" class="detail">
+              <header>
+                <strong class="mono">{{ detail.number }}</strong>
+                <button class="ghost" type="button" @click="detail = null">×</button>
+              </header>
+              <ul>
+                <li v-for="field in FIELDS" :key="field" v-show="fieldValue(detail, field)">
+                  <span class="label">{{ FIELD_LABEL[field] }}</span>
+                  <span class="value" :title="fieldValue(detail, field)">{{ fieldValue(detail, field) }}</span>
+                  <button
+                    class="pin"
+                    type="button"
+                    :class="{ on: detail.pinned.includes(field) }"
+                    :title="detail.pinned.includes(field) ? '已锁定: 重新刮削不覆盖' : '点击锁定'"
+                    @click="togglePin(field)"
+                  >
+                    {{ detail.pinned.includes(field) ? "🔒" : "🔓" }}
+                  </button>
+                  <span class="from" :title="'字段来源'">{{ detail.fieldSources?.[field] ?? "" }}</span>
+                </li>
+              </ul>
+              <p class="muted hint">锁定后重新刮削不会覆盖该字段。</p>
+            </aside>
+          </div>
+        </div>
+
+        <!-- 整理预览 -->
+        <div v-else-if="tab === 'plan'" class="pane">
+          <div v-if="!plan" class="muted">点左侧「整理预览」生成计划。</div>
+          <template v-else>
+            <p class="summary">
+              移动 {{ plan.summary.move }} · 写 NFO {{ plan.summary.writeNfo }} · 海报 {{ plan.summary.copyImage }} · 跳过
+              {{ plan.summary.skip }}
+              <span class="muted">(库根 {{ plan.libraryRoot }})</span>
+            </p>
+            <ul class="plan">
+              <li v-for="(entry, index) in plan.entries.slice(0, 200)" :key="index" :data-action="entry.action">
+                <span class="tag">{{ entry.action }}</span>
+                <span v-if="entry.action === 'move'" class="mono">{{ entry.from }} → {{ entry.to }}</span>
+                <span v-else class="mono">{{ entry.to ?? entry.from }} {{ entry.reason ?? "" }}</span>
+              </li>
+            </ul>
+
+            <div class="apply">
+              <template v-if="!confirmApply">
+                <button
+                  type="button"
+                  class="primary"
+                  :disabled="busy || (plan.summary.move === 0 && plan.summary.copyImage === 0)"
+                  @click="confirmApply = true"
+                >
+                  执行整理…
+                </button>
+              </template>
+              <template v-else>
+                <span class="warn">会移动 {{ plan.summary.move }} 个文件, 不可撤销。确认?</span>
+                <button type="button" class="danger" :disabled="busy" @click="apply">确认执行</button>
+                <button type="button" :disabled="busy" @click="confirmApply = false">取消</button>
+              </template>
+            </div>
+          </template>
+        </div>
+
+        <!-- 设置 -->
+        <div v-else class="pane settings">
           <h2>数据源</h2>
-          <p class="muted">
-            DMM 走官方 API, 需要 affiliate 凭据。配置保存在本地文件, 环境变量优先。
-          </p>
+          <p class="muted">DMM 走官方 API, 需要 affiliate 凭据。配置保存在本地文件, 环境变量优先。</p>
 
           <label class="field">
             <span>API ID</span>
-            <input
-              v-model="apiIdInput"
-              type="password"
-              spellcheck="false"
-              :placeholder="config?.settings.dmm.apiId || '未设置'"
-            />
+            <input v-model="apiIdInput" type="password" spellcheck="false" :placeholder="config?.settings.dmm.apiId || '未设置'" />
           </label>
           <label class="field">
             <span>Affiliate ID</span>
@@ -237,11 +441,7 @@ async function apply(): Promise<void> {
           <h2>代理</h2>
           <label class="field">
             <span>代理地址</span>
-            <input
-              v-model="proxyInput"
-              spellcheck="false"
-              :placeholder="config?.settings.proxy || '留空 = 跟随系统代理'"
-            />
+            <input v-model="proxyInput" spellcheck="false" :placeholder="config?.settings.proxy || '留空 = 跟随系统代理'" />
           </label>
           <p class="muted">
             留空即跟随系统代理(Clash 开系统代理或 TUN 即可)。填 <code>auto</code> 由命令行在运行时探测常见端口;
@@ -257,64 +457,6 @@ async function apply(): Promise<void> {
               <span v-if="source.missing.length" class="warn">缺 {{ source.missing.join(", ") }}</span>
             </li>
           </ul>
-        </div>
-
-        <div v-if="tab === 'items'" class="pane">
-          <table>
-            <thead>
-              <tr>
-                <th>番号</th>
-                <th>类型</th>
-                <th>标题</th>
-                <th>片商</th>
-                <th>演员</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in items" :key="item.key">
-                <td class="mono">{{ item.number }}</td>
-                <td>{{ TYPE_LABEL[item.contentType] ?? item.contentType }}</td>
-                <td>{{ item.title ?? "未刮削" }}</td>
-                <td>{{ item.studio ?? "—" }}</td>
-                <td>{{ item.actors?.join("、") ?? "—" }}</td>
-              </tr>
-              <tr v-if="items.length === 0">
-                <td colspan="5" class="muted">没有条目。先扫描一个媒体库。</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div v-else class="pane">
-          <div v-if="!plan" class="muted">点左侧「整理预览」生成计划。</div>
-          <template v-else>
-            <p class="summary">
-              移动 {{ plan.summary.move }} · 写 NFO {{ plan.summary.writeNfo }} · 跳过 {{ plan.summary.skip }}
-              <span class="muted">(库根 {{ plan.libraryRoot }})</span>
-            </p>
-            <ul class="plan">
-              <li v-for="(entry, index) in plan.entries.slice(0, 200)" :key="index" :data-action="entry.action">
-                <span class="tag">{{ entry.action }}</span>
-                <span v-if="entry.action === 'move'" class="mono">
-                  {{ entry.from }} → {{ entry.to }}
-                </span>
-                <span v-else class="mono">{{ entry.to ?? entry.from }} {{ entry.reason ?? "" }}</span>
-              </li>
-            </ul>
-
-            <div class="apply">
-              <template v-if="!confirmApply">
-                <button type="button" class="primary" :disabled="busy || plan.summary.move === 0" @click="confirmApply = true">
-                  执行整理…
-                </button>
-              </template>
-              <template v-else>
-                <span class="warn">会移动 {{ plan.summary.move }} 个文件, 不可撤销。确认?</span>
-                <button type="button" class="danger" :disabled="busy" @click="apply">确认执行</button>
-                <button type="button" :disabled="busy" @click="confirmApply = false">取消</button>
-              </template>
-            </div>
-          </template>
         </div>
 
         <div v-if="events.length" class="events">
@@ -381,7 +523,7 @@ h1 {
 }
 
 .side {
-  width: 260px;
+  width: 240px;
   flex: none;
   border-right: 1px solid var(--line);
   padding: 12px;
@@ -530,6 +672,32 @@ button:disabled {
   overflow: auto;
 }
 
+.pane.items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.split {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+}
+
+.list {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -551,15 +719,102 @@ th {
 td {
   padding: 7px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-  max-width: 340px;
+  max-width: 320px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+tbody tr {
+  cursor: pointer;
+}
+
+tbody tr.active {
+  background: #1a2130;
+}
+
+th.pick,
+td.pick {
+  width: 32px;
+}
+
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+}
+
+.detail {
+  width: 330px;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 12px;
+  overflow: auto;
+}
+
+.detail header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.detail ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.detail li {
+  display: grid;
+  grid-template-columns: 74px 1fr 24px 48px;
+  gap: 6px;
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+}
+
+.detail .label {
+  color: var(--muted);
+}
+
+.detail .value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail .pin {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  opacity: 0.45;
+}
+
+.detail .pin.on {
+  opacity: 1;
+}
+
+.detail .from {
+  color: #5f6a80;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  text-align: right;
+}
+
+.detail .hint {
+  margin: 10px 0 0;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .error {
@@ -595,7 +850,7 @@ td {
 
 .plan .tag {
   flex: none;
-  width: 78px;
+  width: 84px;
   text-align: center;
   border-radius: 999px;
   background: #232833;
@@ -606,6 +861,10 @@ td {
 
 .plan li[data-action="move"] .tag {
   color: var(--warn);
+}
+
+.plan li[data-action="copy-image"] .tag {
+  color: var(--ok);
 }
 
 .apply {
@@ -679,6 +938,12 @@ td {
 
 .tag[data-ready="true"] {
   color: var(--ok);
+}
+
+.path {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
 }
 
 .events {

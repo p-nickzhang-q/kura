@@ -192,9 +192,10 @@ export function parseDetail(html: string, url: string = JAVBUS_BASE): RawFields 
     if (tag) tags.push(tag);
   });
 
-  // 大图是 /cover/xxx_b.jpg; 海报换成 /thumb/xxx.jpg(与 Amane 的做法一致)。
+  // 大图是 /cover/xxx_b.jpg, 缩略图是 /thumb/xxx.jpg。
+  // 域模型里 poster 指"竖版大图"(给 Emby 当封面), thumb 指小图, 所以这里 poster 用 cover。
   const cover = absolute($("a.bigImage").attr("href"), url);
-  const poster = cover?.replace("/cover/", "/thumb/").replace(/_b\.jpg$/i, ".jpg");
+  const thumb = cover?.replace("/cover/", "/thumb/").replace(/_b\.jpg$/i, ".jpg");
 
   const releaseRaw = headerValue($, "發行日期");
   const release = /\d{4}-\d{2}-\d{2}/.exec(releaseRaw)?.[0];
@@ -217,9 +218,9 @@ export function parseDetail(html: string, url: string = JAVBUS_BASE): RawFields 
     actors: actors.length > 0 ? actors : undefined,
     directors: director ? [director] : undefined,
     tags: tags.length > 0 ? tags : undefined,
-    poster_urls: poster ? [poster] : undefined,
+    poster_urls: cover ? [cover] : undefined,
     cover_urls: cover ? [cover] : undefined,
-    thumb_urls: cover ? [cover] : undefined,
+    thumb_urls: thumb ? [thumb] : undefined,
   };
 
   for (const [key, value] of Object.entries(fields)) {

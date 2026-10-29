@@ -101,6 +101,19 @@ export class HttpClient {
   }
 
   async getText(url: string, init: RequestOptions = {}): Promise<string> {
+    const response = await this.execute(url, init);
+    return response.text();
+  }
+
+  /** 二进制通道: 海报/封面下载走这里, 不经过字符串解码。 */
+  async getBytes(url: string, init: RequestOptions = {}): Promise<{ bytes: Uint8Array; contentType: string }> {
+    const response = await this.execute(url, init);
+    const buffer = new Uint8Array(await response.arrayBuffer());
+    return { bytes: buffer, contentType: response.headers.get("content-type") ?? "" };
+  }
+
+  /** 重试/4xx/超时的唯一实现; 三个公开方法都只是它的消费者。 */
+  private async execute(url: string, init: RequestOptions): Promise<Response> {
     await this.throttle();
 
     let lastError: unknown = null;
@@ -109,7 +122,7 @@ export class HttpClient {
         const response = await this.fetchImpl(url, {
           headers: {
             "user-agent": this.options.userAgent,
-            accept: "application/json, text/html;q=0.9",
+            accept: "application/json, text/html, image/*;q=0.8",
             "accept-language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
             ...(init.headers ?? {}),
           },
@@ -131,7 +144,7 @@ export class HttpClient {
             body: body.slice(0, 400),
           });
         }
-        return await response.text();
+        return response;
       } catch (err) {
         if (err instanceof AppError && err.exitCode === EXIT.NOT_FOUND) throw err;
         if (err instanceof AppError && err.exitCode === EXIT.NEEDS_INPUT) throw err;

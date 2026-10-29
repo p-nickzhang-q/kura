@@ -115,6 +115,9 @@ interface KuraBridge {
   scrapePending(limit?: number): Promise<KuraScrapeBatch>;
   items(limit?: number): Promise<KuraItem[]>;
   item(number: string): Promise<KuraItem | null>;
+  updateItem(input: { key: string; pin?: string[]; unpin?: string[] }): Promise<KuraItem>;
+  scrapeKeys(keys: string[]): Promise<{ count: number; results: { key: string; ok: boolean; filled: number; error?: string }[] }>;
+  fetchPoster(key: string): Promise<{ key: string; path: string; size: number }>;
   organizePreview(libraryId: number): Promise<KuraOrganizeReport>;
   organizeApply(libraryId: number): Promise<KuraOrganizeReport>;
   configGet(): Promise<KuraConfig>;

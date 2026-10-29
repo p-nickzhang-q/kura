@@ -52,5 +52,8 @@ export type { ItemView, ScrapeOptions, ScrapeReport } from "./tasks/scrape";
 export { parseFieldList, parseListValue, updateItem } from "./tasks/item";
 export type { UpdateItemOptions } from "./tasks/item";
 
+export { cachedPoster, downloadPoster, downloadResource, findResource, refererFor, resourceDir } from "./tasks/resources";
+export type { LocalResource, PosterDownloadResult } from "./tasks/resources";
+
 export { organize } from "./tasks/organize";
 export type { OrganizeOptions, OrganizeReport } from "./tasks/organize";

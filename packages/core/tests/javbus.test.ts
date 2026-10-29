@@ -36,12 +36,13 @@ describe("parseDetail", () => {
     expect(parseDetail(withSeries)!.series).toBe("系列A");
   });
 
-  test("海报由封面派生: /cover/ → /thumb/, _b.jpg → .jpg", () => {
+  test("poster 用大图 /cover/, thumb 用 /thumb/ 且去掉 _b 后缀", () => {
     const fields = parseDetail(detailHtml, "https://www.javbus.com/ABC-123")!;
+    expect(fields.poster_urls?.[0]).toContain("/cover/");
     expect(fields.cover_urls?.[0]).toContain("/cover/");
-    expect(fields.poster_urls?.[0]).toContain("/thumb/");
-    expect(fields.poster_urls?.[0]).not.toContain("_b.jpg");
-    expect(fields.poster_urls?.[0]).toMatch(/\.jpg$/);
+    expect(fields.thumb_urls?.[0]).toContain("/thumb/");
+    expect(fields.thumb_urls?.[0]).not.toContain("_b.jpg");
+    expect(fields.thumb_urls?.[0]).toMatch(/\.jpg$/);
   });
 
   test("相对地址会被补成绝对地址", () => {

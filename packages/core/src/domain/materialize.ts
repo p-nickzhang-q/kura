@@ -10,7 +10,7 @@ export interface Library {
   template: string;
 }
 
-export type PlanAction = "move" | "write-nfo" | "skip";
+export type PlanAction = "move" | "write-nfo" | "copy-image" | "skip";
 
 export interface PlanEntry {
   action: PlanAction;
@@ -25,13 +25,15 @@ export interface Plan {
   libraryId: number;
   libraryRoot: string;
   entries: PlanEntry[];
-  summary: { move: number; writeNfo: number; skip: number };
+  summary: { move: number; writeNfo: number; copyImage: number; skip: number };
 }
 
 export interface PlanInput {
   path: string;
   metadata: Metadata;
   phase: FileInfo;
+  /** 已缓存的本地海报; 没有就不产生 copy-image 条目。 */
+  posterPath?: string;
 }
 
 const ILLEGAL = /[\\/:*?"<>|]/g;
@@ -77,7 +79,7 @@ export function escapeXml(value: string): string {
 }
 
 /** Emby / Jellyfin / Kodi 通用的 movie nfo。 */
-export function buildNfo(metadata: Metadata): string {
+export function buildNfo(metadata: Metadata, thumbFile?: string): string {
   const lines: string[] = ['<?xml version="1.0" encoding="utf-8" standalone="yes"?>', "<movie>"];
 
   const field = (tag: string, value: string | undefined | null): void => {
@@ -86,6 +88,8 @@ export function buildNfo(metadata: Metadata): string {
 
   field("title", metadata.title);
   field("originaltitle", metadata.number ?? metadata.key);
+  // 相对文件名: NFO 与视频同目录, 这样整个库搬走也不用改。
+  field("thumb", thumbFile);
   if (metadata.plot) lines.push(`  <plot>${escapeXml(metadata.plot.trim())}</plot>`);
   field("premiered", metadata.release_date);
   if (metadata.duration_min) lines.push(`  <runtime>${metadata.duration_min}</runtime>`);
@@ -112,7 +116,7 @@ export function buildNfo(metadata: Metadata): string {
 export function buildPlan(library: Library, inputs: PlanInput[]): Plan {
   const root = resolve(library.root);
   const entries: PlanEntry[] = [];
-  const summary = { move: 0, writeNfo: 0, skip: 0 };
+  const summary = { move: 0, writeNfo: 0, copyImage: 0, skip: 0 };
 
   for (const input of inputs) {
     const directory = renderTemplate(library.template, input.metadata, input.phase);
@@ -133,10 +137,20 @@ export function buildPlan(library: Library, inputs: PlanInput[]): Plan {
       summary.move++;
     }
 
+    // 海报按 Emby/Kodi 的命名约定放成 `<视频名>-poster.<ext>`。
+    let thumbFile: string | undefined;
+    if (input.posterPath) {
+      const extension = extname(input.posterPath) || ".jpg";
+      const posterName = `${baseName}-poster${extension}`;
+      entries.push({ action: "copy-image", from: input.posterPath, to: resolve(join(root, directory, posterName)) });
+      summary.copyImage++;
+      thumbFile = posterName;
+    }
+
     entries.push({
       action: "write-nfo",
       to: target.replace(/\.[^.]+$/, ".nfo"),
-      content: buildNfo(input.metadata),
+      content: buildNfo(input.metadata, thumbFile),
     });
     summary.writeNfo++;
   }
@@ -171,6 +185,8 @@ export async function applyPlan(plan: Plan): Promise<ApplyResult[]> {
 
       if (entry.action === "write-nfo") {
         await writeFile(entry.to, entry.content ?? "", "utf8");
+      } else if (entry.action === "copy-image" && entry.from) {
+        await copyFile(entry.from, entry.to);
       } else if (entry.action === "move" && entry.from) {
         await moveFile(entry.from, entry.to);
       }

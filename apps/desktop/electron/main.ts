@@ -6,6 +6,8 @@ import {
   createLibrary,
   createDmmSource,
   defaultSources,
+  downloadPoster,
+  updateItem,
   HttpClient,
   isDmmConfigured,
   maskSettings,
@@ -194,6 +196,51 @@ function registerIpc(): void {
   );
 
   ipcMain.handle("item:get", (_event, number: string) => getItem(mustRuntime(), number));
+
+  ipcMain.handle("item:update", (_event, input: { key: string; pin?: string[]; unpin?: string[] }) =>
+    updateItem(mustRuntime(), { key: input.key, pin: input.pin as never, unpin: input.unpin as never }),
+  );
+
+  ipcMain.handle("scrape:keys", (_event, input: { keys: string[] }) =>
+    exclusive("刮削", async () => {
+      const rt = mustRuntime();
+      const registry = defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) });
+      const results: { key: string; ok: boolean; filled: number; error?: string }[] = [];
+
+      for (const key of input.keys) {
+        const item = getItem(rt, key);
+        if (!item) {
+          results.push({ key, ok: false, filled: 0, error: "条目不存在" });
+          continue;
+        }
+        try {
+          const report = await scrape(rt, {
+            key: { value: item.key, number: item.number, contentType: item.contentType },
+            registry,
+            fixturesDir,
+            sources: fixturesDir ? ["fixture"] : undefined,
+          });
+          results.push({ key, ok: true, filled: report.filled.length });
+        } catch (err) {
+          results.push({ key, ok: false, filled: 0, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      return { count: results.length, results };
+    }),
+  );
+
+  ipcMain.handle("resource:fetch", (_event, input: { key: string }) =>
+    exclusive("下载海报", async () => {
+      const rt = mustRuntime();
+      const item = getItem(rt, input.key);
+      if (!item) throw new AppError(`条目不存在: ${input.key}`, EXIT.NOT_FOUND);
+      const result = await downloadPoster(rt, createHttp(), item);
+      if (!result.poster) {
+        throw new AppError(result.tried.length === 0 ? "该条目没有图片 URL" : "海报下载失败", EXIT.RETRYABLE);
+      }
+      return { key: input.key, path: result.poster.path, size: result.poster.size };
+    }),
+  );
 
   ipcMain.handle("config:get", () => ({
     path: settingsPath(mustRuntime().paths),

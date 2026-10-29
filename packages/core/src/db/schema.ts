@@ -73,6 +73,17 @@ const MIGRATIONS: string[] = [
     primary key (number, site)
   );
   `,
+
+  // v3 — 图片资源的本地缓存 (URL → 文件)。DB 是源, 文件是产物, 与 NFO 同一方向。
+  `
+  create table resources (
+    url          text primary key,
+    path         text not null,
+    content_type text,
+    size         integer not null,
+    fetched_at   integer not null default (unixepoch())
+  );
+  `,
 ];
 
 export function migrate(db: Db): number {

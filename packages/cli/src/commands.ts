@@ -19,6 +19,9 @@ import {
   scrape,
   updateItem,
   exitCodeName,
+  cachedPoster,
+  downloadPoster,
+  findResource,
   isDmmConfigured,
   maskSettings,
   resolveDmmEnv,
@@ -238,7 +241,7 @@ export const COMMANDS: Command[] = [
       applied: { ok: boolean; error?: string }[] | null;
     }) {
       const lines = [
-        `整理计划: 移动 ${data.plan.summary.move} · 写 NFO ${data.plan.summary.writeNfo} · 跳过 ${data.plan.summary.skip}`,
+        `整理计划: 移动 ${data.plan.summary.move} · 写 NFO ${data.plan.summary.writeNfo} · 海报 ${data.plan.summary.copyImage} · 跳过 ${data.plan.summary.skip}`,
       ];
       for (const entry of data.plan.entries.slice(0, 50)) {
         if (entry.action === "move") lines.push(`  → ${entry.from}\n    ${entry.to}`);
@@ -252,6 +255,37 @@ export const COMMANDS: Command[] = [
         lines.push("(dry-run, 未动磁盘; 加 --apply 执行)");
       }
       return lines.join("\n");
+    },
+  },
+
+  {
+    name: "resource",
+    summary: "资源: fetch <番号> 下载海报到本地缓存 (整理时再复制进库)",
+    needsDb: true,
+    args: [
+      { name: "action", type: "string", description: "目前只有 fetch", positional: true, default: "fetch" },
+      { name: "number", type: "string", description: "番号", positional: true, required: true },
+    ],
+    async run(ctx, args) {
+      const action = args.positionals.action ?? "fetch";
+      if (action !== "fetch") throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
+      const key = args.positionals.number!.toUpperCase();
+      const item = getItem(ctx.rt!, key);
+      if (!item) throw new AppError(`条目不存在: ${key}`, EXIT.NOT_FOUND, { number: key });
+
+      const http = new HttpClient({ proxy: await resolveProxyUrl(ctx.rt!.settings) });
+      const result = await downloadPoster(ctx.rt!, http, item);
+      if (!result.poster) {
+        throw new AppError(
+          result.tried.length === 0 ? "该条目没有图片 URL, 先刮削一次" : "所有海报地址都下载失败",
+          result.tried.length === 0 ? EXIT.NEEDS_INPUT : EXIT.RETRYABLE,
+          { failures: result.failures },
+        );
+      }
+      return { key, path: result.poster.path, size: result.poster.size, contentType: result.poster.contentType, failures: result.failures };
+    },
+    render(data: { key: string; path: string; size: number }) {
+      return `${data.key} 海报已缓存\n  ${data.path} (${Math.round(data.size / 1024)} KB)`;
     },
   },
 
