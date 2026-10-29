@@ -251,6 +251,10 @@ async function testDmm(): Promise<void> {
       </span>
     </header>
 
+    <div v-if="info?.fixturesDir" class="banner">
+      离线样本模式：刮削只走 fixture 源（{{ info.fixturesDir }}），不会访问真实站点。去掉 <code>KURA_FIXTURE_DIR</code> 重启即为真实刮削。
+    </div>
+
     <div class="body">
       <aside class="side">
         <div class="side-head">
@@ -547,6 +551,21 @@ h1 {
 .muted {
   color: var(--muted);
   font-size: 12px;
+}
+
+.banner {
+  margin: 0 20px;
+  padding: 8px 12px;
+  border: 1px solid #6b5a2a;
+  border-radius: 8px;
+  background: #2a2318;
+  color: var(--warn);
+  font-size: 12px;
+}
+
+.banner code {
+  font-family: ui-monospace, monospace;
+  color: #f0d49a;
 }
 
 .body {
