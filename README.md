@@ -2,11 +2,22 @@
 
 番号制本地影片库管理器。**Electron 桌面应用 + 面向 agent 的 CLI**,共享一份 TypeScript core 和一个 SQLite 文件。
 
-- 没有服务端,没有常驻进程:打开软件才运行,关了就退出。
-- CLI 是单文件二进制,冷启动 20–30ms,零依赖。
+- 没有服务端、没有常驻进程:打开软件才运行,关了就退出。
+- CLI 是单文件二进制,冷启动 ~40ms,零依赖。
 - GUI 与 CLI 不通过端口通信,只共享同一个库文件。
 
 领域词汇见 [CONTEXT.md](CONTEXT.md),产品边界见 [ADR 0002](docs/ADR/0002-产品边界.md),技术选型见 [ADR 0001](docs/ADR/0001-栈选择.md)。
+
+## 下载
+
+| 产物 | 说明 |
+|---|---|
+| `Kura-x.y.z-setup.exe` | Windows 安装包(选目录、桌面/开始菜单快捷方式、卸载器) |
+| `Kura-x.y.z-portable.exe` | 免安装,双击即用 |
+| `kura-x.y.z-win-x64.exe` | 命令行工具,给人和 agent 用 |
+
+> 均**未签名**,Windows 会提示"未知发布者",点「更多信息 → 仍要运行」。
+> 卸载**不会删除** `%APPDATA%\kura`(媒体库索引与配置)。
 
 ## 三个动作
 
@@ -18,102 +29,124 @@
 
 三个动作**互不触发**。没有"扫完自动刮""刮完自动整理"。
 
-## 快速开始
-
-前置:[Bun](https://bun.sh) ≥ 1.1(CLI / 主进程构建)、[pnpm](https://pnpm.io) ≥ 9(桌面端依赖)。
-
-网络受限时 `pnpm install` 会卡在 Electron 二进制下载, 加镜像:
-`ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ pnpm install`(打包时再加
-`ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/`)。
+## 快速上手
 
 ```bash
-# CLI
 kura library add 主库 ~/Videos
 kura scan 主库
 kura scrape ABC-123 --json
 kura organize 主库              # 只看计划
 kura organize 主库 --apply      # 真的移动
-
-# 手改字段并锁定(重新刮削不覆盖)
-kura item set ABC-123 --title "我改的标题" --plot "我改的简介"
-kura item unlock ABC-123 title
-
-# 开发
-bun run cli --help               # 零 install 跑 CLI
-pnpm install && pnpm dev         # 桌面端
-bun run build:cli                # -> dist/kura
-bun run build:cli:win            # -> dist/kura.exe (交叉编译)
-bun test                         # 47 个用例, 全部离线
-
-# 出 Windows 包
-pnpm --filter @kura/desktop package:win   # -> apps/desktop/release/Kura-x.y.z-portable.exe
 ```
 
-图标是脚本生成的占位图: `node scripts/make-icon.mjs`(手写 PNG/ICO 编码,零依赖)。
+## 整理维度
 
-## 数据源现状
+一个库选**一个**维度,决定第一层目录;模板负责其余层级。
+
+| 预设 | 模板 |
+|---|---|
+| 按番号 / 按演员 / 按演员(全部) | `{number}` / `{actor}/{number}` / `{actors}/{number}` |
+| 按片商 / 按厂牌 / 按系列 / 按类型 / 按年份 | `{studio}/{number}` … |
+
+```bash
+kura library set-template 主库 --dimension actor     # 按演员
+kura library set-template 主库 --template '{actor}/{year}/{number}'
+```
+
+多值与路径的规则: `{actor}` 取第一演员,`{actors}` 全拼(`演员甲、演员乙`);`{title}` 用原文保证路径稳定,`{title_zh}` 才用译文。
+目标已存在同名文件时**绝不覆盖**,计划里标 `skip`。
+
+**旧成品库只索引(不整理)**: 允许扫描、搜索、刮削,但永不移动/改名/写 NFO。
+
+```bash
+kura library add 旧片库 /path/to/library --no-organize
+kura library set-organize 旧片库 --no-organize
+```
+
+## 数据源
 
 | 来源 | 状态 | 说明 |
 |---|---|---|
 | `dmm` | **可用** | DMM/FANZA 官方 API,需 affiliate 凭据 |
-| `javbus` | **可用** | 网页解析(真实页面验证过),部分网络需代理 |
-| `javdb` | **可用** | 网页解析(真实页面验证过);**无码条目需登录**,未登录会报 NEEDS_INPUT |
+| `javbus` | **可用** | 网页解析(真实页面验证过) |
+| `javdb` | **可用** | 网页解析;**无码条目需登录**,未登录报 NEEDS_INPUT |
 | `fixture` | 可用 | 从目录读离线样本,用于开发与测试 |
 
 ```bash
-export KURA_DMM_API_ID=...            # https://affiliate.dmm.com/api/
-export KURA_DMM_AFFILIATE_ID=...
+kura config set --dmm-api-id ... --dmm-affiliate-id ...   # https://affiliate.dmm.com/api/
 kura source test dmm                  # 一条命令验证凭据与解析
-kura source test javbus               # 真打站点, 报告取到哪些字段
-kura source test javdb
+kura source test javbus
 kura scrape ABC-123                   # 默认路由: dmm → javbus → javdb
 kura scrape ABC-123 --source javbus,javdb   # 双源逐字段择优
-kura scrape ABC-123 --source fixture --fixtures ./fixtures
 ```
 
 缺凭据时退出码是 **4(NEEDS_INPUT)**,不会静默返回空条目。
 
-### 翻译（日 → 中）
+## 海报
 
-只翻含假名的日文标题与简介；演员名不翻。译文覆盖显示值，原文另存，NFO 的 `originaltitle` 与目录名仍用日文。
+```bash
+kura resource fetch ABC-123   # 下载到本地缓存(带防盗链 Referer)
+```
+
+整理时若有缓存海报,会复制为 `<视频名>-poster.jpg`,并在 NFO 写相对 `<thumb>`。
+
+## 翻译(日 → 中)
+
+只翻含假名的日文标题与简介;演员名不翻。译文覆盖显示值,原文另存,NFO 的 `originaltitle` 与目录名仍用日文。
 
 ```bash
 kura config set --llm-base-url https://api.deepseek.com/v1 --llm-api-key sk-... --llm-model deepseek-chat
 kura config set --translate          # 刮削后自动翻
 kura translate --pending             # 补历史条目
-kura translate ABC-123
 ```
 
-任何 OpenAI 兼容端点都行（DeepSeek / 通义 / Ollama / LM Studio）。译文缓存独立在 `<数据目录>/translations.db`，删掉即重翻。
+任何 OpenAI 兼容端点都行(DeepSeek / 通义 / Ollama / LM Studio)。译文缓存独立在 `<数据目录>/translations.db`,删掉即重翻。
 
-### 代理
-
-`javdb` 与 DMM 网页版对部分地区封锁,`javbus` 需要完整浏览器 UA(已内置)。代理分两处:
-
-- **GUI**: 跟随系统代理 —— Clash 开系统代理或 TUN 模式即可,无需配置。
-- **CLI**: `kura config set --proxy auto`(推荐)或 `--proxy http://127.0.0.1:7890`。
-- 优先级: `KURA_PROXY` 环境变量 > 配置文件 > 系统代理(GUI)/直连(CLI)。
-- `auto` 在运行时探测 `127.0.0.1` 与 WSL 网关上的常见端口(7890/7891/7897/1080/10808/20171),
-  命中即用并缓存; 探测总预算 6s。**这样 WSL 网关变化、Clash 换端口都不用改配置。**
-
-WSL 里要指向宿主机上的 Clash,用网关地址而不是 `127.0.0.1`:
+## 手动改字段与锁定
 
 ```bash
-ip route show default | awk '{print $3}'      # 例如 172.19.16.1
-kura config set --proxy http://172.19.16.1:7890
+kura item set ABC-123 --title "我改的标题" --plot "我改的简介"   # 默认自动锁定
+kura item lock ABC-123 title,plot
+kura item unlock ABC-123 title
 ```
 
-聚合、整理、NFO 都走同一份代码,补站点时只改 `packages/core/src/sources/builtin.ts`。
+锁定的字段重新刮削不会被覆盖。
+
+## 代理
+
+- **GUI**: 跟随系统代理 —— Clash 开系统代理或 TUN 即可,无需配置。
+- **CLI**: `kura config set --proxy auto`(推荐,运行时探测 7890/7897/1080…)或显式 URL。
+- 优先级: `KURA_PROXY` > 配置文件 > 系统代理/直连。
+
+WSL 里指向宿主机 Clash 要用网关地址,`auto` 会自动探测。
+
+## 开发
+
+前置: [Bun](https://bun.sh) ≥ 1.1、[pnpm](https://pnpm.io) ≥ 9。网络受限时加
+`ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`。
+
+```bash
+bun run cli --help               # 零 install 跑 CLI
+pnpm install && pnpm dev         # 桌面端
+bun test                         # 111 个用例, 全部离线
+bun run build:cli                # -> dist/kura
+bun run build:cli:win            # -> dist/kura.exe
+pnpm --filter @kura/desktop package:installer   # NSIS 安装包 (Linux 上需 wine)
+pnpm --filter @kura/desktop package:win         # portable (无需 wine)
+```
+
+打包细节(含无 sudo 时的 Windows 侧构建、离线缓存)见 [docs/dev/packaging.md](docs/dev/packaging.md)。
 
 ## 目录
 
 ```
 packages/core      业务逻辑 + SQLite (唯一有状态的一层)
-  domain/          纯函数: identify / aggregate / materialize
-  sources/         来源接口、路由、fixture 源
-  tasks/           scan / scrape / organize
+  domain/          纯函数: identify / aggregate / materialize / dimensions
+  sources/         来源接口、路由、javbus / javdb / dmm API、fixture
+  llm/             翻译客户端与缓存
+  tasks/           scan / scrape / organize / translate / resources
 packages/cli       面向 agent 的 CLI (契约见 docs/dev/cli-contract.md)
-apps/desktop       Electron 主进程 + Vue3 三页界面
+apps/desktop       Electron 主进程 + Vue3 界面
 docs/dev           给 agent 的架构与契约
 ```
 
