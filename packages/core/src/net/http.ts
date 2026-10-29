@@ -56,7 +56,12 @@ export class HttpClient {
         }
         if (!response.ok) {
           // 4xx 不重试: 参数或权限问题, 重试只会更慢地失败。
-          throw new AppError(`HTTP ${response.status}`, EXIT.NOT_FOUND, { url, status: response.status });
+          const body = await response.text().catch(() => "");
+          throw new AppError(`HTTP ${response.status}`, EXIT.NOT_FOUND, {
+            url,
+            status: response.status,
+            body: body.slice(0, 400),
+          });
         }
         return await response.text();
       } catch (err) {

@@ -19,6 +19,11 @@ import {
   scrape,
   updateItem,
   exitCodeName,
+  isDmmConfigured,
+  maskSettings,
+  resolveDmmEnv,
+  saveSettings,
+  settingsPath,
   type ContentType,
   type FieldKey,
   type ItemKey,
@@ -143,7 +148,7 @@ export const COMMANDS: Command[] = [
       { name: "dry-run", type: "boolean", description: "只报告, 不写库", default: false },
     ],
     async run(ctx, args) {
-      const registry = defaultSources();
+      const registry = defaultSources({ dmm: resolveDmmEnv(ctx.rt!.settings) });
       const fixturesDir = typeof args.options.fixtures === "string" ? args.options.fixtures : null;
       const sources =
         typeof args.options.source === "string" ? args.options.source.split(",").map((id) => id.trim()) : undefined;
@@ -361,15 +366,15 @@ export const COMMANDS: Command[] = [
   {
     name: "source",
     summary: "来源: list (状态与缺失配置) | test <id> [--probe 番号]",
-    needsDb: false,
+    needsDb: true,
     args: [
       { name: "action", type: "string", description: "list 或 test", positional: true, default: "list" },
       { name: "id", type: "string", description: "test 时指定来源 id", positional: true },
       { name: "probe", type: "string", description: "test 用的探测番号", default: "SSIS-001" },
     ],
-    async run(_ctx, args) {
+    async run(ctx, args) {
       const action = args.positionals.action ?? "list";
-      const registry = defaultSources();
+      const registry = defaultSources({ dmm: resolveDmmEnv(ctx.rt!.settings) });
 
       if (action === "list") {
         return {
@@ -436,6 +441,58 @@ export const COMMANDS: Command[] = [
         result.probe ? `  探测番号 ${result.probe}` : "",
         result.fields?.length ? `  取到字段: ${result.fields.join(", ")}` : "",
         result.error ? `  ${result.error}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    },
+  },
+
+  {
+    name: "config",
+    summary: "配置: get (脱敏) | set --dmm-api-id ... --dmm-affiliate-id ... | path",
+    needsDb: true,
+    args: [
+      { name: "action", type: "string", description: "get | set | path", positional: true, default: "get" },
+      { name: "dmm-api-id", type: "string", description: "set: DMM API ID" },
+      { name: "dmm-affiliate-id", type: "string", description: "set: DMM affiliate ID" },
+    ],
+    async run(ctx, args) {
+      const action = args.positionals.action ?? "get";
+      const paths = ctx.rt!.paths;
+
+      if (action === "path") return { path: settingsPath(paths) };
+
+      if (action === "get") {
+        const dmm = resolveDmmEnv(ctx.rt!.settings);
+        return {
+          path: settingsPath(paths),
+          settings: maskSettings(ctx.rt!.settings),
+          dmmConfigured: isDmmConfigured(dmm),
+          /** 环境变量优先于文件, 这里说明当前值实际来自哪。 */
+          dmmFromEnv: Boolean(process.env.KURA_DMM_API_ID || process.env.KURA_DMM_AFFILIATE_ID),
+        };
+      }
+
+      if (action === "set") {
+        const patch: { dmm: { apiId?: string; affiliateId?: string } } = { dmm: {} };
+        if (typeof args.options["dmm-api-id"] === "string") patch.dmm.apiId = args.options["dmm-api-id"];
+        if (typeof args.options["dmm-affiliate-id"] === "string") patch.dmm.affiliateId = args.options["dmm-affiliate-id"];
+        if (Object.keys(patch.dmm).length === 0) {
+          throw new AppError("用法: config set --dmm-api-id ... --dmm-affiliate-id ...", EXIT.USAGE);
+        }
+        const saved = saveSettings(paths, patch);
+        return { path: settingsPath(paths), settings: maskSettings(saved), dmmConfigured: isDmmConfigured(resolveDmmEnv(saved)) };
+      }
+
+      throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
+    },
+    render(data: Record<string, unknown>) {
+      const settings = data.settings as { dmm: { apiId: string; affiliateId: string } } | undefined;
+      return [
+        `配置文件 ${data.path}`,
+        settings ? `  dmm.api-id       ${settings.dmm.apiId || "(未设置)"}` : "",
+        settings ? `  dmm.affiliate-id ${settings.dmm.affiliateId || "(未设置)"}` : "",
+        settings ? `  DMM ${data.dmmConfigured ? "已配置" : "未配置"}` : "",
       ]
         .filter(Boolean)
         .join("\n");

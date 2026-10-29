@@ -10,6 +10,7 @@ interface KuraSourceInfo {
   id: string;
   label: string;
   status: "ready" | "todo";
+  missing: string[];
 }
 
 interface KuraAppInfo {
@@ -21,6 +22,7 @@ interface KuraAppInfo {
   items: number;
   mediaFiles: number;
   fixturesDir: string | null;
+  dmmConfigured: boolean;
   sources: KuraSourceInfo[];
 }
 
@@ -89,6 +91,22 @@ interface KuraScrapeBatch {
   reports: { key: string; ok: boolean; filled: number; error?: string }[];
 }
 
+interface KuraConfig {
+  path: string;
+  settings: { dmm: { apiId: string; affiliateId: string } };
+  dmmConfigured: boolean;
+  dmmFromEnv: boolean;
+}
+
+interface KuraDmmTest {
+  ok: boolean;
+  status: string;
+  probe?: string;
+  fields?: string[];
+  missing?: string[];
+  error?: string;
+}
+
 interface KuraBridge {
   info(): Promise<KuraAppInfo>;
   libraries(): Promise<KuraLibrary[]>;
@@ -99,6 +117,9 @@ interface KuraBridge {
   item(number: string): Promise<KuraItem | null>;
   organizePreview(libraryId: number): Promise<KuraOrganizeReport>;
   organizeApply(libraryId: number): Promise<KuraOrganizeReport>;
+  configGet(): Promise<KuraConfig>;
+  configSet(patch: { apiId?: string; affiliateId?: string }): Promise<{ settings: KuraConfig["settings"]; dmmConfigured: boolean }>;
+  testDmm(probe?: string): Promise<KuraDmmTest>;
   onScanEvent(callback: (event: KuraScanEvent) => void): () => void;
 }
 

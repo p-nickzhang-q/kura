@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld("kura", {
   item: (number) => ipcRenderer.invoke("item:get", number),
   organizePreview: (libraryId) => ipcRenderer.invoke("organize:preview", { libraryId }),
   organizeApply: (libraryId) => ipcRenderer.invoke("organize:apply", { libraryId }),
+  configGet: () => ipcRenderer.invoke("config:get"),
+  configSet: (patch) => ipcRenderer.invoke("config:set", patch),
+  testDmm: (probe) => ipcRenderer.invoke("dmm:test", probe),
   /** 返回取消订阅函数, 供组件卸载时调用。 */
   onScanEvent: (callback) => {
     const handler = (_event, payload) => callback(payload);

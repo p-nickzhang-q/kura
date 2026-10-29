@@ -15,13 +15,17 @@ const info = ref<KuraAppInfo | null>(null);
 const libraries = ref<KuraLibrary[]>([]);
 const selectedId = ref<number | null>(null);
 const items = ref<KuraItem[]>([]);
-const tab = ref<"items" | "plan">("items");
+const tab = ref<"items" | "plan" | "settings">("items");
 const busy = ref(false);
 const error = ref<string | null>(null);
 const note = ref<string | null>(null);
 const plan = ref<KuraPlan | null>(null);
 const events = ref<KuraScanEvent[]>([]);
 const confirmApply = ref(false);
+const config = ref<KuraConfig | null>(null);
+const apiIdInput = ref("");
+const affiliateInput = ref("");
+const dmmTest = ref<KuraDmmTest | null>(null);
 
 let unsubscribe: (() => void) | null = null;
 
@@ -38,6 +42,7 @@ onUnmounted(() => unsubscribe?.());
 
 async function refreshAll(): Promise<void> {
   info.value = await window.kura.info();
+  config.value = await window.kura.configGet();
   libraries.value = await window.kura.libraries();
   if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
   items.value = await window.kura.items(100);
@@ -94,6 +99,28 @@ async function preview(): Promise<void> {
     tab.value = "plan";
     confirmApply.value = false;
   }
+}
+
+async function saveConfig(): Promise<void> {
+  const patch: { apiId?: string; affiliateId?: string } = {};
+  // 留空 = 保持原值; 只有真的输入了才覆盖, 避免把脱敏值写回去。
+  if (apiIdInput.value.trim()) patch.apiId = apiIdInput.value.trim();
+  if (affiliateInput.value.trim()) patch.affiliateId = affiliateInput.value.trim();
+  if (Object.keys(patch).length === 0) {
+    note.value = "没有改动";
+    return;
+  }
+  const saved = await run("保存配置", () => window.kura.configSet(patch));
+  if (saved) {
+    apiIdInput.value = "";
+    affiliateInput.value = "";
+    await refreshAll();
+    note.value = `已保存到 ${config.value?.path ?? "配置文件"}`;
+  }
+}
+
+async function testDmm(): Promise<void> {
+  dmmTest.value = await run("测试 DMM", () => window.kura.testDmm("SSIS-001"));
 }
 
 async function apply(): Promise<void> {
@@ -153,12 +180,67 @@ async function apply(): Promise<void> {
         <nav class="tabs">
           <button type="button" :class="{ on: tab === 'items' }" @click="tab = 'items'">条目</button>
           <button type="button" :class="{ on: tab === 'plan' }" @click="tab = 'plan'">整理预览</button>
+          <button type="button" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">设置</button>
           <span class="spacer" />
           <span v-if="busy" class="muted">进行中…</span>
         </nav>
 
         <p v-if="error" class="error">{{ error }}</p>
         <p v-else-if="note" class="note">{{ note }}</p>
+
+        <div v-else-if="tab === 'settings'" class="pane settings">
+          <h2>数据源</h2>
+          <p class="muted">
+            DMM 走官方 API, 需要 affiliate 凭据。配置保存在本地文件, 环境变量优先。
+          </p>
+
+          <label class="field">
+            <span>API ID</span>
+            <input
+              v-model="apiIdInput"
+              type="password"
+              spellcheck="false"
+              :placeholder="config?.settings.dmm.apiId || '未设置'"
+            />
+          </label>
+          <label class="field">
+            <span>Affiliate ID</span>
+            <input
+              v-model="affiliateInput"
+              type="password"
+              spellcheck="false"
+              :placeholder="config?.settings.dmm.affiliateId || '未设置'"
+            />
+          </label>
+
+          <div class="row">
+            <button type="button" class="primary" :disabled="busy" @click="saveConfig">保存</button>
+            <button type="button" :disabled="busy" @click="testDmm">测试连接</button>
+            <span class="muted">
+              {{ config?.dmmConfigured ? "DMM 已配置" : "DMM 未配置" }}
+              <template v-if="config?.dmmFromEnv">(环境变量生效中)</template>
+            </span>
+          </div>
+
+          <p v-if="dmmTest" class="note">
+            {{ dmmTest.ok ? "连接成功" : "未通过" }} ({{ dmmTest.status }})
+            <template v-if="dmmTest.fields?.length">· 取到 {{ dmmTest.fields.length }} 个字段</template>
+            <template v-if="dmmTest.missing?.length">· 缺 {{ dmmTest.missing.join(", ") }}</template>
+            <template v-if="dmmTest.error">· {{ dmmTest.error }}</template>
+          </p>
+
+          <p v-if="config" class="path">{{ config.path }}</p>
+
+          <h2>来源状态</h2>
+          <ul class="src-list">
+            <li v-for="source in info?.sources ?? []" :key="source.id">
+              <span class="tag" :data-ready="source.status === 'ready'">{{ source.status }}</span>
+              <strong>{{ source.id }}</strong>
+              <span class="muted">{{ source.label }}</span>
+              <span v-if="source.missing.length" class="warn">缺 {{ source.missing.join(", ") }}</span>
+            </li>
+          </ul>
+        </div>
 
         <div v-if="tab === 'items'" class="pane">
           <table>
@@ -519,6 +601,67 @@ td {
 .warn {
   color: var(--warn);
   font-size: 13px;
+}
+
+.settings h2 {
+  font-size: 14px;
+  margin: 18px 0 8px;
+  color: var(--text);
+}
+
+.settings h2:first-child {
+  margin-top: 0;
+}
+
+.settings .field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.settings .field span {
+  width: 110px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings .field input {
+  flex: 1;
+  max-width: 420px;
+  background: #0d0f14;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+}
+
+.settings .row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 10px;
+}
+
+.src-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.src-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  font-size: 13px;
+}
+
+.tag[data-ready="true"] {
+  color: var(--ok);
 }
 
 .events {

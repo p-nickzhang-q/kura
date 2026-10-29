@@ -92,6 +92,22 @@ describe("createDmmSource", () => {
     expect(source.requirements()).toEqual([]);
   });
 
+  test("HTTP 400 且响应体点名凭据 → NEEDS_INPUT, 不是 NOT_FOUND", async () => {
+    const http = {
+      getJson: async () => {
+        throw new AppError("HTTP 400", EXIT.NOT_FOUND, {
+          status: 400,
+          body: '{"result":{"status":400,"errors":{"api_id":"Invalid Request Error"}}}',
+        });
+      },
+    } as unknown as HttpClient;
+    const source = createDmmSource(http, { apiId: "bad", affiliateId: "bad" });
+
+    const error = await source.fetch(key, { fixturesDir: null }).catch((err: unknown) => err);
+    expect((error as AppError).exitCode).toBe(EXIT.NEEDS_INPUT);
+    expect((error as AppError).message).toContain("API ID");
+  });
+
   test("API 报 401 视为凭据问题而非网络问题", async () => {
     const source = createDmmSource(stubHttp({ result: { status: 401, message: "unauthorized" } }), {
       apiId: "id",

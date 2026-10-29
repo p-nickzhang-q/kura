@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { openDb, type Db, type DbInfo } from "./db/driver";
 import { migrate } from "./db/schema";
+import { loadSettings, type Settings } from "./config";
 import { resolvePaths, type Paths } from "./paths";
 
 /**
@@ -15,6 +16,8 @@ export interface Runtime {
   readonly db: Db;
   readonly dbInfo: DbInfo;
   readonly schemaVersion: number;
+  /** 启动时读一次; 改设置后重新 openRuntime 或直接用新值, 不做热更新。 */
+  readonly settings: Settings;
   close(): void;
 }
 
@@ -30,7 +33,7 @@ export async function openRuntime(opts: RuntimeOptions = {}): Promise<Runtime> {
   const { db, info } = await openDb(paths.dbFile);
   try {
     const schemaVersion = migrate(db);
-    return { paths, db, dbInfo: info, schemaVersion, close: () => db.close() };
+    return { paths, db, dbInfo: info, schemaVersion, settings: loadSettings(paths), close: () => db.close() };
   } catch (err) {
     db.close();
     throw err;

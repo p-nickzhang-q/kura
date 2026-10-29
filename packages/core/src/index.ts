@@ -8,6 +8,8 @@ export type { ExitCode } from "./exit";
 export { openRuntime, withRuntime } from "./runtime";
 export type { Runtime, RuntimeOptions } from "./runtime";
 export { resolvePaths } from "./paths";
+export { EMPTY_SETTINGS, isDmmConfigured, loadSettings, maskSecret, maskSettings, resolveDmmEnv, saveSettings, settingsPath } from "./config";
+export type { Settings } from "./config";
 export type { Paths } from "./paths";
 export type { Db, DbInfo } from "./db/driver";
 

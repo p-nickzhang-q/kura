@@ -4,7 +4,14 @@ import {
   AppError,
   EXIT,
   createLibrary,
+  createDmmSource,
   defaultSources,
+  HttpClient,
+  isDmmConfigured,
+  maskSettings,
+  resolveDmmEnv,
+  saveSettings,
+  settingsPath,
   findLibrary,
   getItem,
   listItems,
@@ -32,6 +39,8 @@ const fixturesDir = process.env.KURA_FIXTURE_DIR ?? null;
 let runtime: Runtime | null = null;
 let win: BrowserWindow | null = null;
 let busy: string | null = null;
+/** 设置改了就地更新, 不重建 runtime; 网络层每次按当前值构造。 */
+let settings = { dmm: { apiId: "", affiliateId: "" } };
 
 function mustRuntime(): Runtime {
   if (!runtime) throw new AppError("运行时尚未就绪", EXIT.RETRYABLE);
@@ -104,7 +113,10 @@ function registerIpc(): void {
       items: counts?.items ?? 0,
       mediaFiles: counts?.files ?? 0,
       fixturesDir,
-      sources: defaultSources().list().map((source) => ({ id: source.id, label: source.label, status: source.status })),
+      dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
+      sources: defaultSources({ dmm: resolveDmmEnv(settings) })
+        .list()
+        .map((source) => ({ id: source.id, label: source.label, status: source.status, missing: source.requirements() })),
     };
   });
 
@@ -136,7 +148,7 @@ function registerIpc(): void {
         try {
           const report = await scrape(rt, {
             key,
-            registry: defaultSources(),
+            registry: defaultSources({ dmm: resolveDmmEnv(settings) }),
             fixturesDir,
             // 真实站点尚未实现; 有样本目录时走离线源, 否则如实报错。
             sources: fixturesDir ? ["fixture"] : undefined,
@@ -155,6 +167,45 @@ function registerIpc(): void {
   );
 
   ipcMain.handle("item:get", (_event, number: string) => getItem(mustRuntime(), number));
+
+  ipcMain.handle("config:get", () => ({
+    path: settingsPath(mustRuntime().paths),
+    settings: maskSettings(settings),
+    dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
+    /** 环境变量优先; 提示用户实际生效的是哪一层。 */
+    dmmFromEnv: Boolean(process.env.KURA_DMM_API_ID || process.env.KURA_DMM_AFFILIATE_ID),
+  }));
+
+  ipcMain.handle("config:set", (_event, patch: { apiId?: string; affiliateId?: string }) => {
+    const rt = mustRuntime();
+    settings = saveSettings(rt.paths, { dmm: patch });
+    return {
+      settings: maskSettings(settings),
+      dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
+    };
+  });
+
+  ipcMain.handle("dmm:test", async (_event, probe?: string) => {
+    const source = createDmmSource(new HttpClient(), resolveDmmEnv(settings));
+    const missing = source.requirements();
+    if (missing.length > 0) return { ok: false, status: "missing-config", missing };
+
+    const code = (probe || "SSIS-001").toUpperCase();
+    try {
+      const fields = await source.fetch(
+        { value: code, number: code, contentType: "censored" },
+        { fixturesDir: null },
+      );
+      return {
+        ok: Boolean(fields),
+        status: fields ? "ok" : "empty",
+        probe: code,
+        fields: fields ? Object.keys(fields) : [],
+      };
+    } catch (err) {
+      return { ok: false, status: "error", probe: code, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
 
   ipcMain.handle("organize:preview", (_event, input: { libraryId: number }) =>
     organize(mustRuntime(), { library: mustLibrary(input.libraryId) }),
@@ -178,6 +229,7 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     try {
       runtime = await openRuntime();
+      settings = runtime.settings;
     } catch (err) {
       dialog.showErrorBox("无法初始化数据库", err instanceof Error ? err.message : String(err));
       app.exit(EXIT.INTERNAL);

@@ -72,7 +72,20 @@ export function createDmmSource(http: HttpClient, env: DmmEnv): Source {
       }
 
       const url = buildUrl(env, key.value);
-      const payload = await http.getJson<DmmResponse>(url);
+      const payload = await http.getJson<DmmResponse>(url).catch((err: unknown) => {
+        // DMM 对无效凭据返回 400 + {"errors":{"api_id":"Invalid Request Error"}},
+        // 若不翻译, 用户会看到"来源里没有这个番号" —— 完全误导。
+        const details = err instanceof AppError ? (err.details ?? {}) : {};
+        const body = typeof details.body === "string" ? details.body : "";
+        if (details.status === 400 && /api_id|affiliate_id/.test(body)) {
+          throw new AppError("DMM 拒绝了凭据, 请检查 API ID 与 Affiliate ID", EXIT.NEEDS_INPUT, {
+            source: "dmm",
+            status: 400,
+            body,
+          });
+        }
+        throw err;
+      });
 
       const status = payload.result?.status ?? 200;
       if (status === 401 || status === 403) {
