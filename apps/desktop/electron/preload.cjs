@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("kura", {
   libraries: () => ipcRenderer.invoke("library:list"),
   addLibrary: () => ipcRenderer.invoke("library:add"),
   scan: (libraryId) => ipcRenderer.invoke("scan:start", { libraryId }),
+  setLibraryTemplate: (libraryId, dimension) => ipcRenderer.invoke("library:set-template", { libraryId, dimension }),
   scrapePending: (limit) => ipcRenderer.invoke("scrape:pending", { limit }),
   items: (limit) => ipcRenderer.invoke("item:list", { limit }),
   item: (number) => ipcRenderer.invoke("item:get", number),

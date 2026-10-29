@@ -38,7 +38,7 @@ export async function organize(rt: Runtime, opts: OrganizeOptions): Promise<Orga
     inputs.push({ path: row.path, metadata, phase: parsePhase(row.phase), posterPath: cachedPoster(rt, metadata)?.path });
   }
 
-  const plan = buildPlan(opts.library, inputs);
+  const plan = await buildPlan(opts.library, inputs);
   const applied = apply ? await applyPlan(plan) : null;
 
   // 移动成功后必须同步索引, 否则下一次扫描会把"同一文件的旧路径"判成 removed + added。

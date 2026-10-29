@@ -19,6 +19,11 @@ import {
   scrape,
   updateItem,
   exitCodeName,
+  DIMENSIONS,
+  TEMPLATE_PLACEHOLDERS,
+  dimensionTemplate,
+  unknownPlaceholders,
+  updateLibraryTemplate,
   cachedPoster,
   downloadPoster,
   findResource,
@@ -82,34 +87,71 @@ function parseContentType(value: unknown): ContentType | null {
 export const COMMANDS: Command[] = [
   {
     name: "library",
-    summary: "媒体库: list | add <名称> <根目录> [--template]",
+    summary: "媒体库: list | add <名称> <根目录> | set-template <库> --dimension actor",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "list 或 add", positional: true, required: true },
-      { name: "name", type: "string", description: "库名 (add)", positional: true },
+      { name: "action", type: "string", description: "list | add | set-template", positional: true, required: true },
+      { name: "name", type: "string", description: "库名 (add: 新库名; set-template: 目标库)", positional: true },
       { name: "root", type: "string", description: "库根目录 (add)", positional: true },
-      { name: "template", type: "string", description: "整理模板, 相对库根", default: "{content_type}/{studio}/{number}" },
+      { name: "template", type: "string", description: "自定义整理模板, 相对库根" },
+      { name: "dimension", type: "string", description: `整理维度: ${DIMENSIONS.map((d) => d.id).join(" | ")}` },
     ],
     async run(ctx, args) {
       const action = args.positionals.action;
-      if (action === "list") return { libraries: listLibraries(ctx.rt!.db) };
-      if (action !== "add") throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
+      if (action === "list") return { libraries: listLibraries(ctx.rt!.db), dimensions: DIMENSIONS };
 
-      const name = args.positionals.name;
-      const root = args.positionals.root;
-      if (!name || !root) throw new AppError("用法: library add <名称> <根目录>", EXIT.USAGE);
-      const library = createLibrary(ctx.rt!.db, {
-        name,
-        root,
-        template: String(args.options.template ?? ""),
-      });
-      return { library };
+      const resolveTemplate = (): string => {
+        const dimension = typeof args.options.dimension === "string" ? args.options.dimension : null;
+        const explicit = typeof args.options.template === "string" ? args.options.template : null;
+
+        if (dimension) {
+          const template = dimensionTemplate(dimension);
+          if (!template) {
+            throw new AppError(`未知维度: ${dimension}`, EXIT.USAGE, {
+              dimensions: DIMENSIONS.map((item) => item.id),
+            });
+          }
+          return template;
+        }
+        if (explicit) {
+          const unknown = unknownPlaceholders(explicit);
+          if (unknown.length > 0) {
+            throw new AppError(`未知占位符: ${unknown.join(", ")}`, EXIT.USAGE, {
+              allowed: Object.keys(TEMPLATE_PLACEHOLDERS),
+            });
+          }
+          return explicit;
+        }
+        throw new AppError("需要 --dimension 或 --template", EXIT.USAGE);
+      };
+
+      if (action === "add") {
+        const name = args.positionals.name;
+        const root = args.positionals.root;
+        if (!name || !root) throw new AppError("用法: library add <名称> <根目录>", EXIT.USAGE);
+        const template = args.options.dimension || args.options.template ? resolveTemplate() : undefined;
+        return { library: createLibrary(ctx.rt!.db, { name, root, template }) };
+      }
+
+      if (action === "set-template") {
+        const ref = args.positionals.name;
+        if (!ref) throw new AppError("用法: library set-template <库> --dimension actor", EXIT.USAGE);
+        const library = requireLibrary(ctx, ref);
+        const template = resolveTemplate();
+        updateLibraryTemplate(ctx.rt!.db, library.id, template);
+        return { library: { ...library, template } };
+      }
+
+      throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
     },
-    render(data: { libraries?: { name: string; root: string }[]; library?: { name: string; root: string; template: string } }) {
-      if (data.library) return `已创建媒体库 ${data.library.name} → ${data.library.root}\n模板: ${data.library.template}`;
+    render(data: {
+      libraries?: { name: string; root: string; template: string }[];
+      library?: { name: string; root: string; template: string };
+    }) {
+      if (data.library) return `${data.library.name} → ${data.library.root}\n  模板: ${data.library.template}`;
       const libraries = data.libraries ?? [];
       if (libraries.length === 0) return "还没有媒体库。用 `kura library add <名称> <根目录>` 添加。";
-      return libraries.map((library) => `${library.name.padEnd(12)} ${library.root}`).join("\n");
+      return libraries.map((library) => `${library.name.padEnd(12)} ${library.template.padEnd(34)} ${library.root}`).join("\n");
     },
   },
 

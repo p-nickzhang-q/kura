@@ -23,6 +23,7 @@ interface KuraAppInfo {
   mediaFiles: number;
   fixturesDir: string | null;
   dmmConfigured: boolean;
+  dimensions: { id: string; label: string; template: string; note?: string }[];
   sources: KuraSourceInfo[];
 }
 
@@ -112,6 +113,7 @@ interface KuraBridge {
   libraries(): Promise<KuraLibrary[]>;
   addLibrary(): Promise<KuraLibrary | null>;
   scan(libraryId: number): Promise<KuraScanReport>;
+  setLibraryTemplate(libraryId: number, dimension: string): Promise<KuraLibrary>;
   scrapePending(limit?: number): Promise<KuraScrapeBatch>;
   items(limit?: number): Promise<KuraItem[]>;
   item(number: string): Promise<KuraItem | null>;

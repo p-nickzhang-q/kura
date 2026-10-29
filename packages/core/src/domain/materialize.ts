@@ -1,4 +1,4 @@
-import { mkdir, rename, writeFile, copyFile, unlink } from "node:fs/promises";
+import { copyFile, mkdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { CONTENT_TYPE_LABEL, type FileInfo, type Metadata } from "./types";
 
@@ -50,6 +50,8 @@ export function renderTemplate(template: string, metadata: Metadata, phase?: Fil
     year: (metadata.release_date ?? "").slice(0, 4),
     content_type: CONTENT_TYPE_LABEL[metadata.contentType] ?? metadata.contentType,
     actor: metadata.actors?.[0] ?? "",
+    // Amane 的做法: {actor} 取第一, {actors} 全拼。多值不再另造一套语义。
+    actors: (metadata.actors ?? []).join("、"),
     cd: phase?.cd ? String(phase.cd) : "",
   };
 
@@ -109,11 +111,35 @@ export function buildNfo(metadata: Metadata, thumbFile?: string): string {
   return `${lines.join("\n")}\n`;
 }
 
+export type TargetState = "free" | "same" | "occupied" | "unknown";
+
 /**
- * 生成整理计划。纯函数: 只算目标路径与 NFO 内容, 不碰磁盘。
+ * 目标位置能否落盘。对应 Amane `organize/file.py::target_state`:
+ *  - free      没有东西, 可以搬
+ *  - same      目标就是源本身(含硬链/软链), 视为已就位
+ *  - occupied  目标被别的文件占用, **绝不覆盖**
+ *  - unknown   读不出状态, 不当作被占用, 也不搬
+ */
+export async function targetState(source: string, target: string): Promise<TargetState> {
+  try {
+    const [sourceStat, targetStat] = await Promise.all([stat(source), stat(target).catch(() => null)]);
+    if (!targetStat) return "free";
+    // ino 为 0 的文件系统(部分 Windows 场景)退化为真实路径比较。
+    if (sourceStat.ino !== 0 && targetStat.ino !== 0) {
+      return sourceStat.dev === targetStat.dev && sourceStat.ino === targetStat.ino ? "same" : "occupied";
+    }
+    const [sourceReal, targetReal] = await Promise.all([realpath(source), realpath(target)]);
+    return sourceReal === targetReal ? "same" : "occupied";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * 生成整理计划: 算目标路径、查目标占用、拼 NFO 内容。只读磁盘, 不写。
  * 目标一律限制在库根内 —— 模板被改坏时宁可 skip, 也不能把文件搬出库。
  */
-export function buildPlan(library: Library, inputs: PlanInput[]): Plan {
+export async function buildPlan(library: Library, inputs: PlanInput[]): Promise<Plan> {
   const root = resolve(library.root);
   const entries: PlanEntry[] = [];
   const summary = { move: 0, writeNfo: 0, copyImage: 0, skip: 0 };
@@ -129,12 +155,15 @@ export function buildPlan(library: Library, inputs: PlanInput[]): Plan {
       summary.skip++;
       continue;
     }
-    if (target === resolve(input.path)) {
-      entries.push({ action: "skip", from: input.path, to: target, reason: "已在目标位置" });
-      summary.skip++;
-    } else {
+    const state = await targetState(input.path, target);
+    if (state === "free") {
       entries.push({ action: "move", from: input.path, to: target });
       summary.move++;
+    } else {
+      const reason =
+        state === "same" ? "已在目标位置" : state === "occupied" ? "目标已存在同名文件, 不覆盖" : "无法判断目标状态";
+      entries.push({ action: "skip", from: input.path, to: target, reason });
+      summary.skip++;
     }
 
     // 海报按 Emby/Kodi 的命名约定放成 `<视频名>-poster.<ext>`。

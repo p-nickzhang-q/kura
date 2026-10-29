@@ -48,7 +48,7 @@ describe("buildPlan / applyPlan", () => {
     await mkdir(join(root, "incoming"), { recursive: true });
     await writeFile(from, "video", "utf8");
 
-    const plan = buildPlan({ ...library, root }, [
+    const plan = await buildPlan({ ...library, root }, [
       {
         path: from,
         metadata,
@@ -71,7 +71,7 @@ describe("buildPlan / applyPlan", () => {
   });
 
   test("目标逃出库根时 skip, 不移动", async () => {
-    const plan = buildPlan({ ...library, root: "/media/library", template: "../../etc" }, [
+    const plan = await buildPlan({ ...library, root: "/media/library", template: "../../etc" }, [
       {
         path: "/media/library/incoming/ABC-123.mkv",
         metadata,
@@ -83,7 +83,7 @@ describe("buildPlan / applyPlan", () => {
   });
 
   test("分集文件带 -cd 后缀", async () => {
-    const plan = buildPlan(library, [
+    const plan = await buildPlan(library, [
       {
         path: "/media/library/in/ABC-123-CD2.mkv",
         metadata,

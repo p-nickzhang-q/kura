@@ -43,6 +43,7 @@ const confirmApply = ref(false);
 
 const picked = ref<string[]>([]);
 const detail = ref<KuraItem | null>(null);
+const dimension = ref("");
 
 const config = ref<KuraConfig | null>(null);
 const apiIdInput = ref("");
@@ -69,6 +70,10 @@ async function refreshAll(): Promise<void> {
   libraries.value = await window.kura.libraries();
   if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
   items.value = await window.kura.items(200);
+  // 把当前模板反查成维度, 让下拉框显示"现在是什么"
+  const current = libraries.value.find((library) => library.id === selectedId.value);
+  const matched = info.value?.dimensions.find((item) => item.template === current?.template);
+  dimension.value = matched?.id ?? "";
   // 选中项里可能有已经被删掉的条目
   picked.value = picked.value.filter((key) => items.value.some((item) => item.key === key));
   if (detail.value) detail.value = await window.kura.item(detail.value.key);
@@ -173,6 +178,18 @@ function fieldValue(item: KuraItem, field: string): string {
 }
 
 /* ---------- 整理 ---------- */
+
+async function applyDimension(): Promise<void> {
+  if (selectedId.value === null || !dimension.value) return;
+  const updated = await run("切换整理维度", () => window.kura.setLibraryTemplate(selectedId.value!, dimension.value));
+  if (updated) {
+    // 计划已失效, 清掉, 让用户重新预览
+    plan.value = null;
+    await refreshAll();
+    note.value = `整理维度已切换为 ${info.value?.dimensions.find((item) => item.id === dimension.value)?.label ?? dimension.value}`;
+  }
+}
+
 
 async function preview(): Promise<void> {
   if (selectedId.value === null) return;
@@ -366,6 +383,20 @@ async function testDmm(): Promise<void> {
 
         <!-- 整理预览 -->
         <div v-else-if="tab === 'plan'" class="pane">
+          <div class="lib-config">
+            <span class="muted">整理维度</span>
+            <select v-model="dimension" :disabled="!selected || busy">
+              <option v-for="item in info?.dimensions ?? []" :key="item.id" :value="item.id">
+                {{ item.label }} — {{ item.template }}
+              </option>
+            </select>
+            <button type="button" :disabled="!selected || busy || !dimension" @click="applyDimension">切换</button>
+            <span class="muted">当前模板: <code>{{ selected?.template }}</code></span>
+          </div>
+          <p class="muted note-line">
+            一个库只选一个维度。多演员时"按演员"取第一演员; 想全部列进目录名, 把模板改成 <code>{actors}/{number}</code>。
+          </p>
+
           <div v-if="!plan" class="muted">点左侧「整理预览」生成计划。</div>
           <template v-else>
             <p class="summary">
@@ -827,6 +858,39 @@ td.pick {
   margin: 0;
   color: var(--ok);
   font-size: 13px;
+}
+
+.lib-config {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.lib-config select {
+  background: #0d0f14;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+  max-width: 320px;
+}
+
+.lib-config code,
+.note-line code {
+  color: #9fb4d8;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.note-line {
+  margin: 0 0 10px;
 }
 
 .summary {

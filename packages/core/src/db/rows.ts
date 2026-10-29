@@ -136,6 +136,10 @@ export function createLibrary(db: Db, input: { name: string; root: string; templ
   return rowToLibrary(row);
 }
 
+export function updateLibraryTemplate(db: Db, libraryId: number, template: string): void {
+  db.run("update libraries set template = ? where id = ?", [template, libraryId]);
+}
+
 export function pinnedFields(db: Db, number: string): FieldKey[] {
   const row = db.get<{ pinned: string | null }>("select pinned from items where number = ?", [number]);
   return (parseJson<FieldKey[]>(row?.pinned ?? null) ?? []) as FieldKey[];

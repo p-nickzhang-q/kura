@@ -25,10 +25,13 @@ export type {
   SourceRecord,
 } from "./domain/types";
 
+export { DIMENSIONS, TEMPLATE_PLACEHOLDERS, dimensionTemplate, findDimension, templatePlaceholders, unknownPlaceholders } from "./domain/dimensions";
+export type { Dimension } from "./domain/dimensions";
+
 export { detectContentType, extractNumber, identify, isSiteKey, normalizeText, parseFileInfo, siteKey } from "./domain/identify";
 export { aggregate, mergeWithPinned } from "./domain/aggregate";
-export { applyPlan, buildNfo, buildPlan, escapeXml, renderTemplate } from "./domain/materialize";
-export type { ApplyResult, Library, Plan, PlanEntry, PlanInput } from "./domain/materialize";
+export { applyPlan, buildNfo, buildPlan, escapeXml, renderTemplate, targetState } from "./domain/materialize";
+export type { ApplyResult, Library, Plan, PlanEntry, PlanInput, TargetState } from "./domain/materialize";
 
 export { defaultSources, DEFAULT_ROUTES, createRegistry, fixtureSource, routeFor } from "./sources";
 export { buildUrl, createDmmSource, matchDmmItem, normalizeCode, toRawFields } from "./sources/dmm";
@@ -40,7 +43,7 @@ export type { DefaultSourcesOptions, Registry, Source, SourceConfig, SourceConte
 export { HttpClient } from "./net/http";
 export type { HttpClientOptions } from "./net/http";
 
-export { createLibrary, findLibrary, listLibraries, pinnedFields, rowToMetadata } from "./db/rows";
+export { createLibrary, findLibrary, listLibraries, pinnedFields, rowToMetadata, updateLibraryTemplate } from "./db/rows";
 export type { ItemRow, MediaFileRow } from "./db/rows";
 
 export { filePhase, scan } from "./tasks/scan";

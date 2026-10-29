@@ -8,6 +8,9 @@ import {
   defaultSources,
   downloadPoster,
   updateItem,
+  DIMENSIONS,
+  dimensionTemplate,
+  updateLibraryTemplate,
   HttpClient,
   isDmmConfigured,
   maskSettings,
@@ -143,6 +146,7 @@ function registerIpc(): void {
       mediaFiles: counts?.files ?? 0,
       fixturesDir,
       dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
+      dimensions: DIMENSIONS,
       sources: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) })
         .list()
         .map((source) => ({ id: source.id, label: source.label, status: source.status, missing: source.requirements() })),
@@ -156,6 +160,14 @@ function registerIpc(): void {
     if (result.canceled || !result.filePaths[0]) return null;
     const root = result.filePaths[0];
     return createLibrary(mustRuntime().db, { name: basename(root), root });
+  });
+
+  ipcMain.handle("library:set-template", (_event, input: { libraryId: number; dimension: string }) => {
+    const library = mustLibrary(input.libraryId);
+    const template = dimensionTemplate(input.dimension);
+    if (!template) throw new AppError(`未知维度: ${input.dimension}`, EXIT.USAGE, { dimension: input.dimension });
+    updateLibraryTemplate(mustRuntime().db, library.id, template);
+    return { ...library, template };
   });
 
   ipcMain.handle("scan:start", (_event, input: { libraryId: number }) =>
@@ -260,6 +272,7 @@ function registerIpc(): void {
     return {
       settings: maskSettings(settings),
       dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
+      dimensions: DIMENSIONS,
     };
   });
 

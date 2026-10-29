@@ -127,7 +127,7 @@ describe("整理时的海报落地", () => {
     const poster = cachedPoster(rt, metadata);
     expect(poster).not.toBeNull();
 
-    const plan = buildPlan(
+    const plan = await buildPlan(
       { id: 1, name: "主库", root: "/media/library", template: "{content_type}/{number}" },
       [
         {
@@ -148,8 +148,8 @@ describe("整理时的海报落地", () => {
     expect(nfo.content).toContain("<thumb>ABC-123-poster.jpg</thumb>");
   });
 
-  test("没有缓存海报时不产生 copy-image, NFO 里也没有 thumb", () => {
-    const plan = buildPlan(
+  test("没有缓存海报时不产生 copy-image, NFO 里也没有 thumb", async () => {
+    const plan = await buildPlan(
       { id: 1, name: "主库", root: "/media/library", template: "{number}" },
       [
         {
