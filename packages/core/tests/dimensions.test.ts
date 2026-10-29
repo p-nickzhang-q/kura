@@ -38,6 +38,12 @@ describe("维度预设", () => {
     expect(renderTemplate(dimensionTemplate("actor")!, metadata)).toBe("演员甲/ABC-123");
   });
 
+  test("按演员(全部) 与 按演员 是两个独立预设", () => {
+    expect(dimensionTemplate("actors")).toBe("{actors}/{number}");
+    expect(renderTemplate(dimensionTemplate("actors")!, metadata)).toBe("演员甲、演员乙/ABC-123");
+    expect(renderTemplate(dimensionTemplate("actor")!, metadata)).toBe("演员甲/ABC-123");
+  });
+
   test("按系列 / 按类型 / 按年份", () => {
     expect(renderTemplate(dimensionTemplate("series")!, metadata)).toBe("系列A/ABC-123");
     expect(renderTemplate(dimensionTemplate("content_type")!, metadata)).toBe("有码/ABC-123");

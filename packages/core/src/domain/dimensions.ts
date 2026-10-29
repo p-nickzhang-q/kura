@@ -23,6 +23,12 @@ export const DIMENSIONS: Dimension[] = [
     template: "{actor}/{number}",
     note: "多演员时取第一演员; 想全部列进目录名用 {actors}",
   },
+  {
+    id: "actors",
+    label: "按演员(全部)",
+    template: "{actors}/{number}",
+    note: "全部演员拼成一个目录名; 同一演员的片会分散在多个组合目录里",
+  },
   { id: "studio", label: "按片商", template: "{studio}/{number}" },
   { id: "label", label: "按厂牌", template: "{label}/{number}" },
   { id: "series", label: "按系列", template: "{series}/{number}" },
