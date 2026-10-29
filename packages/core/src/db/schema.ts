@@ -84,6 +84,11 @@ const MIGRATIONS: string[] = [
     fetched_at   integer not null default (unixepoch())
   );
   `,
+
+  // v4 — 库级"不整理"开关: 旧成品库只索引, 不允许移动/改名/写 NFO
+  `
+  alter table libraries add column organize_enabled integer not null default 1;
+  `,
 ];
 
 export function migrate(db: Db): number {

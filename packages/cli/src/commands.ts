@@ -23,6 +23,7 @@ import {
   TEMPLATE_PLACEHOLDERS,
   dimensionTemplate,
   unknownPlaceholders,
+  updateLibraryOrganize,
   updateLibraryTemplate,
   cachedPoster,
   downloadPoster,
@@ -87,7 +88,7 @@ function parseContentType(value: unknown): ContentType | null {
 export const COMMANDS: Command[] = [
   {
     name: "library",
-    summary: "媒体库: list | add <名称> <根目录> | set-template <库> --dimension actor",
+    summary: "媒体库: list | add <名称> <根目录> [--no-organize] | set-template | set-organize",
     needsDb: true,
     args: [
       { name: "action", type: "string", description: "list | add | set-template", positional: true, required: true },
@@ -95,6 +96,7 @@ export const COMMANDS: Command[] = [
       { name: "root", type: "string", description: "库根目录 (add)", positional: true },
       { name: "template", type: "string", description: "自定义整理模板, 相对库根" },
       { name: "dimension", type: "string", description: `整理维度: ${DIMENSIONS.map((d) => d.id).join(" | ")}` },
+      { name: "organize", type: "boolean", description: "允许整理 (--no-organize 表示只索引的旧成品库)", default: true },
     ],
     async run(ctx, args) {
       const action = args.positionals.action;
@@ -130,7 +132,17 @@ export const COMMANDS: Command[] = [
         const root = args.positionals.root;
         if (!name || !root) throw new AppError("用法: library add <名称> <根目录>", EXIT.USAGE);
         const template = args.options.dimension || args.options.template ? resolveTemplate() : undefined;
-        return { library: createLibrary(ctx.rt!.db, { name, root, template }) };
+        const organizeEnabled = args.options.organize !== false;
+        return { library: createLibrary(ctx.rt!.db, { name, root, template, organizeEnabled }) };
+      }
+
+      if (action === "set-organize") {
+        const ref = args.positionals.name;
+        if (!ref) throw new AppError("用法: library set-organize <库> [--no-organize]", EXIT.USAGE);
+        const library = requireLibrary(ctx, ref);
+        const enabled = args.options.organize !== false;
+        updateLibraryOrganize(ctx.rt!.db, library.id, enabled);
+        return { library: { ...library, organizeEnabled: enabled } };
       }
 
       if (action === "set-template") {
@@ -145,13 +157,21 @@ export const COMMANDS: Command[] = [
       throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
     },
     render(data: {
-      libraries?: { name: string; root: string; template: string }[];
-      library?: { name: string; root: string; template: string };
+      libraries?: { name: string; root: string; template: string; organizeEnabled?: boolean }[];
+      library?: { name: string; root: string; template: string; organizeEnabled?: boolean };
     }) {
-      if (data.library) return `${data.library.name} → ${data.library.root}\n  模板: ${data.library.template}`;
+      if (data.library) {
+        const mode = data.library.organizeEnabled === false ? "只索引 (不整理)" : "允许整理";
+        return `${data.library.name} → ${data.library.root}\n  模板: ${data.library.template}\n  模式: ${mode}`;
+      }
       const libraries = data.libraries ?? [];
       if (libraries.length === 0) return "还没有媒体库。用 `kura library add <名称> <根目录>` 添加。";
-      return libraries.map((library) => `${library.name.padEnd(12)} ${library.template.padEnd(34)} ${library.root}`).join("\n");
+      return libraries
+        .map(
+          (library) =>
+            `${library.name.padEnd(12)} ${library.template.padEnd(30)} ${library.organizeEnabled === false ? "[只索引] " : ""}${library.root}`,
+        )
+        .join("\n");
     },
   },
 
@@ -281,7 +301,10 @@ export const COMMANDS: Command[] = [
     render(data: {
       plan: { entries: { action: string; from?: string; to?: string }[]; summary: Record<string, number> };
       applied: { ok: boolean; error?: string }[] | null;
+      skipped?: boolean;
+      reason?: string;
     }) {
+      if (data.skipped) return `跳过: ${data.reason}`;
       const lines = [
         `整理计划: 移动 ${data.plan.summary.move} · 写 NFO ${data.plan.summary.writeNfo} · 海报 ${data.plan.summary.copyImage} · 跳过 ${data.plan.summary.skip}`,
       ];

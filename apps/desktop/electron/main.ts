@@ -10,6 +10,7 @@ import {
   updateItem,
   DIMENSIONS,
   dimensionTemplate,
+  updateLibraryOrganize,
   updateLibraryTemplate,
   HttpClient,
   isDmmConfigured,
@@ -160,6 +161,12 @@ function registerIpc(): void {
     if (result.canceled || !result.filePaths[0]) return null;
     const root = result.filePaths[0];
     return createLibrary(mustRuntime().db, { name: basename(root), root });
+  });
+
+  ipcMain.handle("library:set-organize", (_event, input: { libraryId: number; enabled: boolean }) => {
+    const library = mustLibrary(input.libraryId);
+    updateLibraryOrganize(mustRuntime().db, library.id, input.enabled);
+    return { ...library, organizeEnabled: input.enabled };
   });
 
   ipcMain.handle("library:set-template", (_event, input: { libraryId: number; dimension: string }) => {

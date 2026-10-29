@@ -181,6 +181,17 @@ function fieldValue(item: KuraItem, field: string): string {
 
 /* ---------- 整理 ---------- */
 
+async function toggleOrganize(event: Event): Promise<void> {
+  if (selectedId.value === null) return;
+  const enabled = (event.target as HTMLInputElement).checked;
+  const updated = await run("切换整理开关", () => window.kura.setLibraryOrganize(selectedId.value!, enabled));
+  if (updated) {
+    plan.value = null;
+    await refreshAll();
+    note.value = enabled ? "已允许整理" : "已设为只索引: 不会移动/改名/写 NFO";
+  }
+}
+
 async function applyDimension(): Promise<void> {
   if (selectedId.value === null || !dimension.value) return;
   const updated = await run("切换整理维度", () => window.kura.setLibraryTemplate(selectedId.value!, dimension.value));
@@ -195,6 +206,10 @@ async function applyDimension(): Promise<void> {
 
 async function preview(): Promise<void> {
   if (selectedId.value === null) return;
+  if (selected.value?.organizeEnabled === false) {
+    note.value = "该库已设为只索引, 不会整理。要整理请先勾选「允许整理」。";
+    return;
+  }
   const report = await run("生成计划", () => window.kura.organizePreview(selectedId.value!));
   if (report) {
     plan.value = report.plan;
@@ -264,7 +279,10 @@ async function testDmm(): Promise<void> {
         <ul class="libs">
           <li v-for="library in libraries" :key="library.id" :class="{ active: library.id === selectedId }">
             <button type="button" @click="selectedId = library.id">
-              <strong>{{ library.name }}</strong>
+              <strong>
+                {{ library.name }}
+                <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
+              </strong>
               <small :title="library.root">{{ library.root }}</small>
             </button>
           </li>
@@ -274,7 +292,14 @@ async function testDmm(): Promise<void> {
         <div class="actions">
           <button type="button" :disabled="busy || !selected" @click="doScan">扫描</button>
           <button type="button" :disabled="busy" @click="doScrape">刮削待处理</button>
-          <button type="button" :disabled="busy || !selected" @click="preview">整理预览</button>
+          <button
+            type="button"
+            :disabled="busy || !selected || selected.organizeEnabled === false"
+            :title="selected?.organizeEnabled === false ? '该库已设为只索引, 不会整理' : ''"
+            @click="preview"
+          >
+            整理预览
+          </button>
         </div>
 
         <p v-if="info" class="sources">
@@ -397,6 +422,15 @@ async function testDmm(): Promise<void> {
               </option>
             </select>
             <button type="button" :disabled="!selected || busy || !dimension" @click="applyDimension">切换</button>
+            <label class="check">
+              <input
+                type="checkbox"
+                :checked="selected?.organizeEnabled !== false"
+                :disabled="!selected || busy"
+                @change="toggleOrganize"
+              />
+              允许整理
+            </label>
             <span class="muted">当前模板: <code>{{ selected?.template }}</code></span>
           </div>
           <p class="muted note-line">
@@ -901,6 +935,16 @@ td.pick {
   padding: 6px 8px;
   font-size: 13px;
   max-width: 320px;
+}
+
+.badge {
+  font-size: 10px;
+  color: var(--warn);
+  border: 1px solid #6b5a2a;
+  border-radius: 999px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  vertical-align: middle;
 }
 
 .lib-config code,

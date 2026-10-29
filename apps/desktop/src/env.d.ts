@@ -32,6 +32,8 @@ interface KuraLibrary {
   name: string;
   root: string;
   template: string;
+  /** false = 只索引, 不允许移动/改名/写 NFO。 */
+  organizeEnabled?: boolean;
 }
 
 interface KuraScanEvent {
@@ -114,6 +116,7 @@ interface KuraBridge {
   addLibrary(): Promise<KuraLibrary | null>;
   scan(libraryId: number): Promise<KuraScanReport>;
   setLibraryTemplate(libraryId: number, dimension: string): Promise<KuraLibrary>;
+  setLibraryOrganize(libraryId: number, enabled: boolean): Promise<KuraLibrary>;
   scrapePending(limit?: number): Promise<KuraScrapeBatch>;
   items(limit?: number): Promise<KuraItem[]>;
   item(number: string): Promise<KuraItem | null>;

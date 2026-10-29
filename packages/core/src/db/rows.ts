@@ -106,34 +106,54 @@ export interface LibraryRow {
   name: string;
   root: string;
   template: string;
+  organize_enabled?: number;
 }
 
 export function rowToLibrary(row: LibraryRow): Library {
-  return { id: row.id, name: row.name, root: row.root, template: row.template };
+  return {
+    id: row.id,
+    name: row.name,
+    root: row.root,
+    template: row.template,
+    // 老库升上来时列可能存在但为 NULL, 统一按"允许整理"处理。
+    organizeEnabled: row.organize_enabled !== 0,
+  };
 }
 
 export function listLibraries(db: Db): Library[] {
-  return db.all<LibraryRow>("select id, name, root, template from libraries order by name").map(rowToLibrary);
+  return db.all<LibraryRow>("select id, name, root, template, organize_enabled from libraries order by name").map(rowToLibrary);
 }
 
 export function findLibrary(db: Db, ref: string): Library | undefined {
   const byId = Number(ref);
   const row = Number.isInteger(byId)
-    ? db.get<LibraryRow>("select id, name, root, template from libraries where id = ?", [byId])
+    ? db.get<LibraryRow>("select id, name, root, template, organize_enabled from libraries where id = ?", [byId])
     : undefined;
   const found =
-    row ?? db.get<LibraryRow>("select id, name, root, template from libraries where name = ?", [ref]);
+    row ??
+    db.get<LibraryRow>("select id, name, root, template, organize_enabled from libraries where name = ?", [ref]);
   return found ? rowToLibrary(found) : undefined;
 }
 
-export function createLibrary(db: Db, input: { name: string; root: string; template?: string }): Library {
-  db.run("insert into libraries (name, root, template) values (?, ?, ?)", [
+export function createLibrary(
+  db: Db,
+  input: { name: string; root: string; template?: string; organizeEnabled?: boolean },
+): Library {
+  db.run("insert into libraries (name, root, template, organize_enabled) values (?, ?, ?, ?)", [
     input.name,
     input.root,
     input.template ?? "{content_type}/{studio}/{number}",
+    input.organizeEnabled === false ? 0 : 1,
   ]);
-  const row = db.get<LibraryRow>("select id, name, root, template from libraries where name = ?", [input.name])!;
+  const row = db.get<LibraryRow>(
+    "select id, name, root, template, organize_enabled from libraries where name = ?",
+    [input.name],
+  )!;
   return rowToLibrary(row);
+}
+
+export function updateLibraryOrganize(db: Db, libraryId: number, enabled: boolean): void {
+  db.run("update libraries set organize_enabled = ? where id = ?", [enabled ? 1 : 0, libraryId]);
 }
 
 export function updateLibraryTemplate(db: Db, libraryId: number, template: string): void {

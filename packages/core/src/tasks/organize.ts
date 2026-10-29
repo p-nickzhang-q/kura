@@ -13,6 +13,9 @@ export interface OrganizeOptions {
 export interface OrganizeReport {
   plan: Plan;
   applied: ApplyResult[] | null;
+  /** 该库被设为"只索引不整理", 本次什么都没算也没动。 */
+  skipped?: boolean;
+  reason?: string;
 }
 
 /**
@@ -22,6 +25,21 @@ export interface OrganizeReport {
  */
 export async function organize(rt: Runtime, opts: OrganizeOptions): Promise<OrganizeReport> {
   const apply = opts.apply ?? false;
+
+  // 旧成品库: 允许扫描/刮削, 但绝不动文件。见 ADR 0003。
+  if (opts.library.organizeEnabled === false) {
+    return {
+      plan: {
+        libraryId: opts.library.id,
+        libraryRoot: opts.library.root,
+        entries: [],
+        summary: { move: 0, writeNfo: 0, copyImage: 0, skip: 0 },
+      },
+      applied: null,
+      skipped: true,
+      reason: "该库已设为不整理 (只索引), 不会移动或改名文件",
+    };
+  }
 
   const rows = rt.db.all<ItemRow & { path: string; phase: string | null }>(
     `select m.path, m.phase, i.*

@@ -8,6 +8,8 @@ export interface Library {
   root: string;
   /** 相对目录模板, 占位符见 renderTemplate。 */
   template: string;
+  /** false = 只索引, 不允许移动/改名/写 NFO。默认视为允许。 */
+  organizeEnabled?: boolean;
 }
 
 export type PlanAction = "move" | "write-nfo" | "copy-image" | "skip";

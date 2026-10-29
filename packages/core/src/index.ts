@@ -43,7 +43,7 @@ export type { DefaultSourcesOptions, Registry, Source, SourceConfig, SourceConte
 export { HttpClient } from "./net/http";
 export type { HttpClientOptions } from "./net/http";
 
-export { createLibrary, findLibrary, listLibraries, pinnedFields, rowToMetadata, updateLibraryTemplate } from "./db/rows";
+export { createLibrary, findLibrary, listLibraries, pinnedFields, rowToMetadata, updateLibraryOrganize, updateLibraryTemplate } from "./db/rows";
 export type { ItemRow, MediaFileRow } from "./db/rows";
 
 export { filePhase, scan } from "./tasks/scan";
