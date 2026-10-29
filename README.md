@@ -56,14 +56,16 @@ pnpm --filter @kura/desktop package:win   # -> apps/desktop/release/Kura-x.y.z-p
 | 来源 | 状态 | 说明 |
 |---|---|---|
 | `dmm` | **可用** | DMM/FANZA 官方 API,需 affiliate 凭据 |
-| `javdb` / `javbus` | todo | 网页版对非日本 IP 不可达,待在有网络条件的环境实现 |
+| `javbus` | **可用** | 网页解析(真实页面验证过),部分网络需代理 |
+| `javdb` | todo | 地区封锁,需能出海的代理;实现方式同 javbus |
 | `fixture` | 可用 | 从目录读离线样本,用于开发与测试 |
 
 ```bash
 export KURA_DMM_API_ID=...            # https://affiliate.dmm.com/api/
 export KURA_DMM_AFFILIATE_ID=...
 kura source test dmm                  # 一条命令验证凭据与解析
-kura scrape ABC-123                   # 默认路由: dmm → javdb → javbus
+kura source test javbus               # 真打站点, 报告取到哪些字段
+kura scrape ABC-123                   # 默认路由: dmm → javbus → javdb
 kura scrape ABC-123 --source fixture --fixtures ./fixtures
 ```
 

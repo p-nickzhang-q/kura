@@ -8,14 +8,15 @@ export type { Registry, Source, SourceContext } from "./types";
 export { fixtureSource } from "./builtin";
 export type { SourceConfig } from "./builtin";
 export { buildUrl, matchDmmItem, normalizeCode, toRawFields, type DmmEnv, type DmmItem, type DmmResponse } from "./dmm";
+export { createJavbusSource, numberMatch, numberVariants, parseDetail, parseSearch, selectCandidateIndex, type SearchCandidate } from "./javbus";
 
 /** 每个内容类型的站点名单。既是抓取名单, 也是逐字段择优的默认顺序。 */
 export const DEFAULT_ROUTES: Record<ContentType, string[]> = {
-  censored: ["dmm", "javdb", "javbus"],
-  uncensored: ["javdb", "javbus"],
-  fc2: ["javdb"],
+  censored: ["dmm", "javbus", "javdb"],
+  uncensored: ["javbus", "javdb"],
+  fc2: ["javbus", "javdb"],
   chinese: ["javdb"],
-  amateur: ["javdb", "javbus"],
+  amateur: ["javbus", "javdb"],
   western: ["javdb"],
   anime: ["dmm", "javdb"],
 };

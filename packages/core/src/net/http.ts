@@ -6,6 +6,10 @@ export type FetchLike = (
   init: { headers: Record<string, string>; signal: AbortSignal; proxy?: string },
 ) => Promise<Response>;
 
+export interface RequestOptions {
+  headers?: Record<string, string>;
+}
+
 export interface HttpClientOptions {
   userAgent?: string;
   timeoutMs?: number;
@@ -86,8 +90,9 @@ export class HttpClient {
     this.fetchImpl = options.fetchImpl ?? createFetch(options.proxy);
   }
 
-  async getJson<T>(url: string): Promise<T> {
-    const text = await this.getText(url);
+  /** 每个请求可追加头部(如来源需要的 cookie / referer), 不影响其它来源。 */
+  async getJson<T>(url: string, init: RequestOptions = {}): Promise<T> {
+    const text = await this.getText(url, init);
     try {
       return JSON.parse(text) as T;
     } catch {
@@ -95,7 +100,7 @@ export class HttpClient {
     }
   }
 
-  async getText(url: string): Promise<string> {
+  async getText(url: string, init: RequestOptions = {}): Promise<string> {
     await this.throttle();
 
     let lastError: unknown = null;
@@ -106,6 +111,7 @@ export class HttpClient {
             "user-agent": this.options.userAgent,
             accept: "application/json, text/html;q=0.9",
             "accept-language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
+            ...(init.headers ?? {}),
           },
           signal: AbortSignal.timeout(this.options.timeoutMs),
           proxy: this.options.proxy,

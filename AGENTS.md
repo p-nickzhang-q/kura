@@ -13,6 +13,7 @@ Kura —— 番号制本地影片库管理器。Electron 桌面应用 + 面向 a
 | 要做的事 | 先读 |
 |---|---|
 | 改词、加概念、写用户文案 | [CONTEXT.md](CONTEXT.md) |
+| 加一个数据来源 / 改解析 | [docs/dev/sources.md](docs/dev/sources.md) |
 | 改 core / 加任务 | [docs/dev/architecture.md](docs/dev/architecture.md) |
 | 改 CLI 参数或输出 | [docs/dev/cli-contract.md](docs/dev/cli-contract.md) |
 | 产品边界 / 为什么不做某功能 | [docs/ADR/0002](docs/ADR/0002-产品边界.md) |
@@ -58,6 +59,7 @@ node scripts/make-icon.mjs         # 占位图标(手写 PNG/ICO)
 - 不要在渲染进程开 `nodeIntegration`。
 - 不要用 `readFile()` 读用户媒体文件(大文件);索引与 hash 一律流式。
 - 不要把未实现的站点标成 `ready`。`source list` 必须说实话。
+- 真实页面的正文不得进仓库: fixture 必须过 `packages/core/scripts/sanitize-fixture.mjs`。
 
 ## 提交
 
