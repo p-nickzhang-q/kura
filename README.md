@@ -135,7 +135,8 @@ pnpm --filter @kura/desktop package:installer   # NSIS 安装包 (Linux 上需 w
 pnpm --filter @kura/desktop package:win         # portable (无需 wine)
 ```
 
-打包细节(含无 sudo 时的 Windows 侧构建、离线缓存)见 [docs/dev/packaging.md](docs/dev/packaging.md)。
+打包细节(含无 sudo 时的 Windows 侧构建、离线缓存)见 [docs/dev/packaging.md](docs/dev/packaging.md);
+发版流程与产物核对见 [docs/dev/release.md](docs/dev/release.md)。
 
 ## 目录
 
