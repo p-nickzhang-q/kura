@@ -14,9 +14,11 @@ export interface Settings {
     apiId: string;
     affiliateId: string;
   };
+  /** HTTP 代理, 如 http://127.0.0.1:7890。空串表示直连/GUI 跟随系统代理。 */
+  proxy: string;
 }
 
-export const EMPTY_SETTINGS: Settings = { dmm: { apiId: "", affiliateId: "" } };
+export const EMPTY_SETTINGS: Settings = { dmm: { apiId: "", affiliateId: "" }, proxy: "" };
 
 export function settingsPath(paths: Paths): string {
   return join(paths.dataDir, "config.json");
@@ -32,6 +34,7 @@ export function loadSettings(paths: Paths): Settings {
         apiId: String(raw.dmm?.apiId ?? ""),
         affiliateId: String(raw.dmm?.affiliateId ?? ""),
       },
+      proxy: String(raw.proxy ?? ""),
     };
   } catch {
     // 坏配置不能挡住启动: 退回空设置, 让调用方按"未配置"处理。
@@ -39,10 +42,14 @@ export function loadSettings(paths: Paths): Settings {
   }
 }
 
-export function saveSettings(paths: Paths, patch: { dmm?: Partial<Settings["dmm"]> }): Settings {
+export function saveSettings(
+  paths: Paths,
+  patch: { dmm?: Partial<Settings["dmm"]>; proxy?: string },
+): Settings {
   const current = loadSettings(paths);
   const next: Settings = {
     dmm: { ...current.dmm, ...(patch.dmm ?? {}) },
+    proxy: patch.proxy !== undefined ? patch.proxy : current.proxy,
   };
 
   mkdirSync(paths.dataDir, { recursive: true });
@@ -75,7 +82,18 @@ export function maskSettings(settings: Settings): Settings {
       apiId: maskSecret(settings.dmm.apiId),
       affiliateId: maskSecret(settings.dmm.affiliateId),
     },
+    // 代理地址不含密钥, 原样展示便于排障。
+    proxy: settings.proxy,
   };
+}
+
+/** 代理: 环境变量 > 配置文件。空串 = 不显式指定。 */
+export function resolveProxy(
+  settings: Settings,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const value = env.KURA_PROXY?.trim() || settings.proxy.trim();
+  return value.length > 0 ? value : undefined;
 }
 
 export function isDmmConfigured(env: DmmEnv): boolean {

@@ -69,6 +69,20 @@ kura scrape ABC-123 --source fixture --fixtures ./fixtures
 
 缺凭据时退出码是 **4(NEEDS_INPUT)**,不会静默返回空条目。
 
+### 代理
+
+`javdb` 与 DMM 网页版对部分地区封锁,`javbus` 需要完整浏览器 UA(已内置)。代理分两处:
+
+- **GUI**: 跟随系统代理 —— Clash 开系统代理或 TUN 模式即可,无需配置。
+- **CLI**: `kura config set --proxy http://127.0.0.1:7890`,或 `KURA_PROXY` 环境变量(优先级更高)。
+
+WSL 里要指向宿主机上的 Clash,用网关地址而不是 `127.0.0.1`:
+
+```bash
+ip route show default | awk '{print $3}'      # 例如 172.19.16.1
+kura config set --proxy http://172.19.16.1:7890
+```
+
 聚合、整理、NFO 都走同一份代码,补站点时只改 `packages/core/src/sources/builtin.ts`。
 
 ## 目录

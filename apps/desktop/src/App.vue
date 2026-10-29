@@ -231,6 +231,12 @@ async function apply(): Promise<void> {
 
           <p v-if="config" class="path">{{ config.path }}</p>
 
+          <h2>代理</h2>
+          <p class="muted">
+            本界面跟随系统代理(Clash 开系统代理或 TUN 即可)。命令行可用
+            <code>kura config set --proxy http://127.0.0.1:7890</code> 或环境变量 <code>KURA_PROXY</code>。
+          </p>
+
           <h2>来源状态</h2>
           <ul class="src-list">
             <li v-for="source in info?.sources ?? []" :key="source.id">

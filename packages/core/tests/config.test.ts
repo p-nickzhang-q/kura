@@ -9,6 +9,7 @@ import {
   maskSecret,
   maskSettings,
   resolveDmmEnv,
+  resolveProxy,
   saveSettings,
   settingsPath,
 } from "../src/config";
@@ -66,6 +67,18 @@ describe("settings", () => {
 
     const masked = maskSettings({ dmm: { apiId: "secret-api-id", affiliateId: "secret-aff" } });
     expect(JSON.stringify(masked)).not.toContain("secret-api-id");
+  });
+
+  test("代理: 环境变量优先, 空串视为未设置", () => {
+    saveSettings(paths, { proxy: "http://127.0.0.1:7890" });
+    const settings = loadSettings(paths);
+
+    expect(resolveProxy(settings, {})).toBe("http://127.0.0.1:7890");
+    expect(resolveProxy(settings, { KURA_PROXY: "socks5://127.0.0.1:7891" })).toBe("socks5://127.0.0.1:7891");
+    expect(resolveProxy(settings, { KURA_PROXY: "  " })).toBe("http://127.0.0.1:7890");
+
+    saveSettings(paths, { proxy: "" });
+    expect(resolveProxy(loadSettings(paths), {})).toBeUndefined();
   });
 
   test("配置完整性判定", () => {

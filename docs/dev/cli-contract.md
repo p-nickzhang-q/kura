@@ -97,6 +97,7 @@ kura doctor --json
 |---|---|
 | `KURA_DATA_DIR` | 覆盖数据目录(测试与多库场景) |
 | `KURA_DEBUG` | 异常栈打到 stderr |
+| `KURA_PROXY` | HTTP 代理, 覆盖配置文件里的 proxy |
 
 ## 何时会失效
 

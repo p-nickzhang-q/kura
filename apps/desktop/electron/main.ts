@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net } from "electron";
 import { basename, join } from "node:path";
 import {
   AppError,
@@ -12,6 +12,7 @@ import {
   resolveDmmEnv,
   saveSettings,
   settingsPath,
+  type Settings,
   findLibrary,
   getItem,
   listItems,
@@ -40,7 +41,16 @@ let runtime: Runtime | null = null;
 let win: BrowserWindow | null = null;
 let busy: string | null = null;
 /** 设置改了就地更新, 不重建 runtime; 网络层每次按当前值构造。 */
-let settings = { dmm: { apiId: "", affiliateId: "" } };
+let settings: Settings = { dmm: { apiId: "", affiliateId: "" }, proxy: "" };
+
+/** Electron 主进程的 fetch: 跟随系统代理(Clash 开了系统代理/TUN 就直接生效)。 */
+function browserFetch(url: string, init: { headers: Record<string, string>; signal: AbortSignal }): Promise<Response> {
+  return net.fetch(url, { headers: init.headers, signal: init.signal });
+}
+
+function createHttp(): HttpClient {
+  return new HttpClient({ fetchImpl: browserFetch });
+}
 
 function mustRuntime(): Runtime {
   if (!runtime) throw new AppError("运行时尚未就绪", EXIT.RETRYABLE);
@@ -114,7 +124,7 @@ function registerIpc(): void {
       mediaFiles: counts?.files ?? 0,
       fixturesDir,
       dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
-      sources: defaultSources({ dmm: resolveDmmEnv(settings) })
+      sources: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) })
         .list()
         .map((source) => ({ id: source.id, label: source.label, status: source.status, missing: source.requirements() })),
     };
@@ -148,7 +158,7 @@ function registerIpc(): void {
         try {
           const report = await scrape(rt, {
             key,
-            registry: defaultSources({ dmm: resolveDmmEnv(settings) }),
+            registry: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) }),
             fixturesDir,
             // 真实站点尚未实现; 有样本目录时走离线源, 否则如实报错。
             sources: fixturesDir ? ["fixture"] : undefined,
@@ -186,7 +196,7 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("dmm:test", async (_event, probe?: string) => {
-    const source = createDmmSource(new HttpClient(), resolveDmmEnv(settings));
+    const source = createDmmSource(createHttp(), resolveDmmEnv(settings));
     const missing = source.requirements();
     if (missing.length > 0) return { ok: false, status: "missing-config", missing };
 

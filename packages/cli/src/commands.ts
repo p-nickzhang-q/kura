@@ -22,7 +22,9 @@ import {
   isDmmConfigured,
   maskSettings,
   resolveDmmEnv,
+  resolveProxy,
   saveSettings,
+  HttpClient,
   settingsPath,
   type ContentType,
   type FieldKey,
@@ -148,7 +150,7 @@ export const COMMANDS: Command[] = [
       { name: "dry-run", type: "boolean", description: "只报告, 不写库", default: false },
     ],
     async run(ctx, args) {
-      const registry = defaultSources({ dmm: resolveDmmEnv(ctx.rt!.settings) });
+      const registry = defaultSources({ http: new HttpClient({ proxy: resolveProxy(ctx.rt!.settings) }), dmm: resolveDmmEnv(ctx.rt!.settings) });
       const fixturesDir = typeof args.options.fixtures === "string" ? args.options.fixtures : null;
       const sources =
         typeof args.options.source === "string" ? args.options.source.split(",").map((id) => id.trim()) : undefined;
@@ -374,7 +376,7 @@ export const COMMANDS: Command[] = [
     ],
     async run(ctx, args) {
       const action = args.positionals.action ?? "list";
-      const registry = defaultSources({ dmm: resolveDmmEnv(ctx.rt!.settings) });
+      const registry = defaultSources({ http: new HttpClient({ proxy: resolveProxy(ctx.rt!.settings) }), dmm: resolveDmmEnv(ctx.rt!.settings) });
 
       if (action === "list") {
         return {
@@ -455,6 +457,7 @@ export const COMMANDS: Command[] = [
       { name: "action", type: "string", description: "get | set | path", positional: true, default: "get" },
       { name: "dmm-api-id", type: "string", description: "set: DMM API ID" },
       { name: "dmm-affiliate-id", type: "string", description: "set: DMM affiliate ID" },
+      { name: "proxy", type: "string", description: "set: HTTP 代理, 如 http://127.0.0.1:7890 (传空串清除)" },
     ],
     async run(ctx, args) {
       const action = args.positionals.action ?? "get";
@@ -470,18 +473,26 @@ export const COMMANDS: Command[] = [
           dmmConfigured: isDmmConfigured(dmm),
           /** 环境变量优先于文件, 这里说明当前值实际来自哪。 */
           dmmFromEnv: Boolean(process.env.KURA_DMM_API_ID || process.env.KURA_DMM_AFFILIATE_ID),
+          proxy: resolveProxy(ctx.rt!.settings) ?? "",
+          proxyFromEnv: Boolean(process.env.KURA_PROXY),
         };
       }
 
       if (action === "set") {
-        const patch: { dmm: { apiId?: string; affiliateId?: string } } = { dmm: {} };
+        const patch: { dmm: { apiId?: string; affiliateId?: string }; proxy?: string } = { dmm: {} };
         if (typeof args.options["dmm-api-id"] === "string") patch.dmm.apiId = args.options["dmm-api-id"];
         if (typeof args.options["dmm-affiliate-id"] === "string") patch.dmm.affiliateId = args.options["dmm-affiliate-id"];
-        if (Object.keys(patch.dmm).length === 0) {
-          throw new AppError("用法: config set --dmm-api-id ... --dmm-affiliate-id ...", EXIT.USAGE);
+        if (typeof args.options.proxy === "string") patch.proxy = args.options.proxy;
+        if (Object.keys(patch.dmm).length === 0 && patch.proxy === undefined) {
+          throw new AppError("用法: config set --dmm-api-id ... | --proxy http://127.0.0.1:7890", EXIT.USAGE);
         }
         const saved = saveSettings(paths, patch);
-        return { path: settingsPath(paths), settings: maskSettings(saved), dmmConfigured: isDmmConfigured(resolveDmmEnv(saved)) };
+        return {
+          path: settingsPath(paths),
+          settings: maskSettings(saved),
+          dmmConfigured: isDmmConfigured(resolveDmmEnv(saved)),
+          proxy: resolveProxy(saved) ?? "",
+        };
       }
 
       throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
@@ -493,6 +504,7 @@ export const COMMANDS: Command[] = [
         settings ? `  dmm.api-id       ${settings.dmm.apiId || "(未设置)"}` : "",
         settings ? `  dmm.affiliate-id ${settings.dmm.affiliateId || "(未设置)"}` : "",
         settings ? `  DMM ${data.dmmConfigured ? "已配置" : "未配置"}` : "",
+        `  proxy           ${String(data.proxy || "(未设置)")}`,
       ]
         .filter(Boolean)
         .join("\n");
