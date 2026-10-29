@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, session } from "electron";
 import { basename, join } from "node:path";
 import {
   AppError,
@@ -46,6 +46,23 @@ let settings: Settings = { dmm: { apiId: "", affiliateId: "" }, proxy: "" };
 /** Electron 主进程的 fetch: 跟随系统代理(Clash 开了系统代理/TUN 就直接生效)。 */
 function browserFetch(url: string, init: { headers: Record<string, string>; signal: AbortSignal }): Promise<Response> {
   return net.fetch(url, { headers: init.headers, signal: init.signal });
+}
+
+/**
+ * 把配置里的代理应用到 Electron session。
+ * 空值或 auto → 跟随系统代理(Clash 的系统代理/TUN 直接生效)。
+ */
+async function applyProxy(): Promise<void> {
+  const proxy = settings.proxy.trim();
+  try {
+    if (proxy && proxy !== "auto") {
+      await session.defaultSession.setProxy({ mode: "fixed_servers", proxyRules: proxy });
+    } else {
+      await session.defaultSession.setProxy({ mode: "system" });
+    }
+  } catch {
+    // 代理设置失败不该挡住启动; 后续请求会走到系统代理。
+  }
 }
 
 function createHttp(): HttpClient {
@@ -186,9 +203,13 @@ function registerIpc(): void {
     dmmFromEnv: Boolean(process.env.KURA_DMM_API_ID || process.env.KURA_DMM_AFFILIATE_ID),
   }));
 
-  ipcMain.handle("config:set", (_event, patch: { apiId?: string; affiliateId?: string }) => {
+  ipcMain.handle("config:set", async (_event, patch: { apiId?: string; affiliateId?: string; proxy?: string }) => {
     const rt = mustRuntime();
-    settings = saveSettings(rt.paths, { dmm: patch });
+    const dmm: { apiId?: string; affiliateId?: string } = {};
+    if (patch.apiId !== undefined) dmm.apiId = patch.apiId;
+    if (patch.affiliateId !== undefined) dmm.affiliateId = patch.affiliateId;
+    settings = saveSettings(rt.paths, { dmm, proxy: patch.proxy });
+    await applyProxy();
     return {
       settings: maskSettings(settings),
       dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
@@ -245,6 +266,7 @@ if (!app.requestSingleInstanceLock()) {
       app.exit(EXIT.INTERNAL);
       return;
     }
+    await applyProxy();
     registerIpc();
     await createWindow();
   });

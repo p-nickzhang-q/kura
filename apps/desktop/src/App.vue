@@ -25,6 +25,7 @@ const confirmApply = ref(false);
 const config = ref<KuraConfig | null>(null);
 const apiIdInput = ref("");
 const affiliateInput = ref("");
+const proxyInput = ref("");
 const dmmTest = ref<KuraDmmTest | null>(null);
 
 let unsubscribe: (() => void) | null = null;
@@ -102,11 +103,12 @@ async function preview(): Promise<void> {
 }
 
 async function saveConfig(): Promise<void> {
-  const patch: { apiId?: string; affiliateId?: string } = {};
-  // 留空 = 保持原值; 只有真的输入了才覆盖, 避免把脱敏值写回去。
+  const patch: { apiId?: string; affiliateId?: string; proxy?: string } = {};
+  // 凭据留空 = 保持原值; 代理留空 = 显式清空(回落系统代理)。
   if (apiIdInput.value.trim()) patch.apiId = apiIdInput.value.trim();
   if (affiliateInput.value.trim()) patch.affiliateId = affiliateInput.value.trim();
-  if (Object.keys(patch).length === 0) {
+  patch.proxy = proxyInput.value.trim();
+  if (!patch.apiId && !patch.affiliateId && !patch.proxy) {
     note.value = "没有改动";
     return;
   }
@@ -114,6 +116,7 @@ async function saveConfig(): Promise<void> {
   if (saved) {
     apiIdInput.value = "";
     affiliateInput.value = "";
+    proxyInput.value = "";
     await refreshAll();
     note.value = `已保存到 ${config.value?.path ?? "配置文件"}`;
   }
@@ -232,9 +235,17 @@ async function apply(): Promise<void> {
           <p v-if="config" class="path">{{ config.path }}</p>
 
           <h2>代理</h2>
+          <label class="field">
+            <span>代理地址</span>
+            <input
+              v-model="proxyInput"
+              spellcheck="false"
+              :placeholder="config?.settings.proxy || '留空 = 跟随系统代理'"
+            />
+          </label>
           <p class="muted">
-            本界面跟随系统代理(Clash 开系统代理或 TUN 即可)。命令行可用
-            <code>kura config set --proxy http://127.0.0.1:7890</code> 或环境变量 <code>KURA_PROXY</code>。
+            留空即跟随系统代理(Clash 开系统代理或 TUN 即可)。填 <code>auto</code> 由命令行在运行时探测常见端口;
+            也可直接填 <code>http://127.0.0.1:7890</code>。
           </p>
 
           <h2>来源状态</h2>

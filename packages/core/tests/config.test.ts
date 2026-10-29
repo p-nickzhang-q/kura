@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  AUTO_PROXY,
   EMPTY_SETTINGS,
+  proxyCandidates,
+  resetProxyCache,
+  resolveProxyUrl,
   isDmmConfigured,
   loadSettings,
   maskSecret,
@@ -79,6 +83,54 @@ describe("settings", () => {
 
     saveSettings(paths, { proxy: "" });
     expect(resolveProxy(loadSettings(paths), {})).toBeUndefined();
+  });
+
+  test("auto: 探测命中可用代理, 并在进程内缓存", async () => {
+    resetProxyCache();
+    saveSettings(paths, { proxy: AUTO_PROXY });
+
+    let calls = 0;
+    const probe = async (candidate: string): Promise<boolean> => {
+      calls++;
+      return candidate === "http://127.0.0.1:7897";
+    };
+
+    const first = await resolveProxyUrl(loadSettings(paths), {}, { platform: "linux", probe });
+    expect(first).toBe("http://127.0.0.1:7897");
+
+    const before = calls;
+    const second = await resolveProxyUrl(loadSettings(paths), {}, { platform: "linux", probe });
+    expect(second).toBe(first);
+    expect(calls).toBe(before); // 命中缓存, 不再探测
+  });
+
+  test("显式地址不做探测", async () => {
+    resetProxyCache();
+    saveSettings(paths, { proxy: "http://10.0.0.9:8888" });
+
+    let called = false;
+    const url = await resolveProxyUrl(loadSettings(paths), {}, {
+      probe: async () => {
+        called = true;
+        return true;
+      },
+    });
+    expect(url).toBe("http://10.0.0.9:8888");
+    expect(called).toBe(false);
+  });
+
+  test("没有可用代理时 auto 解析为空(回落直连/系统代理)", async () => {
+    resetProxyCache();
+    saveSettings(paths, { proxy: AUTO_PROXY });
+    const url = await resolveProxyUrl(loadSettings(paths), {}, { probe: async () => false });
+    expect(url).toBeUndefined();
+  });
+
+  test("候选覆盖本机与常见端口", () => {
+    const list = proxyCandidates("linux");
+    expect(list.some((c) => c.startsWith("http://127.0.0.1:"))).toBe(true);
+    expect(list.some((c) => c.endsWith(":7890"))).toBe(true);
+    expect(list.some((c) => c.endsWith(":7897"))).toBe(true);
   });
 
   test("配置完整性判定", () => {

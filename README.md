@@ -74,7 +74,10 @@ kura scrape ABC-123 --source fixture --fixtures ./fixtures
 `javdb` 与 DMM 网页版对部分地区封锁,`javbus` 需要完整浏览器 UA(已内置)。代理分两处:
 
 - **GUI**: 跟随系统代理 —— Clash 开系统代理或 TUN 模式即可,无需配置。
-- **CLI**: `kura config set --proxy http://127.0.0.1:7890`,或 `KURA_PROXY` 环境变量(优先级更高)。
+- **CLI**: `kura config set --proxy auto`(推荐)或 `--proxy http://127.0.0.1:7890`。
+- 优先级: `KURA_PROXY` 环境变量 > 配置文件 > 系统代理(GUI)/直连(CLI)。
+- `auto` 在运行时探测 `127.0.0.1` 与 WSL 网关上的常见端口(7890/7891/7897/1080/10808/20171),
+  命中即用并缓存; 探测总预算 6s。**这样 WSL 网关变化、Clash 换端口都不用改配置。**
 
 WSL 里要指向宿主机上的 Clash,用网关地址而不是 `127.0.0.1`:
 

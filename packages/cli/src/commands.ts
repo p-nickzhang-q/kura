@@ -23,6 +23,7 @@ import {
   maskSettings,
   resolveDmmEnv,
   resolveProxy,
+  resolveProxyUrl,
   saveSettings,
   HttpClient,
   settingsPath,
@@ -150,7 +151,7 @@ export const COMMANDS: Command[] = [
       { name: "dry-run", type: "boolean", description: "只报告, 不写库", default: false },
     ],
     async run(ctx, args) {
-      const registry = defaultSources({ http: new HttpClient({ proxy: resolveProxy(ctx.rt!.settings) }), dmm: resolveDmmEnv(ctx.rt!.settings) });
+      const registry = defaultSources({ http: new HttpClient({ proxy: await resolveProxyUrl(ctx.rt!.settings) }), dmm: resolveDmmEnv(ctx.rt!.settings) });
       const fixturesDir = typeof args.options.fixtures === "string" ? args.options.fixtures : null;
       const sources =
         typeof args.options.source === "string" ? args.options.source.split(",").map((id) => id.trim()) : undefined;
@@ -376,7 +377,7 @@ export const COMMANDS: Command[] = [
     ],
     async run(ctx, args) {
       const action = args.positionals.action ?? "list";
-      const registry = defaultSources({ http: new HttpClient({ proxy: resolveProxy(ctx.rt!.settings) }), dmm: resolveDmmEnv(ctx.rt!.settings) });
+      const registry = defaultSources({ http: new HttpClient({ proxy: await resolveProxyUrl(ctx.rt!.settings) }), dmm: resolveDmmEnv(ctx.rt!.settings) });
 
       if (action === "list") {
         return {
@@ -457,7 +458,7 @@ export const COMMANDS: Command[] = [
       { name: "action", type: "string", description: "get | set | path", positional: true, default: "get" },
       { name: "dmm-api-id", type: "string", description: "set: DMM API ID" },
       { name: "dmm-affiliate-id", type: "string", description: "set: DMM affiliate ID" },
-      { name: "proxy", type: "string", description: "set: HTTP 代理, 如 http://127.0.0.1:7890 (传空串清除)" },
+      { name: "proxy", type: "string", description: "set: 代理地址, auto 表示运行时探测, 空串清除" },
     ],
     async run(ctx, args) {
       const action = args.positionals.action ?? "get";
@@ -473,6 +474,7 @@ export const COMMANDS: Command[] = [
           dmmConfigured: isDmmConfigured(dmm),
           /** 环境变量优先于文件, 这里说明当前值实际来自哪。 */
           dmmFromEnv: Boolean(process.env.KURA_DMM_API_ID || process.env.KURA_DMM_AFFILIATE_ID),
+          /** auto 需要探测才有真实地址, 这里只回显原始配置。 */
           proxy: resolveProxy(ctx.rt!.settings) ?? "",
           proxyFromEnv: Boolean(process.env.KURA_PROXY),
         };

@@ -14,7 +14,12 @@ export interface Settings {
     apiId: string;
     affiliateId: string;
   };
-  /** HTTP 代理, 如 http://127.0.0.1:7890。空串表示直连/GUI 跟随系统代理。 */
+  /**
+   * HTTP 代理。三种取值:
+   *  - `""`   跟随系统代理(GUI) / 直连(CLI)
+   *  - `auto` 运行时探测常见 Clash 端口与 WSL 网关, 不写死地址
+   *  - URL    显式指定, 如 http://127.0.0.1:7890
+   */
   proxy: string;
 }
 
@@ -87,13 +92,112 @@ export function maskSettings(settings: Settings): Settings {
   };
 }
 
-/** 代理: 环境变量 > 配置文件。空串 = 不显式指定。 */
+/** 代理: 环境变量 > 配置文件。空串 = 不显式指定; `auto` = 运行时探测。 */
 export function resolveProxy(
   settings: Settings,
   env: Record<string, string | undefined> = process.env,
 ): string | undefined {
   const value = env.KURA_PROXY?.trim() || settings.proxy.trim();
   return value.length > 0 ? value : undefined;
+}
+
+export const AUTO_PROXY = "auto";
+
+/** 常见本地代理端口: Clash / Clash Verge / v2ray / Shadowsocks。 */
+const PROXY_PORTS = [7890, 7891, 7897, 1080, 10808, 20171];
+
+/**
+ * 探测候选: 本机 + WSL 网关。
+ * WSL2 里 Clash 跑在 Windows 上, `127.0.0.1` 指不到它, 必须用网关地址;
+ * 而网关在每次重启后会变, 所以只能运行时算, 不能写进配置。
+ */
+export function proxyCandidates(platform: NodeJS.Platform = process.platform): string[] {
+  const hosts = new Set<string>(["127.0.0.1"]);
+  if (platform === "linux") {
+    const gateway = wslGateway();
+    if (gateway) hosts.add(gateway);
+  }
+  return [...hosts].flatMap((host) => PROXY_PORTS.map((port) => `http://${host}:${port}`));
+}
+
+function wslGateway(): string | null {
+  try {
+    const route = readFileSync("/proc/net/route", "utf8");
+    for (const line of route.split("\n").slice(1)) {
+      const [iface, destination, gateway] = line.split("\t");
+      if (!iface || destination !== "00000000" || !gateway) continue;
+      // /proc/net/route 里是小端十六进制
+      const bytes = gateway.match(/../g)?.reverse().join("") ?? "";
+      const value = Number.parseInt(bytes, 16);
+      if (!Number.isFinite(value)) continue;
+      return [24, 16, 8, 0].map((shift) => (value >>> shift) & 0xff).join(".");
+    }
+  } catch {
+    // 非 Linux 或容器里没有 /proc/net/route: 只探测本机。
+  }
+  return null;
+}
+
+export interface ProbeOptions {
+  /** 注入探测实现, 便于测试。返回 true 表示该代理可用。 */
+  probe?: (candidate: string) => Promise<boolean>;
+  platform?: NodeJS.Platform;
+  /** 探测总预算; 逐个试满 12 个端口最坏要 30s, CLI 启动扛不住。 */
+  budgetMs?: number;
+}
+
+let autoCache: string | undefined | null = null;
+
+/**
+ * 把配置里的 proxy 解析成真实地址。
+ * `auto` 只在 Bun/CLI 侧探测 —— Electron 侧走系统代理, 不需要这一步。
+ */
+export async function resolveProxyUrl(
+  settings: Settings,
+  env: Record<string, string | undefined> = process.env,
+  options: ProbeOptions = {},
+): Promise<string | undefined> {
+  const value = resolveProxy(settings, env);
+  if (!value) return undefined;
+  if (value !== AUTO_PROXY) return value;
+
+  if (autoCache !== null) return autoCache;
+
+  const probe = options.probe ?? defaultProxyProbe;
+  // 串行探测并短路: 并发打 12 个代理端口既慢又可能把首个 TLS 握手挤到超时。
+  const deadline = Date.now() + (options.budgetMs ?? 6000);
+  for (const candidate of proxyCandidates(options.platform)) {
+    if (Date.now() > deadline) break;
+    if (await probe(candidate)) {
+      autoCache = candidate;
+      return autoCache;
+    }
+  }
+  autoCache = undefined;
+  return autoCache;
+}
+
+/** 通过候选代理请求一个 204 端点。必须真的走代理, 否则探测没有意义。 */
+async function defaultProxyProbe(candidate: string): Promise<boolean> {
+  if (!isBun()) return false;
+  try {
+    const response = await fetch("https://www.gstatic.com/generate_204", {
+      proxy: candidate,
+      signal: AbortSignal.timeout(2500),
+    } as RequestInit);
+    return response.status === 204 || response.ok;
+  } catch {
+    return false;
+  }
+}
+
+function isBun(): boolean {
+  return Boolean((process.versions as { bun?: string }).bun);
+}
+
+/** 测试用: 清掉进程内缓存。 */
+export function resetProxyCache(): void {
+  autoCache = null;
 }
 
 export function isDmmConfigured(env: DmmEnv): boolean {
