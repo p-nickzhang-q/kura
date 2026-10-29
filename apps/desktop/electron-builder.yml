@@ -19,12 +19,26 @@ extraMetadata:
 
 win:
   target:
+    - target: nsis
+      arch: [x64]
     - target: portable
       arch: [x64]
   icon: build/icon.ico
 
+# 安装包: 可选安装目录 + 桌面/开始菜单快捷方式
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Kura
+  uninstallDisplayName: Kura ${version}
+  # 卸载时不删 %APPDATA%\kura: 里面有媒体库索引与配置, 误删代价远大于残留
+  deleteAppDataOnUninstall: false
+  artifactName: Kura-${version}-setup.exe
+
 portable:
   artifactName: Kura-${version}-portable.exe
 
-# 产物里不要带调试符号
 electronLanguages: [zh-CN, en-US]
