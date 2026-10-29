@@ -22,10 +22,14 @@ describe("迁移", () => {
     const { db } = await openDb(dbFile);
     try {
       const version = migrate(db);
-      expect(version).toBe(4);
+      expect(version).toBe(5);
 
       const columns = db.all<{ name: string }>("pragma table_info(libraries)").map((row) => row.name);
       expect(columns).toContain("organize_enabled");
+
+      const itemColumns = db.all<{ name: string }>("pragma table_info(items)").map((row) => row.name);
+      expect(itemColumns).toContain("title_original");
+      expect(itemColumns).toContain("plot_original");
 
       db.run("insert into libraries (name, root) values ('主库', '/media')");
       const row = db.get<{ organize_enabled: number }>("select organize_enabled from libraries");
@@ -35,7 +39,7 @@ describe("迁移", () => {
     }
   });
 
-  test("从 v3 升级: 补列且不丢数据", async () => {
+  test("从 v3 升级: 补齐 v4/v5 的列且不丢数据", async () => {
     const { db } = await openDb(dbFile);
     try {
       // 手工造一个 v3 形态的库(只有 libraries 表, 没有 organize_enabled)
@@ -47,11 +51,13 @@ describe("迁移", () => {
           template text not null default '{content_type}/{studio}/{number}',
           created_at integer not null default (unixepoch())
         );
+        -- v5 会 alter items, 这里给个最小的 items 表
+        create table items (number text primary key, content_type text not null);
       `);
       db.run("insert into libraries (name, root) values ('老库', '/old')");
       db.exec("pragma user_version = 3");
 
-      expect(migrate(db)).toBe(4);
+      expect(migrate(db)).toBe(5);
       const row = db.get<{ name: string; organize_enabled: number }>(
         "select name, organize_enabled from libraries",
       );
@@ -66,8 +72,8 @@ describe("迁移", () => {
     const { db } = await openDb(dbFile);
     try {
       migrate(db);
-      expect(migrate(db)).toBe(4);
-      expect(migrate(db)).toBe(4);
+      expect(migrate(db)).toBe(5);
+      expect(migrate(db)).toBe(5);
     } finally {
       db.close();
     }

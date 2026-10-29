@@ -1,9 +1,11 @@
 import { AppError, EXIT, exitCodeName } from "../exit";
+import { needsTranslation } from "../llm/translate";
 import { aggregate, mergeWithPinned } from "../domain/aggregate";
 import type { ItemKey, Metadata, SourceRecord } from "../domain/types";
 import { metadataColumns, parseJson, pinnedFields, rowToMetadata, stringify, type ItemRow } from "../db/rows";
 import type { Runtime } from "../runtime";
 import { routeFor, type Registry } from "../sources";
+import type { Translator } from "../llm/translate";
 
 export interface ScrapeOptions {
   key: ItemKey;
@@ -12,6 +14,8 @@ export interface ScrapeOptions {
   /** 显式覆盖路由, 顺序即优先级。`--source fixture` 用它。 */
   sources?: string[];
   dryRun?: boolean;
+  /** 传了就在落库前翻译 title/plot; 失败保留原值, 不影响刮削。 */
+  translator?: Translator | null;
 }
 
 export interface ScrapeReport {
@@ -94,6 +98,7 @@ export async function scrape(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRe
     fieldSources: merged.fieldSources,
   };
 
+  if (opts.translator) await translateMetadata(metadata, opts.translator);
   if (!dryRun) persist(rt, metadata, records);
 
   const filled = Object.entries(merged.fields)
@@ -113,6 +118,18 @@ export async function scrape(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRe
     metadata: dryRun ? null : metadata,
     dryRun,
   };
+}
+
+/** 覆盖显示值, 原文进 *_original; 任一字段失败只影响该字段。 */
+async function translateMetadata(metadata: Metadata, translator: Translator): Promise<void> {
+  const title = metadata.title && needsTranslation(metadata.title) ? await translator.translate("title", metadata.title) : null;
+  const plot = metadata.plot && needsTranslation(metadata.plot) ? await translator.translate("plot", metadata.plot) : null;
+  if (!title && !plot) return;
+
+  metadata.titleOriginal = metadata.title;
+  metadata.plotOriginal = metadata.plot;
+  if (title) metadata.title = title;
+  if (plot) metadata.plot = plot;
 }
 
 function persist(rt: Runtime, metadata: Metadata, records: SourceRecord[]): void {

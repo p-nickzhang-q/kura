@@ -62,6 +62,9 @@ export interface ItemKey {
 }
 
 export interface Metadata extends RawFields {
+  /** 翻译前的原文; 没有翻译时为空。NFO 的 originaltitle 与 {title} 占位符用它。 */
+  titleOriginal?: string;
+  plotOriginal?: string;
   key: string;
   number: string | null;
   contentType: ContentType;

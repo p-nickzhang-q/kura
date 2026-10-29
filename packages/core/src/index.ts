@@ -8,6 +8,7 @@ export type { ExitCode } from "./exit";
 export { openRuntime, withRuntime } from "./runtime";
 export type { Runtime, RuntimeOptions } from "./runtime";
 export { resolvePaths } from "./paths";
+export { resolveLlm, translateEnabled } from "./config";
 export { AUTO_PROXY, EMPTY_SETTINGS, isDmmConfigured, loadSettings, maskSecret, maskSettings, proxyCandidates, resetProxyCache, resolveDmmEnv, resolveProxy, resolveProxyUrl, saveSettings, settingsPath } from "./config";
 export type { ProbeOptions } from "./config";
 export type { Settings } from "./config";
@@ -41,7 +42,7 @@ export type { SearchCandidate } from "./sources/javbus";
 export type { DmmEnv, DmmItem, DmmResponse } from "./sources/dmm";
 export type { DefaultSourcesOptions, Registry, Source, SourceConfig, SourceContext } from "./sources";
 export { HttpClient } from "./net/http";
-export type { HttpClientOptions } from "./net/http";
+export type { FetchInit, FetchLike, HttpClientOptions, RequestOptions } from "./net/http";
 
 export { createLibrary, findLibrary, listLibraries, pinnedFields, rowToMetadata, updateLibraryOrganize, updateLibraryTemplate } from "./db/rows";
 export type { ItemRow, MediaFileRow } from "./db/rows";
@@ -50,6 +51,10 @@ export { filePhase, scan } from "./tasks/scan";
 export type { ScanEvent, ScanOptions, ScanReport } from "./tasks/scan";
 
 export { getItem, listItems, pendingKeys, scrape } from "./tasks/scrape";
+export { pendingTranslationKeys, translateItem } from "./tasks/translate";
+export type { TranslateReport } from "./tasks/translate";
+export { buildSystemPrompt, chatEndpoint, createTranslator, hasKana, needsTranslation, openTranslator, TranslationCache } from "./llm/translate";
+export type { LlmConfig, Translator } from "./llm/translate";
 export type { ItemView, ScrapeOptions, ScrapeReport } from "./tasks/scrape";
 
 export { parseFieldList, parseListValue, updateItem } from "./tasks/item";

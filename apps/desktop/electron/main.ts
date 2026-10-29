@@ -11,8 +11,12 @@ import {
   DIMENSIONS,
   dimensionTemplate,
   updateLibraryOrganize,
+  openTranslator,
+  resolveLlm,
+  translateEnabled,
   updateLibraryTemplate,
   HttpClient,
+  type FetchInit,
   isDmmConfigured,
   maskSettings,
   resolveDmmEnv,
@@ -47,11 +51,16 @@ let runtime: Runtime | null = null;
 let win: BrowserWindow | null = null;
 let busy: string | null = null;
 /** 设置改了就地更新, 不重建 runtime; 网络层每次按当前值构造。 */
-let settings: Settings = { dmm: { apiId: "", affiliateId: "" }, proxy: "" };
+let settings: Settings = { dmm: { apiId: "", affiliateId: "" }, proxy: "", llm: { baseUrl: "", apiKey: "", model: "" }, translate: false };
 
 /** Electron 主进程的 fetch: 跟随系统代理(Clash 开了系统代理/TUN 就直接生效)。 */
-function browserFetch(url: string, init: { headers: Record<string, string>; signal: AbortSignal }): Promise<Response> {
-  return net.fetch(url, { headers: init.headers, signal: init.signal });
+function browserFetch(url: string, init: FetchInit): Promise<Response> {
+  return net.fetch(url, {
+    headers: init.headers,
+    signal: init.signal,
+    method: init.method,
+    body: init.body,
+  } as RequestInit);
 }
 
 /**
@@ -73,6 +82,12 @@ async function applyProxy(): Promise<void> {
 
 function createHttp(): HttpClient {
   return new HttpClient({ fetchImpl: browserFetch });
+}
+
+/** 翻译是可选后处理: 没开或没配置就返回 null, 刮削照常继续。 */
+async function buildTranslator() {
+  if (!translateEnabled(settings)) return null;
+  return openTranslator(mustRuntime(), createHttp(), resolveLlm(settings));
 }
 
 function mustRuntime(): Runtime {
@@ -147,6 +162,8 @@ function registerIpc(): void {
       mediaFiles: counts?.files ?? 0,
       fixturesDir,
       dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
+      llmConfigured: Boolean(resolveLlm(settings)),
+      translate: translateEnabled(settings),
       dimensions: DIMENSIONS,
       sources: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) })
         .list()
@@ -189,6 +206,7 @@ function registerIpc(): void {
   ipcMain.handle("scrape:pending", (_event, input: { limit?: number }) =>
     exclusive("刮削", async () => {
       const rt = mustRuntime();
+      const translator = await buildTranslator();
       const keys = pendingKeys(rt, input.limit ?? 20);
       const reports: { key: string; ok: boolean; filled: number; error?: string }[] = [];
 
@@ -200,6 +218,7 @@ function registerIpc(): void {
             fixturesDir,
             // 真实站点尚未实现; 有样本目录时走离线源, 否则如实报错。
             sources: fixturesDir ? ["fixture"] : undefined,
+            translator,
           });
           reports.push({ key: report.key, ok: true, filled: report.filled.length });
         } catch (err) {
@@ -224,6 +243,7 @@ function registerIpc(): void {
     exclusive("刮削", async () => {
       const rt = mustRuntime();
       const registry = defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) });
+      const translator = await buildTranslator();
       const results: { key: string; ok: boolean; filled: number; error?: string }[] = [];
 
       for (const key of input.keys) {
@@ -238,6 +258,7 @@ function registerIpc(): void {
             registry,
             fixturesDir,
             sources: fixturesDir ? ["fixture"] : undefined,
+            translator,
           });
           results.push({ key, ok: true, filled: report.filled.length });
         } catch (err) {
@@ -269,16 +290,35 @@ function registerIpc(): void {
     dmmFromEnv: Boolean(process.env.KURA_DMM_API_ID || process.env.KURA_DMM_AFFILIATE_ID),
   }));
 
-  ipcMain.handle("config:set", async (_event, patch: { apiId?: string; affiliateId?: string; proxy?: string }) => {
-    const rt = mustRuntime();
-    const dmm: { apiId?: string; affiliateId?: string } = {};
-    if (patch.apiId !== undefined) dmm.apiId = patch.apiId;
-    if (patch.affiliateId !== undefined) dmm.affiliateId = patch.affiliateId;
-    settings = saveSettings(rt.paths, { dmm, proxy: patch.proxy });
+  ipcMain.handle(
+    "config:set",
+    async (
+      _event,
+      patch: {
+        apiId?: string;
+        affiliateId?: string;
+        proxy?: string;
+        llmBaseUrl?: string;
+        llmApiKey?: string;
+        llmModel?: string;
+        translate?: boolean;
+      },
+    ) => {
+      const rt = mustRuntime();
+      const dmm: { apiId?: string; affiliateId?: string } = {};
+      if (patch.apiId !== undefined) dmm.apiId = patch.apiId;
+      if (patch.affiliateId !== undefined) dmm.affiliateId = patch.affiliateId;
+      const llm: { baseUrl?: string; apiKey?: string; model?: string } = {};
+      if (patch.llmBaseUrl !== undefined) llm.baseUrl = patch.llmBaseUrl;
+      if (patch.llmApiKey !== undefined) llm.apiKey = patch.llmApiKey;
+      if (patch.llmModel !== undefined) llm.model = patch.llmModel;
+      settings = saveSettings(rt.paths, { dmm, proxy: patch.proxy, llm, translate: patch.translate });
     await applyProxy();
     return {
       settings: maskSettings(settings),
       dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
+      llmConfigured: Boolean(resolveLlm(settings)),
+      translate: translateEnabled(settings),
       dimensions: DIMENSIONS,
     };
   });

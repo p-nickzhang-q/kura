@@ -6,6 +6,8 @@ export interface ItemRow {
   number: string;
   content_type: string;
   title: string | null;
+  title_original: string | null;
+  plot_original: string | null;
   plot: string | null;
   release_date: string | null;
   duration_min: number | null;
@@ -38,6 +40,8 @@ export function rowToMetadata(row: ItemRow): Metadata {
     number: row.number,
     contentType: row.content_type as ContentType,
     title: row.title ?? undefined,
+    titleOriginal: row.title_original ?? undefined,
+    plotOriginal: row.plot_original ?? undefined,
     plot: row.plot ?? undefined,
     release_date: row.release_date ?? undefined,
     duration_min: row.duration_min ?? undefined,
@@ -59,6 +63,8 @@ export function metadataColumns(metadata: Metadata): Record<string, unknown> {
     number: metadata.key,
     content_type: metadata.contentType,
     title: metadata.title ?? null,
+    title_original: metadata.titleOriginal ?? null,
+    plot_original: metadata.plotOriginal ?? null,
     plot: metadata.plot ?? null,
     release_date: metadata.release_date ?? null,
     duration_min: metadata.duration_min ?? null,

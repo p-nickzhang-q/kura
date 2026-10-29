@@ -21,9 +21,22 @@ export interface Settings {
    *  - URL    显式指定, 如 http://127.0.0.1:7890
    */
   proxy: string;
+  /** OpenAI 兼容端点。空值 = 未配置, 翻译不可用。 */
+  llm: {
+    baseUrl: string;
+    apiKey: string;
+    model: string;
+  };
+  /** 刮削后自动翻译。默认关: 翻译要花 token, 且不是所有人都要中文。 */
+  translate: boolean;
 }
 
-export const EMPTY_SETTINGS: Settings = { dmm: { apiId: "", affiliateId: "" }, proxy: "" };
+export const EMPTY_SETTINGS: Settings = {
+  dmm: { apiId: "", affiliateId: "" },
+  proxy: "",
+  llm: { baseUrl: "", apiKey: "", model: "" },
+  translate: false,
+};
 
 export function settingsPath(paths: Paths): string {
   return join(paths.dataDir, "config.json");
@@ -40,6 +53,12 @@ export function loadSettings(paths: Paths): Settings {
         affiliateId: String(raw.dmm?.affiliateId ?? ""),
       },
       proxy: String(raw.proxy ?? ""),
+      llm: {
+        baseUrl: String(raw.llm?.baseUrl ?? ""),
+        apiKey: String(raw.llm?.apiKey ?? ""),
+        model: String(raw.llm?.model ?? ""),
+      },
+      translate: Boolean(raw.translate),
     };
   } catch {
     // 坏配置不能挡住启动: 退回空设置, 让调用方按"未配置"处理。
@@ -49,12 +68,14 @@ export function loadSettings(paths: Paths): Settings {
 
 export function saveSettings(
   paths: Paths,
-  patch: { dmm?: Partial<Settings["dmm"]>; proxy?: string },
+  patch: { dmm?: Partial<Settings["dmm"]>; proxy?: string; llm?: Partial<Settings["llm"]>; translate?: boolean },
 ): Settings {
   const current = loadSettings(paths);
   const next: Settings = {
     dmm: { ...current.dmm, ...(patch.dmm ?? {}) },
     proxy: patch.proxy !== undefined ? patch.proxy : current.proxy,
+    llm: { ...current.llm, ...(patch.llm ?? {}) },
+    translate: patch.translate !== undefined ? patch.translate : current.translate,
   };
 
   mkdirSync(paths.dataDir, { recursive: true });
@@ -87,6 +108,12 @@ export function maskSettings(settings: Settings): Settings {
       apiId: maskSecret(settings.dmm.apiId),
       affiliateId: maskSecret(settings.dmm.affiliateId),
     },
+    llm: {
+      baseUrl: settings.llm?.baseUrl ?? "",
+      apiKey: maskSecret(settings.llm?.apiKey ?? ""),
+      model: settings.llm?.model ?? "",
+    },
+    translate: Boolean(settings.translate),
     // 代理地址不含密钥, 原样展示便于排障。
     proxy: settings.proxy,
   };
@@ -202,4 +229,24 @@ export function resetProxyCache(): void {
 
 export function isDmmConfigured(env: DmmEnv): boolean {
   return Boolean(env.apiId && env.affiliateId);
+}
+
+/** 翻译配置: 环境变量 > 配置文件。三者齐了才算可用。 */
+export function resolveLlm(
+  settings: Settings,
+  env: Record<string, string | undefined> = process.env,
+): { baseUrl: string; apiKey: string; model: string } | null {
+  const baseUrl = env.KURA_LLM_BASE_URL?.trim() || settings.llm.baseUrl.trim();
+  const apiKey = env.KURA_LLM_API_KEY?.trim() || settings.llm.apiKey.trim();
+  const model = env.KURA_LLM_MODEL?.trim() || settings.llm.model.trim();
+  return baseUrl && model ? { baseUrl, apiKey, model } : null;
+}
+
+export function translateEnabled(
+  settings: Settings,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const flag = env.KURA_TRANSLATE?.trim();
+  if (flag !== undefined && flag !== "") return flag === "1" || flag.toLowerCase() === "true";
+  return settings.translate;
 }

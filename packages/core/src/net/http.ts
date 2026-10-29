@@ -1,13 +1,22 @@
 import { AppError, EXIT } from "../exit";
 
 /** 可注入的 fetch。CLI 用 Bun 的; Electron 用 `net.fetch`(跟随系统代理)。 */
-export type FetchLike = (
-  url: string,
-  init: { headers: Record<string, string>; signal: AbortSignal; proxy?: string },
-) => Promise<Response>;
+export interface FetchInit {
+  headers: Record<string, string>;
+  signal: AbortSignal;
+  proxy?: string;
+  method?: string;
+  /** 已序列化的 JSON 字符串。 */
+  body?: string;
+}
+
+export type FetchLike = (url: string, init: FetchInit) => Promise<Response>;
 
 export interface RequestOptions {
   headers?: Record<string, string>;
+  method?: string;
+  /** 仅 POST 用; 序列化为 JSON。 */
+  body?: unknown;
 }
 
 export interface HttpClientOptions {
@@ -33,10 +42,19 @@ const isBun = Boolean((process.versions as { bun?: string }).bun);
  *    Electron 主进程应当直接注入 `net.fetch`(它会跟随系统代理), 而不是走这里。
  */
 export function createFetch(proxy?: string): FetchLike {
-  if (!proxy) return (url, init) => fetch(url, { headers: init.headers, signal: init.signal });
+  if (!proxy) {
+    return (url, init) => fetch(url, { headers: init.headers, signal: init.signal, method: init.method, body: init.body });
+  }
 
   if (isBun) {
-    return (url, init) => fetch(url, { headers: init.headers, signal: init.signal, proxy } as RequestInit);
+    return (url, init) =>
+      fetch(url, {
+        headers: init.headers,
+        signal: init.signal,
+        method: init.method,
+        body: init.body,
+        proxy,
+      } as RequestInit);
   }
 
   return (url, init) => proxiedNodeFetch(url, init, proxy);
@@ -44,11 +62,7 @@ export function createFetch(proxy?: string): FetchLike {
 
 let nodeProxyAgent: unknown | null = null;
 
-async function proxiedNodeFetch(
-  url: string,
-  init: { headers: Record<string, string>; signal: AbortSignal },
-  proxy: string,
-): Promise<Response> {
+async function proxiedNodeFetch(url: string, init: FetchInit, proxy: string): Promise<Response> {
   if (!nodeProxyAgent) {
     try {
       // 可选依赖: 没装就给出可行动的提示, 而不是静默直连(那会被地区封锁骗成"没有这条")。
@@ -64,7 +78,13 @@ async function proxiedNodeFetch(
       );
     }
   }
-  return fetch(url, { headers: init.headers, signal: init.signal, dispatcher: nodeProxyAgent } as RequestInit);
+  return fetch(url, {
+    headers: init.headers,
+    signal: init.signal,
+    method: init.method,
+    body: init.body,
+    dispatcher: nodeProxyAgent,
+  } as RequestInit);
 }
 
 /**
@@ -105,6 +125,24 @@ export class HttpClient {
     return response.text();
   }
 
+  /** POST JSON。transform 用来在解析层就做结构校验, 而不是让调用方猜形状。 */
+  async postJson<T = unknown>(
+    url: string,
+    body: unknown,
+    init: RequestOptions = {},
+    transform?: (payload: unknown) => T,
+  ): Promise<T> {
+    const response = await this.execute(url, { ...init, method: "POST", body });
+    const text = await response.text();
+    let payload: unknown;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      throw new AppError("响应不是合法 JSON", EXIT.RETRYABLE, { url, body: text.slice(0, 200) });
+    }
+    return transform ? transform(payload) : (payload as T);
+  }
+
   /** 二进制通道: 海报/封面下载走这里, 不经过字符串解码。 */
   async getBytes(url: string, init: RequestOptions = {}): Promise<{ bytes: Uint8Array; contentType: string }> {
     const response = await this.execute(url, init);
@@ -120,7 +158,10 @@ export class HttpClient {
     for (let attempt = 0; attempt <= this.options.retries; attempt++) {
       try {
         const response = await this.fetchImpl(url, {
+          ...(init.method ? { method: init.method } : {}),
+          ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
           headers: {
+            ...(init.body !== undefined ? { "content-type": "application/json" } : {}),
             "user-agent": this.options.userAgent,
             accept: "application/json, text/html, image/*;q=0.8",
             "accept-language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",

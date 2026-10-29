@@ -73,6 +73,19 @@ kura scrape ABC-123 --source fixture --fixtures ./fixtures
 
 缺凭据时退出码是 **4(NEEDS_INPUT)**,不会静默返回空条目。
 
+### 翻译（日 → 中）
+
+只翻含假名的日文标题与简介；演员名不翻。译文覆盖显示值，原文另存，NFO 的 `originaltitle` 与目录名仍用日文。
+
+```bash
+kura config set --llm-base-url https://api.deepseek.com/v1 --llm-api-key sk-... --llm-model deepseek-chat
+kura config set --translate          # 刮削后自动翻
+kura translate --pending             # 补历史条目
+kura translate ABC-123
+```
+
+任何 OpenAI 兼容端点都行（DeepSeek / 通义 / Ollama / LM Studio）。译文缓存独立在 `<数据目录>/translations.db`，删掉即重翻。
+
 ### 代理
 
 `javdb` 与 DMM 网页版对部分地区封锁,`javbus` 需要完整浏览器 UA(已内置)。代理分两处:

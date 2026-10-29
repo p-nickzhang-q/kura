@@ -89,6 +89,12 @@ const MIGRATIONS: string[] = [
   `
   alter table libraries add column organize_enabled integer not null default 1;
   `,
+
+  // v5 — 翻译: 覆盖 title/plot 前先把原文存下来 (NFO originaltitle 与目录名都要用)
+  `
+  alter table items add column title_original text;
+  alter table items add column plot_original text;
+  `,
 ];
 
 export function migrate(db: Db): number {

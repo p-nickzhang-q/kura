@@ -51,7 +51,8 @@ export function templatePlaceholders(template: string): string[] {
 
 export const TEMPLATE_PLACEHOLDERS: Record<string, string> = {
   number: "番号",
-  title: "标题",
+  title: "标题(原文)",
+  title_zh: "标题(译文)",
   studio: "片商",
   label: "厂牌",
   series: "系列",

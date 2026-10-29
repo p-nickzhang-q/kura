@@ -49,6 +49,10 @@ const config = ref<KuraConfig | null>(null);
 const apiIdInput = ref("");
 const affiliateInput = ref("");
 const proxyInput = ref("");
+const llmBaseUrlInput = ref("");
+const llmApiKeyInput = ref("");
+const llmModelInput = ref("");
+const translateOn = ref(false);
 const dmmTest = ref<KuraDmmTest | null>(null);
 
 let unsubscribe: (() => void) | null = null;
@@ -67,6 +71,7 @@ onUnmounted(() => unsubscribe?.());
 async function refreshAll(): Promise<void> {
   info.value = await window.kura.info();
   config.value = await window.kura.configGet();
+  translateOn.value = config.value?.settings.translate ?? false;
   libraries.value = await window.kura.libraries();
   if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
   items.value = await window.kura.items(200);
@@ -237,7 +242,15 @@ async function saveConfig(): Promise<void> {
   if (apiIdInput.value.trim()) patch.apiId = apiIdInput.value.trim();
   if (affiliateInput.value.trim()) patch.affiliateId = affiliateInput.value.trim();
   patch.proxy = proxyInput.value.trim();
-  if (!patch.apiId && !patch.affiliateId && !patch.proxy) {
+  if (llmBaseUrlInput.value.trim()) patch.llmBaseUrl = llmBaseUrlInput.value.trim();
+  if (llmApiKeyInput.value.trim()) patch.llmApiKey = llmApiKeyInput.value.trim();
+  if (llmModelInput.value.trim()) patch.llmModel = llmModelInput.value.trim();
+  patch.translate = translateOn.value;
+
+  const changed =
+    patch.apiId || patch.affiliateId || patch.proxy || patch.llmBaseUrl || patch.llmApiKey || patch.llmModel ||
+    patch.translate !== Boolean(config.value?.settings.translate);
+  if (!changed) {
     note.value = "没有改动";
     return;
   }
@@ -246,6 +259,9 @@ async function saveConfig(): Promise<void> {
     apiIdInput.value = "";
     affiliateInput.value = "";
     proxyInput.value = "";
+    llmBaseUrlInput.value = "";
+    llmApiKeyInput.value = "";
+    llmModelInput.value = "";
     await refreshAll();
     note.value = `已保存到 ${config.value?.path ?? "配置文件"}`;
   }
@@ -508,6 +524,30 @@ async function testDmm(): Promise<void> {
           </p>
 
           <p v-if="config" class="path">{{ config.path }}</p>
+
+          <h2>翻译 (日 → 中)</h2>
+          <p class="muted">
+            只翻含假名的日文; 演员名不翻。译文覆盖标题/简介, 原文另存, NFO 的 originaltitle 与目录名仍用日文。
+          </p>
+          <label class="field">
+            <span>接口地址</span>
+            <input v-model="llmBaseUrlInput" spellcheck="false" :placeholder="config?.settings.llm.baseUrl || 'https://api.deepseek.com/v1'" />
+          </label>
+          <label class="field">
+            <span>API Key</span>
+            <input v-model="llmApiKeyInput" type="password" spellcheck="false" :placeholder="config?.settings.llm.apiKey || '未设置'" />
+          </label>
+          <label class="field">
+            <span>模型</span>
+            <input v-model="llmModelInput" spellcheck="false" :placeholder="config?.settings.llm.model || 'deepseek-chat'" />
+          </label>
+          <div class="row">
+            <label class="check">
+              <input v-model="translateOn" type="checkbox" />
+              刮削后自动翻译
+            </label>
+            <span class="muted">{{ info?.llmConfigured ? "LLM 已配置" : "LLM 未配置" }}</span>
+          </div>
 
           <h2>代理</h2>
           <label class="field">

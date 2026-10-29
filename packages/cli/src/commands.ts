@@ -24,6 +24,11 @@ import {
   dimensionTemplate,
   unknownPlaceholders,
   updateLibraryOrganize,
+  openTranslator,
+  pendingTranslationKeys,
+  resolveLlm,
+  translateEnabled,
+  translateItem,
   updateLibraryTemplate,
   cachedPoster,
   downloadPoster,
@@ -40,6 +45,7 @@ import {
   type FieldKey,
   type ItemKey,
 } from "@kura/core";
+import type { TranslateReport } from "@kura/core";
 import type { ArgSpec, ParsedArgs } from "./args";
 import type { Output } from "./output";
 import { VERSION } from "./version";
@@ -216,13 +222,23 @@ export const COMMANDS: Command[] = [
       { name: "dry-run", type: "boolean", description: "只报告, 不写库", default: false },
     ],
     async run(ctx, args) {
-      const registry = defaultSources({ http: new HttpClient({ proxy: await resolveProxyUrl(ctx.rt!.settings) }), dmm: resolveDmmEnv(ctx.rt!.settings) });
+      const http = new HttpClient({ proxy: await resolveProxyUrl(ctx.rt!.settings) });
+      const registry = defaultSources({ http, dmm: resolveDmmEnv(ctx.rt!.settings) });
+
+      // 翻译是可选后处理: 没配置就跳过, 不阻断刮削。
+      const translator = translateEnabled(ctx.rt!.settings)
+        ? await openTranslator(ctx.rt!, http, resolveLlm(ctx.rt!.settings))
+        : null;
+      if (translateEnabled(ctx.rt!.settings) && !translator) {
+        ctx.out.log("已开启翻译但未配置 LLM (config set --llm-base-url/--llm-model), 本次跳过翻译");
+      }
       const fixturesDir = typeof args.options.fixtures === "string" ? args.options.fixtures : null;
       const sources =
         typeof args.options.source === "string" ? args.options.source.split(",").map((id) => id.trim()) : undefined;
       const dryRun = Boolean(args.options["dry-run"]);
 
-      const runOne = (key: ItemKey) => scrape(ctx.rt!, { key, registry, fixturesDir, sources, dryRun });
+      const runOne = (key: ItemKey) =>
+        scrape(ctx.rt!, { key, registry, fixturesDir, sources, dryRun, translator });
 
       if (args.options.pending) {
         const keys = pendingKeys(ctx.rt!, Number(args.options.limit ?? 50));
@@ -320,6 +336,63 @@ export const COMMANDS: Command[] = [
         lines.push("(dry-run, 未动磁盘; 加 --apply 执行)");
       }
       return lines.join("\n");
+    },
+  },
+
+  {
+    name: "translate",
+    summary: "翻译: <番号> 或 --pending (日→中, 覆盖 title/plot, 原文存 *_original)",
+    needsDb: true,
+    args: [
+      { name: "number", type: "string", description: "番号", positional: true },
+      { name: "pending", type: "boolean", description: "翻译所有含日文且未翻译的条目", default: false },
+      { name: "limit", type: "number", description: "--pending 时的批大小", default: 20 },
+    ],
+    async run(ctx, args) {
+      const config = resolveLlm(ctx.rt!.settings);
+      if (!config) {
+        throw new AppError("未配置 LLM", EXIT.NEEDS_INPUT, {
+          hint: "kura config set --llm-base-url https://api.deepseek.com/v1 --llm-api-key ... --llm-model deepseek-chat",
+        });
+      }
+
+      const http = new HttpClient({ proxy: await resolveProxyUrl(ctx.rt!.settings) });
+      const translator = await openTranslator(ctx.rt!, http, config);
+      if (!translator) throw new AppError("翻译器初始化失败", EXIT.INTERNAL);
+
+      if (args.options.pending) {
+        const keys = pendingTranslationKeys(ctx.rt!, Number(args.options.limit ?? 20));
+        const reports = [];
+        for (const key of keys) {
+          try {
+            reports.push(await translateItem(ctx.rt!, key, translator));
+          } catch (err) {
+            reports.push({ key, translated: [], skipped: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        return { pending: true, count: reports.length, reports };
+      }
+
+      const number = args.positionals.number;
+      if (!number) throw new AppError("用法: translate <番号> | translate --pending", EXIT.USAGE);
+      return translateItem(ctx.rt!, number.toUpperCase(), translator);
+    },
+    render(data: unknown) {
+      if (data && typeof data === "object" && "reports" in data) {
+        const batch = data as { count: number; reports: { key: string; translated: string[]; skipped?: string }[] };
+        return [
+          `翻译 ${batch.count} 条`,
+          ...batch.reports.map((report) =>
+            report.translated.length > 0
+              ? `  ✓ ${report.key} (${report.translated.join(", ")})`
+              : `  - ${report.key}: ${report.skipped ?? "无变化"}`,
+          ),
+        ].join("\n");
+      }
+      const single = data as TranslateReport;
+      return single.translated.length > 0
+        ? `${single.key} 已翻译: ${single.translated.join(", ")}`
+        : `${single.key} 跳过: ${single.skipped ?? "无变化"}`;
     },
   },
 
@@ -476,7 +549,16 @@ export const COMMANDS: Command[] = [
     ],
     async run(ctx, args) {
       const action = args.positionals.action ?? "list";
-      const registry = defaultSources({ http: new HttpClient({ proxy: await resolveProxyUrl(ctx.rt!.settings) }), dmm: resolveDmmEnv(ctx.rt!.settings) });
+      const http = new HttpClient({ proxy: await resolveProxyUrl(ctx.rt!.settings) });
+      const registry = defaultSources({ http, dmm: resolveDmmEnv(ctx.rt!.settings) });
+
+      // 翻译是可选后处理: 没配置就跳过, 不阻断刮削。
+      const translator = translateEnabled(ctx.rt!.settings)
+        ? await openTranslator(ctx.rt!, http, resolveLlm(ctx.rt!.settings))
+        : null;
+      if (translateEnabled(ctx.rt!.settings) && !translator) {
+        ctx.out.log("已开启翻译但未配置 LLM (config set --llm-base-url/--llm-model), 本次跳过翻译");
+      }
 
       if (action === "list") {
         return {
@@ -558,6 +640,10 @@ export const COMMANDS: Command[] = [
       { name: "dmm-api-id", type: "string", description: "set: DMM API ID" },
       { name: "dmm-affiliate-id", type: "string", description: "set: DMM affiliate ID" },
       { name: "proxy", type: "string", description: "set: 代理地址, auto 表示运行时探测, 空串清除" },
+      { name: "llm-base-url", type: "string", description: "set: OpenAI 兼容端点, 如 https://api.deepseek.com/v1" },
+      { name: "llm-api-key", type: "string", description: "set: 模型 API Key" },
+      { name: "llm-model", type: "string", description: "set: 模型名, 如 deepseek-chat" },
+      { name: "translate", type: "boolean", description: "set: 刮削后自动翻译" },
     ],
     async run(ctx, args) {
       const action = args.positionals.action ?? "get";
@@ -576,16 +662,36 @@ export const COMMANDS: Command[] = [
           /** auto 需要探测才有真实地址, 这里只回显原始配置。 */
           proxy: resolveProxy(ctx.rt!.settings) ?? "",
           proxyFromEnv: Boolean(process.env.KURA_PROXY),
+          llm: resolveLlm(ctx.rt!.settings) ? "已配置" : "未配置",
+          translate: translateEnabled(ctx.rt!.settings),
         };
       }
 
       if (action === "set") {
-        const patch: { dmm: { apiId?: string; affiliateId?: string }; proxy?: string } = { dmm: {} };
+        const patch: {
+          dmm: { apiId?: string; affiliateId?: string };
+          proxy?: string;
+          llm: { baseUrl?: string; apiKey?: string; model?: string };
+          translate?: boolean;
+        } = { dmm: {}, llm: {} };
         if (typeof args.options["dmm-api-id"] === "string") patch.dmm.apiId = args.options["dmm-api-id"];
         if (typeof args.options["dmm-affiliate-id"] === "string") patch.dmm.affiliateId = args.options["dmm-affiliate-id"];
         if (typeof args.options.proxy === "string") patch.proxy = args.options.proxy;
-        if (Object.keys(patch.dmm).length === 0 && patch.proxy === undefined) {
-          throw new AppError("用法: config set --dmm-api-id ... | --proxy http://127.0.0.1:7890", EXIT.USAGE);
+        if (typeof args.options["llm-base-url"] === "string") patch.llm.baseUrl = args.options["llm-base-url"];
+        if (typeof args.options["llm-api-key"] === "string") patch.llm.apiKey = args.options["llm-api-key"];
+        if (typeof args.options["llm-model"] === "string") patch.llm.model = args.options["llm-model"];
+        if (typeof args.options.translate === "boolean") patch.translate = args.options.translate;
+
+        const touched =
+          Object.keys(patch.dmm).length > 0 ||
+          Object.keys(patch.llm).length > 0 ||
+          patch.proxy !== undefined ||
+          patch.translate !== undefined;
+        if (!touched) {
+          throw new AppError(
+            "用法: config set --dmm-api-id ... | --proxy auto | --llm-base-url ... --llm-model ... | --translate",
+            EXIT.USAGE,
+          );
         }
         const saved = saveSettings(paths, patch);
         return {
@@ -593,6 +699,8 @@ export const COMMANDS: Command[] = [
           settings: maskSettings(saved),
           dmmConfigured: isDmmConfigured(resolveDmmEnv(saved)),
           proxy: resolveProxy(saved) ?? "",
+          llm: resolveLlm(saved) ? "已配置" : "未配置",
+          translate: translateEnabled(saved),
         };
       }
 
@@ -606,6 +714,8 @@ export const COMMANDS: Command[] = [
         settings ? `  dmm.affiliate-id ${settings.dmm.affiliateId || "(未设置)"}` : "",
         settings ? `  DMM ${data.dmmConfigured ? "已配置" : "未配置"}` : "",
         `  proxy           ${String(data.proxy || "(未设置)")}`,
+        `  LLM             ${String(data.llm ?? "-")}`,
+        `  自动翻译        ${data.translate ? "开" : "关"}`,
       ]
         .filter(Boolean)
         .join("\n");

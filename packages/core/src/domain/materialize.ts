@@ -44,7 +44,9 @@ const ILLEGAL = /[\\/:*?"<>|]/g;
 export function renderTemplate(template: string, metadata: Metadata, phase?: FileInfo): string {
   const values: Record<string, string> = {
     number: metadata.number ?? metadata.key,
-    title: metadata.title ?? "",
+    // 目录名用原文: 翻译是可选的展示层, 不能让已整理好的路径因为"翻了个标题"而改名。
+    title: metadata.titleOriginal ?? metadata.title ?? "",
+    title_zh: metadata.titleOriginal ? (metadata.title ?? "") : "",
     studio: metadata.studio ?? "",
     label: metadata.label ?? "",
     series: metadata.series ?? "",
@@ -91,7 +93,7 @@ export function buildNfo(metadata: Metadata, thumbFile?: string): string {
   };
 
   field("title", metadata.title);
-  field("originaltitle", metadata.number ?? metadata.key);
+  field("originaltitle", metadata.titleOriginal ?? metadata.number ?? metadata.key);
   // 相对文件名: NFO 与视频同目录, 这样整个库搬走也不用改。
   field("thumb", thumbFile);
   if (metadata.plot) lines.push(`  <plot>${escapeXml(metadata.plot.trim())}</plot>`);
