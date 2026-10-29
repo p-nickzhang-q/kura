@@ -8,6 +8,7 @@ export type { Registry, Source, SourceContext } from "./types";
 export { fixtureSource } from "./builtin";
 export type { SourceConfig } from "./builtin";
 export { buildUrl, matchDmmItem, normalizeCode, toRawFields, type DmmEnv, type DmmItem, type DmmResponse } from "./dmm";
+export { createJavdbSource, parseDetail as parseJavdbDetail, parseSearch as parseJavdbSearch, assertNotLoginPage, type JavdbCandidate } from "./javdb";
 export { createJavbusSource, numberMatch, numberVariants, parseDetail, parseSearch, selectCandidateIndex, type SearchCandidate } from "./javbus";
 
 /** 每个内容类型的站点名单。既是抓取名单, 也是逐字段择优的默认顺序。 */

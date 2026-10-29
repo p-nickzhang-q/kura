@@ -52,8 +52,17 @@ grep -ciE "女優|素人|人妻" tests/fixtures/*.html
 | JavBus | 不带 `dv=1` cookie 会 302 到 `/doc/driver-verify` | 每次请求带该 cookie(跟随重定向也能到, 但多一次往返) |
 | JavBus | 直达 `/番号` 未必命中; 站内检索是模糊匹配 | 逐条比对 `<date>` 里的番号, **不取首条** |
 | JavBus | 开头数字段可能被站点省略(`259LUXU-1234` vs `LUXU-1234`) | `numberVariants` 生成候选写法逐个试 |
+| JavDB | 字段是 `<strong>标签:</strong><span class="value">值</span>` 的行式结构, 值可能是链接也可能是纯文本 | 按标签找 `strong`, 再取相邻 `span.value` |
+| JavDB | 番号不在正文里, 在按钮的 `data-clipboard-text` 上 | 直接读属性 |
+| JavDB | **登录页同样返回 200**, 无码条目需要账号 | 只认 `form[action*="user_sessions"] + input[type=password]`, 命中即 `NEEDS_INPUT` |
+| JavDB | 检索结果番号恒省略开头数字段 | 复用 javbus 的 `selectCandidateIndex` |
 | DMM | 网页版对非日本 IP 301 到地区封锁页 | 改走官方 API, 不做 HTML 解析 |
 | DMM | 凭据无效返回 HTTP 400 + `errors.api_id` | 翻译成 `NEEDS_INPUT`, 不伪装成 NOT_FOUND |
+
+## 字段取舍
+
+JavDB 的评分(`span.score-stars` 后面的文本)与剧照、预告片**不进域模型** —— 见 ADR 0002。
+解析器里不实现它们, 将来要加字段时按"改 types → 改 schema 迁移 → 改 NFO → 补测试"的顺序走。
 
 ## 状态语义
 

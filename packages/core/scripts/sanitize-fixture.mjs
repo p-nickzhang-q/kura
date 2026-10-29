@@ -37,7 +37,34 @@ $("span.header").each((_index, el) => {
   if (label.includes("長度")) $(el).after(" 120 分鐘");
 });
 
+// JavDB 详情页
+$("h2.title.is-4 strong.current-title").text("示例标题");
+$("span.value a[href*='/actors/']").each((index, el) => {
+  $(el).text(`演员${index + 1}`);
+});
+$("span.value a[href*='/tags']").each((index, el) => {
+  $(el).text(`标签${index + 1}`);
+});
+$("span.value a[href*='/makers/']").text("片商A");
+$("span.value a[href*='/labels/']").text("厂牌A");
+$("span.value a[href*='/series/']").text("系列A");
+$("span.value a[href*='/directors/']").text("导演A");
+$("a[data-clipboard-text]").attr("data-clipboard-text", "ABC-123");
+$("strong").each((_index, el) => {
+  const label = $(el).text();
+  const $value = $(el).next("span.value");
+  if (!$value.length) return;
+  if (label.includes("日期")) $value.text("2024-01-02");
+  if (label.includes("時長")) $value.text("120 分鍾");
+});
+// 评分是文本节点(不是元素), 单独归一
+$("span.score-stars").each((_index, el) => {
+  const next = el.nextSibling;
+  if (next && next.type === "text") next.data = " 4.43分";
+});
+
 // 搜索结果列表
+$("a.box div.video-title strong").text("ABC-123");
 $("a.movie-box div.photo-info date").each((_index, el) => {
   $(el).text("ABC-123");
 });
@@ -58,7 +85,7 @@ $("*").each((_index, el) => {
 // 注意: 标签带冒号("識別碼:"), 所以用包含匹配而不是整串匹配;
 // 用长度上限兜底, 避免"恰好包含这些词的长文本"漏过去。
 const KEEP =
-  /識別碼|發行日期|長度|製作商|發行商|導演|類型|示例|演员\d|标签\d+|片商A|厂牌A|导演A|系列A|2024-01-02|120 分鐘|ABC-123/;
+  /識別碼|發行日期|長度|製作商|發行商|導演|類型|番號|片商|發行|系列|類別|日期|時長|演員|評分|離線下載|熱搜|示例|演员\d|标签\d+|片商A|厂牌A|导演A|系列A|2024-01-02|120 分[鐘鍾]|ABC-123|\d+\.\d+分/;
 
 function scrub(node) {
   if (node.type === "text") {

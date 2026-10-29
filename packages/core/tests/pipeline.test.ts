@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLibrary, getItem } from "../src/index";
 import { openRuntime } from "../src/runtime";
-import { defaultSources } from "../src/sources";
+import { createRegistry, defaultSources, fixtureSource } from "../src/sources";
 import { scan } from "../src/tasks/scan";
 import { scrape } from "../src/tasks/scrape";
 import { organize } from "../src/tasks/organize";
@@ -109,18 +109,26 @@ describe("scan → scrape → organize", () => {
     }
   });
 
-  test("未实现的来源被跳过并如实报告", async () => {
+  test("一个来源失败不影响其它来源 (全程离线)", async () => {
     const rt = await openRuntime({ dataDir });
     try {
+      const broken = {
+        id: "broken",
+        label: "坏源",
+        status: "ready" as const,
+        contentTypes: "all" as const,
+        requirements: () => [],
+        fetch: async () => {
+          throw new Error("boom");
+        },
+      };
+      const registry = createRegistry([broken, fixtureSource]);
+
       const key = { value: "ABC-123", number: "ABC-123", contentType: "censored" as const };
-      const report = await scrape(rt, {
-        key,
-        registry: defaultSources(),
-        fixturesDir,
-        sources: ["javdb", "fixture"],
-      });
-      expect(report.route).toEqual(["fixture"]);
-      expect(report.skipped).toEqual(["javdb"]);
+      const report = await scrape(rt, { key, registry, fixturesDir, sources: ["broken", "fixture"] });
+
+      expect(report.route).toEqual(["broken", "fixture"]);
+      expect(report.failures.map((failure) => failure.site)).toEqual(["broken"]);
       expect(report.filled).toContain("title");
     } finally {
       rt.close();

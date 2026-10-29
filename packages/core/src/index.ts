@@ -32,6 +32,7 @@ export type { ApplyResult, Library, Plan, PlanEntry, PlanInput } from "./domain/
 
 export { defaultSources, DEFAULT_ROUTES, createRegistry, fixtureSource, routeFor } from "./sources";
 export { buildUrl, createDmmSource, matchDmmItem, normalizeCode, toRawFields } from "./sources/dmm";
+export { assertNotLoginPage, createJavdbSource, parseDetail as parseJavdbDetail, parseSearch as parseJavdbSearch } from "./sources/javdb";
 export { createJavbusSource, numberMatch, numberVariants, parseDetail, parseSearch, selectCandidateIndex } from "./sources/javbus";
 export type { SearchCandidate } from "./sources/javbus";
 export type { DmmEnv, DmmItem, DmmResponse } from "./sources/dmm";
