@@ -45,25 +45,23 @@ cp apps/desktop/release/Kura-<ver>-portable.exe  /tmp/kura-release/
 cp dist/kura.exe /tmp/kura-release/kura-<ver>-win-x64.exe
 ```
 
-**网络注意事项（实测）**：这个仓库所在的网络里，两条命令的代理需求是**相反的**。
+网络不稳定时，`git` 与 `gh` 分别试一次直连和代理再决定用哪个（两者打的是不同域名，
+可能一条通、一条不通）：
 
 ```bash
-# git push 必须走代理, 直连 github.com 会超时
-HTTPS_PROXY=http://<host>:7890 git push
+curl -s -o /dev/null -w "git 域名直连 %{http_code}\n" --max-time 15 https://github.com/
+curl -s -o /dev/null -w "gh 域名直连 %{http_code}\n" --max-time 15 https://api.github.com/
+```
 
-# gh 必须直连, 走代理会 "TLS handshake timeout"
+不通的那条加 `HTTPS_PROXY=http://<host>:7890`，或者反过来去掉环境变量走直连。
+
+```bash
+git push origin main
 env -u HTTPS_PROXY -u HTTP_PROXY gh release create v<ver> \
   --title "Kura v<ver> — <一句话>" \
   --notes-file /tmp/release-notes.md \
   --target main \
   /tmp/kura-release/*
-```
-
-原因多半是 Clash 对 `github.com` 与 `api.github.com` 的分流规则不一致。发版前先分别验证：
-
-```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://api.github.com/          # 直连应 200
-curl -s -o /dev/null -w "%{http_code}\n" --proxy http://<host>:7890 https://github.com/
 ```
 
 ## 4. 验收
