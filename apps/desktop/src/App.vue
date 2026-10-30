@@ -46,6 +46,7 @@ const page = ref(0);
 const pageSize = 100;
 const itemTotal = ref(0);
 const pendingTotal = ref(0);
+const exhaustedTotal = ref(0);
 const pageCount = computed(() => Math.max(1, Math.ceil(itemTotal.value / pageSize)));
 const detail = ref<KuraItem | null>(null);
 const dimension = ref("");
@@ -134,6 +135,7 @@ async function refreshItems(): Promise<void> {
   items.value = result.items;
   itemTotal.value = result.total;
   pendingTotal.value = result.pending;
+  exhaustedTotal.value = result.exhausted;
 }
 
 async function goPage(next: number): Promise<void> {
@@ -435,7 +437,10 @@ async function testDmm(): Promise<void> {
             </label>
             <span class="muted">已选 {{ picked.length }}</span>
             <span class="spacer" />
-            <span class="muted">共 {{ itemTotal }} 条 · 待刮削 {{ pendingTotal }}</span>
+            <span class="muted">
+              共 {{ itemTotal }} 条 · 待刮削 {{ pendingTotal }}
+              <template v-if="exhaustedTotal > 0"> · 已达上限 {{ exhaustedTotal }}（用 --retry-failed 重试）</template>
+            </span>
             <button type="button" :disabled="busy || page === 0" @click="goPage(page - 1)">‹</button>
             <span class="muted">{{ page + 1 }}/{{ pageCount }}</span>
             <button type="button" :disabled="busy || page >= pageCount - 1" @click="goPage(page + 1)">›</button>

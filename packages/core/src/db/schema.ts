@@ -114,6 +114,12 @@ const MIGRATIONS: string[] = [
   );
   create index if not exists tasks_status on tasks(status, id);
   `,
+
+  // v7 — 失败重试计数: 没抓到标题的条目不能永远躺在待刮队列里被反复重试
+  `
+  alter table items add column scrape_attempts integer not null default 0;
+  alter table items add column last_error text;
+  `,
 ];
 
 export function migrate(db: Db): number {

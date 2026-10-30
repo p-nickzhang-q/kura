@@ -45,6 +45,29 @@ export interface ScrapeReport {
  * 一个源失败不让整次刮削失败 —— 这是"站点是易碎品"的直接体现。
  */
 export async function scrape(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeReport> {
+  try {
+    const report = await scrapeOnce(rt, opts);
+    return report;
+  } catch (err) {
+    // 取消不算一次失败尝试; dry-run 不动数据库。
+    if (!opts.dryRun && !opts.signal?.aborted) {
+      recordFailure(rt, opts.key.value, err instanceof Error ? err.message : String(err));
+    }
+    throw err;
+  }
+}
+
+/** 默认重试上限: 到顶后不再自动进待刮队列, 需显式 --retry-failed。 */
+export const MAX_SCRAPE_ATTEMPTS = 3;
+
+function recordFailure(rt: Runtime, key: string, message: string): void {
+  rt.db.run(
+    "update items set scrape_attempts = scrape_attempts + 1, last_error = ? where number = ?",
+    [message, key],
+  );
+}
+
+async function scrapeOnce(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeReport> {
   const dryRun = opts.dryRun ?? false;
   const declared = routeFor(opts.registry, opts.key.contentType, opts.sources);
   const usable = declared.filter((source) => source.status === "ready");
@@ -147,6 +170,8 @@ async function translateMetadata(metadata: Metadata, translator: Translator): Pr
 }
 
 function persist(rt: Runtime, metadata: Metadata, records: SourceRecord[]): void {
+  // 成功即清零, 让"曾经失败过"不会永久留在条目上。
+  rt.db.run("update items set scrape_attempts = 0, last_error = null where number = ?", [metadata.key]);
   const columns = metadataColumns(metadata);
   const names = Object.keys(columns);
 
@@ -187,6 +212,8 @@ export interface ScrapeProgress {
 
 export interface ScrapePendingOptions extends Omit<ScrapeOptions, "key"> {
   limit?: number;
+  /** 连已经到重试上限的条目一起重试 (--retry-failed)。 */
+  includeFailed?: boolean;
   onProgress?: (progress: ScrapeProgress) => void;
 }
 
@@ -205,10 +232,10 @@ export async function scrapePendingTask(
   options: TaskScrapeOptions,
   signal: AbortSignal,
 ): Promise<{ task: TaskRow; result: TaskScrapeResult | null }> {
-  const total = pendingKeys(rt, options.limit ?? 50).length;
+  const total = pendingKeys(rt, options.limit ?? 50, { includeFailed: options.includeFailed }).length;
   const task = createTask(rt, {
     type: "scrape.pending",
-    payload: { limit: options.limit ?? 50, sources: options.sources ?? null },
+    payload: { limit: options.limit ?? 50, sources: options.sources ?? null, includeFailed: Boolean(options.includeFailed) },
     total,
   });
 
@@ -242,7 +269,7 @@ export async function scrapePending(
   rt: Runtime,
   options: ScrapePendingOptions,
 ): Promise<ScrapePendingResult> {
-  const keys = pendingKeys(rt, options.limit ?? 50);
+  const keys = pendingKeys(rt, options.limit ?? 50, { includeFailed: options.includeFailed });
   const reports: ScrapeProgress[] = [];
   // 先报总数: 否则第一条请求的几秒里界面只能显示"准备中"。
   options.onProgress?.({ index: 0, total: keys.length, key: "", ok: true, filled: 0 });
@@ -270,9 +297,14 @@ export async function scrapePending(
 
   return { total: keys.length, reports, cancelled: false };
 }
-export function pendingKeys(rt: Runtime, limit = 50): ItemKey[] {
+export function pendingKeys(
+  rt: Runtime,
+  limit = 50,
+  options: { includeFailed?: boolean } = {},
+): ItemKey[] {
+  const exhausted = options.includeFailed ? "" : ` and scrape_attempts < ${MAX_SCRAPE_ATTEMPTS}`;
   const rows = rt.db.all<{ number: string; content_type: string }>(
-    "select number, content_type from items where title is null or title = '' order by number limit ?",
+    `select number, content_type from items where (title is null or title = '')${exhausted} order by number limit ?`,
     [limit],
   );
   return rows.map((row) => ({
@@ -317,7 +349,15 @@ export function countItems(rt: Runtime, options: { type?: string } = {}): number
 
 export function countPending(rt: Runtime): number {
   const row = rt.db.get<{ c: number }>(
-    "select count(*) c from items where title is null or title = ''",
+    `select count(*) c from items where (title is null or title = '') and scrape_attempts < ${MAX_SCRAPE_ATTEMPTS}`,
+  );
+  return row?.c ?? 0;
+}
+
+/** 已到重试上限、不再自动重试的条目数。 */
+export function countExhausted(rt: Runtime): number {
+  const row = rt.db.get<{ c: number }>(
+    `select count(*) c from items where (title is null or title = '') and scrape_attempts >= ${MAX_SCRAPE_ATTEMPTS}`,
   );
   return row?.c ?? 0;
 }

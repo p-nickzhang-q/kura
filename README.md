@@ -36,6 +36,7 @@ kura library add 主库 ~/Videos
 kura scan 主库
 kura scrape ABC-123 --json
 kura scrape --pending            # 批量: 逐条进度打到 stderr, Ctrl-C 可中断
+kura scrape --pending --retry-failed   # 失败 3 次后不再自动重试, 用这个再试一轮
 kura organize 主库              # 只看计划
 kura organize 主库 --apply      # 真的移动
 

@@ -6,6 +6,7 @@ import { createLibrary, getItem } from "../src/index";
 import { openRuntime } from "../src/runtime";
 import { createRegistry, defaultSources, fixtureSource } from "../src/sources";
 import { listFiles } from "../src/tasks/scan";
+import { countExhausted, countPending, MAX_SCRAPE_ATTEMPTS, pendingKeys } from "../src/tasks/scrape";
 import { scan } from "../src/tasks/scan";
 import { scrape } from "../src/tasks/scrape";
 import { organize } from "../src/tasks/organize";
@@ -149,6 +150,30 @@ describe("scan → scrape → organize", () => {
       expect(unparsed.map((file) => file.path).sort()).toEqual(
         [join(libraryRoot, "2024-01-01 家庭录像.mp4"), join(libraryRoot, "找不到番号的片子.mkv")].sort(),
       );
+    } finally {
+      rt.close();
+    }
+  });
+
+  test("失败累计到上限后不再进待刮队列, 可显式重试", async () => {
+    const rt = await openRuntime({ dataDir });
+    try {
+      const key = { value: "ABC-123", number: "ABC-123", contentType: "censored" as const };
+      await scrape(rt, { key, registry: defaultSources({ env: {} }), fixturesDir, sources: ["fixture"] });
+      // 换一个查不到的番号
+      const missing = { value: "ZZZ-999", number: "ZZZ-999", contentType: "censored" as const };
+      rt.db.run("insert or ignore into items (number, content_type) values ('ZZZ-999', 'censored')");
+
+      for (let i = 0; i < MAX_SCRAPE_ATTEMPTS; i++) {
+        await scrape(rt, { key: missing, registry: defaultSources({ env: {} }), fixturesDir, sources: ["fixture"] }).catch(
+          () => undefined,
+        );
+      }
+
+      expect(countPending(rt)).toBe(0); // ABC-123 已成功, ZZZ-999 到顶
+      expect(countExhausted(rt)).toBe(1);
+      expect(pendingKeys(rt).map((key) => key.value)).toEqual([]);
+      expect(pendingKeys(rt, 10, { includeFailed: true }).map((key) => key.value)).toEqual(["ZZZ-999"]);
     } finally {
       rt.close();
     }

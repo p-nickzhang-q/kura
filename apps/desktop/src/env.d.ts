@@ -146,6 +146,7 @@ interface KuraBridge {
     items: KuraItem[];
     total: number;
     pending: number;
+    exhausted: number;
   }>;
   item(number: string): Promise<KuraItem | null>;
   unparsedFiles(params?: { libraryId?: number; limit?: number; offset?: number }): Promise<{

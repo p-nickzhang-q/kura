@@ -51,7 +51,7 @@ export { countFiles, filePhase, listFiles, scan } from "./tasks/scan";
 export type { MediaFileView } from "./tasks/scan";
 export type { ScanEvent, ScanOptions, ScanReport } from "./tasks/scan";
 
-export { countItems, countPending, getItem, listItems, pendingKeys, scrape, scrapePending, scrapePendingTask } from "./tasks/scrape";
+export { countExhausted, countItems, countPending, getItem, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys, scrape, scrapePending, scrapePendingTask } from "./tasks/scrape";
 export { pendingTranslationKeys, translateItem } from "./tasks/translate";
 export type { TranslateReport } from "./tasks/translate";
 export { buildSystemPrompt, chatEndpoint, createTranslator, hasKana, needsTranslation, openTranslator, TranslationCache } from "./llm/translate";

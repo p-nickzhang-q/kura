@@ -12,6 +12,8 @@ import {
   listItems,
   countItems,
   countPending,
+  countExhausted,
+  MAX_SCRAPE_ATTEMPTS,
   listFiles,
   listLibraries,
   organize,
@@ -230,6 +232,7 @@ export const COMMANDS: Command[] = [
       { name: "fixtures", type: "string", description: "离线样本目录 (fixture 源用)" },
       { name: "type", type: "string", description: "无番号条目必须显式给类型" },
       { name: "limit", type: "number", description: "--pending 时的批大小", default: 50 },
+      { name: "retry-failed", type: "boolean", description: "连已达重试上限的条目一起重试", default: false },
       { name: "dry-run", type: "boolean", description: "只报告, 不写库", default: false },
     ],
     async run(ctx, args) {
@@ -270,6 +273,7 @@ export const COMMANDS: Command[] = [
               translator,
               dryRun,
               limit: Number(args.options.limit ?? 50),
+              includeFailed: Boolean(args.options["retry-failed"]),
               onProgress: (progress) => {
                 ctx.out.log(
                   progress.ok
@@ -557,7 +561,12 @@ export const COMMANDS: Command[] = [
           offset: Number(args.options.offset ?? 0),
           type,
         });
-        return { items, total: countItems(ctx.rt!, { type }), pending: countPending(ctx.rt!) };
+        return {
+          items,
+          total: countItems(ctx.rt!, { type }),
+          pending: countPending(ctx.rt!),
+          exhausted: countExhausted(ctx.rt!),
+        };
       }
 
       if (action === "set" || action === "lock" || action === "unlock") {
@@ -622,13 +631,18 @@ export const COMMANDS: Command[] = [
       const items = data.items ?? [];
       const total = (data as { total?: number }).total;
       const pending = (data as { pending?: number }).pending ?? 0;
+      const exhausted = (data as { exhausted?: number }).exhausted ?? 0;
       if (items.length === 0) return "没有条目。先 `kura scan <库>`。";
 
       const lines = items.map((item) => {
         const pinned = ((item.pinned as string[] | undefined) ?? []).length > 0 ? "🔒" : "  ";
         return `${pinned} ${String(item.number).padEnd(13)} ${String(item.contentType).padEnd(10)} ${item.title ?? "(未刮削)"}`;
       });
-      if (total !== undefined) lines.push(`— 共 ${total} 条, 待刮削 ${pending} 条 —`);
+      if (total !== undefined) {
+        lines.push(
+          `— 共 ${total} 条, 待刮削 ${pending} 条${exhausted > 0 ? `, 已达重试上限 ${exhausted} 条 (scrape --retry-failed 可再试)` : ""} —`,
+        );
+      }
       return lines.join("\n");
     },
   },

@@ -28,6 +28,7 @@ import {
   listItems,
   countItems,
   countPending,
+  countExhausted,
   listFiles,
   countFiles,
   listTasks,
@@ -244,6 +245,7 @@ function registerIpc(): void {
       items: listItems(rt, { limit: input.limit ?? 100, offset: input.offset ?? 0, type: input.type }),
       total: countItems(rt, { type: input.type }),
       pending: countPending(rt),
+      exhausted: countExhausted(rt),
     };
   });
 
