@@ -3,6 +3,8 @@ import { needsTranslation } from "../llm/translate";
 import { aggregate, mergeWithPinned } from "../domain/aggregate";
 import type { ItemKey, Metadata, SourceRecord } from "../domain/types";
 import { metadataColumns, parseJson, pinnedFields, rowToMetadata, stringify, type ItemRow } from "../db/rows";
+import { pruneActors, syncItemActors } from "../db/actors";
+import { normalizeActorName } from "../domain/actors";
 import type { Runtime } from "../runtime";
 import { createTask, runTask, type TaskRow } from "./queue";
 import { routeFor, type Registry } from "../sources";
@@ -193,6 +195,11 @@ function persist(rt: Runtime, metadata: Metadata, records: SourceRecord[]): void
         [metadata.key, record.site, JSON.stringify(record.fields)],
       );
     }
+
+    // 演员索引是 items.actors 的派生物: 条目写完了就重建, 顺带清掉没人指向的演员。
+    syncItemActors(rt.db, metadata.key);
+    pruneActors(rt.db);
+
     rt.db.exec("commit");
   } catch (err) {
     rt.db.exec("rollback");
@@ -324,26 +331,56 @@ export function getItem(rt: Runtime, key: string): ItemView | null {
   return { ...rowToMetadata(row), pinned: pinnedFields(rt.db, key) };
 }
 
-export function listItems(
-  rt: Runtime,
-  options: { limit?: number; offset?: number; type?: string } = {},
-): ItemView[] {
+export interface ListItemOptions {
+  limit?: number;
+  offset?: number;
+  type?: string;
+  /** 按演员过滤。接受任意写法, 内部按 normalizeActorName 归一后匹配。 */
+  actor?: string;
+}
+
+export function listItems(rt: Runtime, options: ListItemOptions = {}): ItemView[] {
   const limit = options.limit ?? 50;
   const offset = options.offset ?? 0;
-  const rows = options.type
-    ? rt.db.all<ItemRow>(
-        "select * from items where content_type = ? order by updated_at desc limit ? offset ?",
-        [options.type, limit, offset],
-      )
-    : rt.db.all<ItemRow>("select * from items order by updated_at desc limit ? offset ?", [limit, offset]);
+  const where: string[] = [];
+  const params: unknown[] = [];
+
+  if (options.type) {
+    where.push("items.content_type = ?");
+    params.push(options.type);
+  }
+
+  if (options.actor) {
+    // 演员是实体索引, 所以这里是 join 而不是 like —— 名字里的空白/全半角差异不该影响命中。
+    where.push(
+      "items.number in (select ia.number from item_actors ia join actors a on a.id = ia.actor_id where a.normalized = ?)",
+    );
+    params.push(normalizeActorName(options.actor));
+  }
+
+  const sql = `select items.* from items${where.length > 0 ? ` where ${where.join(" and ")}` : ""} order by items.updated_at desc limit ? offset ?`;
+  const rows = rt.db.all<ItemRow>(sql, [...params, limit, offset]);
   return rows.map((row) => ({ ...rowToMetadata(row), pinned: parseJson<string[]>(row.pinned) ?? [] }));
 }
 
 /** 分页要显示"第 x/共 N 条", 所以总数得单独算一次。 */
-export function countItems(rt: Runtime, options: { type?: string } = {}): number {
-  const row = options.type
-    ? rt.db.get<{ c: number }>("select count(*) c from items where content_type = ?", [options.type])
-    : rt.db.get<{ c: number }>("select count(*) c from items");
+export function countItems(rt: Runtime, options: { type?: string; actor?: string } = {}): number {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (options.type) {
+    where.push("content_type = ?");
+    params.push(options.type);
+  }
+  if (options.actor) {
+    where.push(
+      "number in (select ia.number from item_actors ia join actors a on a.id = ia.actor_id where a.normalized = ?)",
+    );
+    params.push(normalizeActorName(options.actor));
+  }
+  const row = rt.db.get<{ c: number }>(
+    `select count(*) c from items${where.length > 0 ? ` where ${where.join(" and ")}` : ""}`,
+    params,
+  );
   return row?.c ?? 0;
 }
 

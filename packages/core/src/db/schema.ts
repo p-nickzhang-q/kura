@@ -1,4 +1,5 @@
 import type { Db } from "./driver";
+import { backfillActors } from "./actors";
 
 /**
  * 迁移用 `pragma user_version` 递增, 不引入迁移框架。
@@ -120,7 +121,32 @@ const MIGRATIONS: string[] = [
   alter table items add column scrape_attempts integer not null default 0;
   alter table items add column last_error text;
   `,
+
+  // v8 — 演员一等实体: items.actors 仍是快照(JSON), 这里是它派生出的索引
+  `
+  create table actors (
+    id         integer primary key autoincrement,
+    name       text not null,
+    normalized text not null unique
+  );
+
+  create table item_actors (
+    number   text not null references items(number) on delete cascade,
+    actor_id integer not null references actors(id) on delete cascade,
+    position integer not null default 0,
+    primary key (number, actor_id)
+  );
+  create index if not exists item_actors_actor on item_actors(actor_id);
+  `,
 ];
+
+/**
+ * 迁移之后需要跑代码的步骤 (SQL 做不了的: NFKC 规范化)。
+ * 键是**目标版本号**, 只在该版本刚被应用时执行一次。
+ */
+const AFTER_MIGRATIONS: Record<number, (db: Db) => void> = {
+  8: (db) => backfillActors(db),
+};
 
 export function migrate(db: Db): number {
   const row = db.get<{ user_version: number }>("pragma user_version");
@@ -130,6 +156,7 @@ export function migrate(db: Db): number {
     db.exec("begin");
     try {
       db.exec(MIGRATIONS[v]!);
+      AFTER_MIGRATIONS[v + 1]?.(db);
       db.exec(`pragma user_version = ${v + 1}`);
       db.exec("commit");
     } catch (err) {

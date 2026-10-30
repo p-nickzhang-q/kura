@@ -522,13 +522,14 @@ export const COMMANDS: Command[] = [
 
   {
     name: "item",
-    summary: "条目: get <番号> | list [--type] | set <番号> --title ... | lock/unlock <番号> 字段,字段",
+    summary: "条目: get <番号> | list [--type] [--actor] | set <番号> --title ... | lock/unlock <番号> 字段,字段",
     needsDb: true,
     args: [
       { name: "action", type: "string", description: "get | list | set | lock | unlock", positional: true, required: true },
       { name: "number", type: "string", description: "番号 (get/set/lock/unlock)", positional: true },
       { name: "fields", type: "string", description: "lock/unlock 的字段, 逗号分隔", positional: true },
       { name: "type", type: "string", description: "按类型筛选 (list)" },
+      { name: "actor", type: "string", description: "按演员筛选 (list), 空白与全半角差异不影响命中" },
       { name: "limit", type: "number", description: "条数 (list)", default: 20 },
       { name: "offset", type: "number", description: "跳过条数 (list)", default: 0 },
       { name: "title", type: "string", description: "set: 标题" },
@@ -556,14 +557,16 @@ export const COMMANDS: Command[] = [
 
       if (action === "list") {
         const type = typeof args.options.type === "string" ? args.options.type : undefined;
+        const actor = typeof args.options.actor === "string" ? args.options.actor : undefined;
         const items = listItems(ctx.rt!, {
           limit: Number(args.options.limit ?? 20),
           offset: Number(args.options.offset ?? 0),
           type,
+          actor,
         });
         return {
           items,
-          total: countItems(ctx.rt!, { type }),
+          total: countItems(ctx.rt!, { type, actor }),
           pending: countPending(ctx.rt!),
           exhausted: countExhausted(ctx.rt!),
         };

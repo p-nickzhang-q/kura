@@ -239,15 +239,23 @@ function registerIpc(): void {
     return { cancelled };
   });
 
-  ipcMain.handle("item:list", (_event, input: { limit?: number; offset?: number; type?: string } = {}) => {
-    const rt = mustRuntime();
-    return {
-      items: listItems(rt, { limit: input.limit ?? 100, offset: input.offset ?? 0, type: input.type }),
-      total: countItems(rt, { type: input.type }),
-      pending: countPending(rt),
-      exhausted: countExhausted(rt),
-    };
-  });
+  ipcMain.handle(
+    "item:list",
+    (_event, input: { limit?: number; offset?: number; type?: string; actor?: string } = {}) => {
+      const rt = mustRuntime();
+      return {
+        items: listItems(rt, {
+          limit: input.limit ?? 100,
+          offset: input.offset ?? 0,
+          type: input.type,
+          actor: input.actor,
+        }),
+        total: countItems(rt, { type: input.type, actor: input.actor }),
+        pending: countPending(rt),
+        exhausted: countExhausted(rt),
+      };
+    },
+  );
 
   ipcMain.handle(
     "files:unparsed",

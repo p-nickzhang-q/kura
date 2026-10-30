@@ -6,7 +6,7 @@ import { createLibrary, getItem } from "../src/index";
 import { openRuntime } from "../src/runtime";
 import { createRegistry, defaultSources, fixtureSource } from "../src/sources";
 import { listFiles } from "../src/tasks/scan";
-import { countExhausted, countPending, MAX_SCRAPE_ATTEMPTS, pendingKeys } from "../src/tasks/scrape";
+import { countItems, countExhausted, countPending, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys } from "../src/tasks/scrape";
 import { scan } from "../src/tasks/scan";
 import { scrape } from "../src/tasks/scrape";
 import { organize } from "../src/tasks/organize";
@@ -94,6 +94,27 @@ describe("scan → scrape → organize", () => {
       expect(after.counts.removed).toBe(0);
       expect(after.counts.added).toBe(0);
       expect(after.counts.unchanged).toBe(1);
+    } finally {
+      rt.close();
+    }
+  });
+
+  test("按演员筛选条目 (空白与全半角不影响命中)", async () => {
+    const rt = await openRuntime({ dataDir });
+    try {
+      await scrape(rt, {
+        key: { value: "ABC-123", number: "ABC-123", contentType: "censored" },
+        registry: defaultSources({ env: {} }),
+        fixturesDir,
+        sources: ["fixture"],
+      });
+
+      // fixture 里是 ["甲", "乙"]
+      expect(listItems(rt, { actor: "甲" }).map((item) => item.key)).toEqual(["ABC-123"]);
+      expect(listItems(rt, { actor: " 甲 " }).length).toBe(1);
+      expect(countItems(rt, { actor: "乙" })).toBe(1);
+      expect(listItems(rt, { actor: "丙" })).toEqual([]);
+      expect(countItems(rt)).toBe(1);
     } finally {
       rt.close();
     }

@@ -1,6 +1,7 @@
 import { AppError, EXIT } from "../exit";
 import { FIELD_KEYS, type FieldKey } from "../domain/types";
 import { metadataColumns, parseJson, rowToMetadata, stringify, type ItemRow } from "../db/rows";
+import { pruneActors, syncItemActors } from "../db/actors";
 import type { Runtime } from "../runtime";
 import { getItem, type ItemView } from "./scrape";
 
@@ -45,6 +46,12 @@ export function updateItem(rt: Runtime, options: UpdateItemOptions): ItemView {
      where number = ?`,
     [...Object.values(columns), stringify(pinned), options.key],
   );
+
+  // 手动改过演员也要重建索引, 否则"点演员看全部"会漏掉这条。
+  if (options.patch?.actors !== undefined) {
+    syncItemActors(rt.db, options.key);
+    pruneActors(rt.db);
+  }
 
   return getItem(rt, options.key)!;
 }

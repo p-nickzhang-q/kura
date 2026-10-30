@@ -45,6 +45,8 @@ const picked = ref<string[]>([]);
 const page = ref(0);
 const pageSize = 100;
 const itemTotal = ref(0);
+/** 演员过滤: null = 不过滤。实体索引在 core 里, 这里只传名字。 */
+const actorFilter = ref<string | null>(null);
 const pendingTotal = ref(0);
 const exhaustedTotal = ref(0);
 const pageCount = computed(() => Math.max(1, Math.ceil(itemTotal.value / pageSize)));
@@ -131,11 +133,27 @@ async function reveal(path: string): Promise<void> {
 }
 
 async function refreshItems(): Promise<void> {
-  const result = await window.kura.items({ limit: pageSize, offset: page.value * pageSize });
+  const result = await window.kura.items({
+    limit: pageSize,
+    offset: page.value * pageSize,
+    actor: actorFilter.value ?? undefined,
+  });
   items.value = result.items;
   itemTotal.value = result.total;
   pendingTotal.value = result.pending;
   exhaustedTotal.value = result.exhausted;
+}
+
+async function filterByActor(name: string): Promise<void> {
+  actorFilter.value = actorFilter.value === name ? null : name;
+  page.value = 0;
+  await refreshItems();
+}
+
+async function clearActorFilter(): Promise<void> {
+  actorFilter.value = null;
+  page.value = 0;
+  await refreshItems();
 }
 
 async function goPage(next: number): Promise<void> {
@@ -436,6 +454,9 @@ async function testDmm(): Promise<void> {
               全选
             </label>
             <span class="muted">已选 {{ picked.length }}</span>
+            <button v-if="actorFilter" type="button" class="chip" :title="`取消过滤`" @click="clearActorFilter">
+              演员: {{ actorFilter }} ✕
+            </button>
             <span class="spacer" />
             <span class="muted">
               共 {{ itemTotal }} 条 · 待刮削 {{ pendingTotal }}
@@ -486,7 +507,22 @@ async function testDmm(): Promise<void> {
                     <td>{{ TYPE_LABEL[item.contentType] ?? item.contentType }}</td>
                     <td>{{ item.title ?? "未刮削" }}</td>
                     <td>{{ item.studio ?? "—" }}</td>
-                    <td>{{ item.actors?.slice(0, 3).join("、") ?? "—" }}</td>
+                    <td>
+                      <template v-if="item.actors?.length">
+                        <button
+                          v-for="name in item.actors.slice(0, 3)"
+                          :key="name"
+                          type="button"
+                          class="actor"
+                          :title="`只看 ${name}`"
+                          @click="filterByActor(name)"
+                        >
+                          {{ name }}
+                        </button>
+                        <span v-if="item.actors.length > 3" class="muted">…</span>
+                      </template>
+                      <span v-else>—</span>
+                    </td>
                   </tr>
                   <tr v-if="items.length === 0">
                     <td colspan="6" class="muted">没有条目。先扫描一个媒体库。</td>
@@ -786,6 +822,34 @@ h1 {
 .muted {
   color: var(--muted);
   font-size: 12px;
+}
+
+/* 演员名是可点的: 点了就把列表过滤到这个人 */
+.actor {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.actor:hover {
+  text-decoration: underline;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .banner {

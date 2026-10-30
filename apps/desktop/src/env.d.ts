@@ -142,7 +142,7 @@ interface KuraBridge {
   }>;
   cancelScrape(): Promise<{ cancelled: boolean }>;
   onScrapeProgress(callback: (progress: { index: number; total: number; key: string; ok: boolean; filled: number; error?: string }) => void): () => void;
-  items(params?: { limit?: number; offset?: number; type?: string }): Promise<{
+  items(params?: { limit?: number; offset?: number; type?: string; actor?: string }): Promise<{
     items: KuraItem[];
     total: number;
     pending: number;
