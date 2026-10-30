@@ -71,6 +71,28 @@ describe("登录页识别", () => {
   });
 });
 
+const BLOCKED_PAGE = `<html><body>Due to copyright restrictions, access to this site is prohibited in the country where your internet is located.</body></html>`;
+
+describe("地区封锁页", () => {
+  test("封锁页给出 NEEDS_INPUT 而不是 NOT_FOUND", () => {
+    const error = (() => {
+      try {
+        parseSearch(BLOCKED_PAGE);
+        return null;
+      } catch (err) {
+        return err;
+      }
+    })();
+    expect(error).toBeInstanceOf(AppError);
+    expect((error as AppError).exitCode).toBe(EXIT.NEEDS_INPUT);
+    expect((error as AppError).message).toContain("地区");
+  });
+
+  test("详情页同样识别", () => {
+    expect(() => parseDetail(BLOCKED_PAGE)).toThrow(AppError);
+  });
+});
+
 describe("parseSearch", () => {
   test("从结果卡片取 URL 与番号, 且地址是绝对的", () => {
     const candidates = parseSearch(searchHtml);

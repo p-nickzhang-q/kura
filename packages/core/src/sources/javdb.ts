@@ -51,7 +51,21 @@ export interface JavdbCandidate {
   number: string;
 }
 
+/**
+ * 地区封锁页: 状态码 200、体积很小、正文是版权提示。
+ * 不识别的话会被当成"搜索没有结果", 报成 NOT_FOUND —— 用户会去怀疑番号写错了。
+ */
+export function assertNotBlocked(html: string): void {
+  if (/prohibited in the country|禁止了你的網路|禁止了你的网络|版權限制|版权限制/i.test(html)) {
+    throw new AppError("JavDB 判定当前出口地区不可访问 (版权限制)", EXIT.NEEDS_INPUT, {
+      source: "javdb",
+      hint: "切换代理节点(立陶宛/美国等可访问地区)后重试",
+    });
+  }
+}
+
 export function parseSearch(html: string): JavdbCandidate[] {
+  assertNotBlocked(html);
   const $ = load(html);
   assertNotLoginPage($);
 
@@ -102,6 +116,7 @@ function rowLinks($: CheerioAPI, label: string): string[] {
 }
 
 export function parseDetail(html: string, url: string = JAVDB_BASE): RawFields | null {
+  assertNotBlocked(html);
   const $ = load(html);
   assertNotLoginPage($);
 
