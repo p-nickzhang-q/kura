@@ -117,6 +117,17 @@ interface KuraDmmTest {
   error?: string;
 }
 
+interface KuraTask {
+  id: number;
+  type: string;
+  status: string;
+  total: number;
+  processed: number;
+  failed: number;
+  error: string | null;
+  createdAt: number;
+}
+
 interface KuraBridge {
   info(): Promise<KuraAppInfo>;
   libraries(): Promise<KuraLibrary[]>;
@@ -134,6 +145,8 @@ interface KuraBridge {
   items(limit?: number): Promise<KuraItem[]>;
   item(number: string): Promise<KuraItem | null>;
   unparsedFiles(libraryId?: number): Promise<{ path: string; number: string | null; libraryId: number }[]>;
+  tasks(limit?: number): Promise<KuraTask[]>;
+  retryTask(id: number): Promise<KuraTask>;
   updateItem(input: { key: string; pin?: string[]; unpin?: string[] }): Promise<KuraItem>;
   scrapeKeys(keys: string[]): Promise<{ count: number; results: { key: string; ok: boolean; filled: number; error?: string }[] }>;
   fetchPoster(key: string): Promise<{ key: string; path: string; size: number }>;

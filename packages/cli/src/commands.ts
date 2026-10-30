@@ -27,7 +27,14 @@ import {
   updateLibraryOrganize,
   openTranslator,
   pendingTranslationKeys,
-  scrapePending,
+  scrapePendingTask,
+  createTask,
+  runTask,
+  listTasks,
+  getTask,
+  retryTask,
+  cancelTask,
+  taskLogFiles,
   resolveLlm,
   translateEnabled,
   translateItem,
@@ -47,7 +54,7 @@ import {
   type FieldKey,
   type ItemKey,
 } from "@kura/core";
-import type { TranslateReport } from "@kura/core";
+import type { TranslateReport, TaskRow } from "@kura/core";
 import type { ArgSpec, ParsedArgs } from "./args";
 import type { Output } from "./output";
 import { VERSION } from "./version";
@@ -252,29 +259,35 @@ export const COMMANDS: Command[] = [
         process.once("SIGINT", onInterrupt);
 
         try {
-          const result = await scrapePending(ctx.rt!, {
-            registry,
-            fixturesDir,
-            sources,
-            translator,
-            dryRun,
-            signal: controller.signal,
-            limit: Number(args.options.limit ?? 50),
-            onProgress: (progress) => {
-              ctx.out.log(
-                progress.ok
-                  ? `[${progress.index}/${progress.total}] ${progress.key} ✓ ${progress.filled} 字段`
-                  : `[${progress.index}/${progress.total}] ${progress.key} ✗ ${progress.error}`,
-              );
-              ctx.out.event({ event: "scrape", ...progress });
+          const { task, result } = await scrapePendingTask(
+            ctx.rt!,
+            {
+              registry,
+              fixturesDir,
+              sources,
+              translator,
+              dryRun,
+              limit: Number(args.options.limit ?? 50),
+              onProgress: (progress) => {
+                ctx.out.log(
+                  progress.ok
+                    ? `[${progress.index}/${progress.total}] ${progress.key} ✓ ${progress.filled} 字段`
+                    : `[${progress.index}/${progress.total}] ${progress.key} ✗ ${progress.error}`,
+                );
+                ctx.out.event({ event: "scrape", ...progress });
+              },
             },
-          });
+            controller.signal,
+          );
+
           return {
             pending: true,
-            total: result.total,
-            cancelled: result.cancelled,
-            count: result.reports.length,
-            reports: result.reports,
+            taskId: task.id,
+            total: result?.total ?? task.total,
+            cancelled: result?.cancelled ?? false,
+            count: result?.reports.length ?? task.processed,
+            reports: result?.reports ?? [],
+            log: taskLogFiles(ctx.rt!.paths.logDir).find((file) => file.includes(String(task.id).padStart(6, "0"))),
           };
         } finally {
           process.off("SIGINT", onInterrupt);
@@ -321,8 +334,12 @@ export const COMMANDS: Command[] = [
         const head = batch.cancelled
           ? `已取消: 完成 ${batch.count}/${batch.total ?? "?"} 条`
           : `批量刮削 ${batch.count} 条, 失败 ${failed} 条`;
+        const taskLine = (batch as { taskId?: number; log?: string }).taskId
+          ? `任务 #${(batch as { taskId?: number }).taskId}  日志 ${(batch as { log?: string }).log ?? "-"}`
+          : null;
         return [
           head,
+          ...(taskLine ? [taskLine] : []),
           ...batch.reports.map((report) =>
             report.ok === false
               ? `  ✗ ${report.key}: ${report.error}`
@@ -695,6 +712,71 @@ export const COMMANDS: Command[] = [
         result.probe ? `  探测番号 ${result.probe}` : "",
         result.fields?.length ? `  取到字段: ${result.fields.join(", ")}` : "",
         result.error ? `  ${result.error}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    },
+  },
+
+  {
+    name: "task",
+    summary: "任务: list | show <id> | retry <id> | cancel <id> —— 批量操作的进度与恢复",
+    needsDb: true,
+    args: [
+      { name: "action", type: "string", description: "list | show | retry | cancel", positional: true, default: "list" },
+      { name: "id", type: "number", description: "任务号", positional: true },
+      { name: "limit", type: "number", description: "list 条数", default: 10 },
+    ],
+    async run(ctx, args) {
+      const action = args.positionals.action ?? "list";
+      const id = args.positionals.id ? Number(args.positionals.id) : null;
+
+      if (action === "list") {
+        return { tasks: listTasks(ctx.rt!, { limit: Number(args.options.limit ?? 10) }) };
+      }
+
+      if (action === "show") {
+        if (id === null) throw new AppError("用法: task show <id>", EXIT.USAGE);
+        const task = getTask(ctx.rt!, id);
+        if (!task) throw new AppError(`任务不存在: ${id}`, EXIT.NOT_FOUND, { id });
+        const log = taskLogFiles(ctx.rt!.paths.logDir).find((file) =>
+          file.includes(String(id).padStart(6, "0")),
+        );
+        return { task, log: log ?? null };
+      }
+
+      if (action === "retry") {
+        if (id === null) throw new AppError("用法: task retry <id>", EXIT.USAGE);
+        const task = retryTask(ctx.rt!, id);
+        return { task, note: "已重新入队; 用对应的命令再跑一次即可继续 (例如 scrape --pending)" };
+      }
+
+      if (action === "cancel") {
+        if (id === null) throw new AppError("用法: task cancel <id>", EXIT.USAGE);
+        const cancelled = cancelTask(ctx.rt!, id);
+        return { id, cancelled, note: cancelled ? "已取消" : "只有排队中的任务可以取消; 运行中的请用 Ctrl-C / 停止按钮" };
+      }
+
+      throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
+    },
+    render(data: Record<string, unknown>) {
+      if (Array.isArray(data.tasks)) {
+        const tasks = data.tasks as TaskRow[];
+        if (tasks.length === 0) return "没有任务。";
+        return tasks
+          .map(
+            (task) =>
+              `#${task.id} ${task.status.padEnd(12)} ${task.type.padEnd(16)} ${task.processed}/${task.total} 失败${task.failed}`,
+          )
+          .join("\n");
+      }
+      const task = (data.task ?? data) as TaskRow;
+      return [
+        `#${task.id} ${task.type} — ${task.status}`,
+        `  进度  ${task.processed}/${task.total}  失败 ${task.failed}`,
+        task.error ? `  错误  ${task.error}` : "",
+        data.log ? `  日志  ${data.log}` : "",
+        data.note ? `  ${data.note}` : "",
       ]
         .filter(Boolean)
         .join("\n");

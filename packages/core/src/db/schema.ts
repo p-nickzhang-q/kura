@@ -95,6 +95,25 @@ const MIGRATIONS: string[] = [
   alter table items add column title_original text;
   alter table items add column plot_original text;
   `,
+
+  // v6 — 持久化任务: 关掉软件后仍能看到"上次跑到 37/200, 中断了"
+  `
+  create table tasks (
+    id          integer primary key autoincrement,
+    type        text not null,
+    status      text not null,
+    payload     text not null default '{}',
+    total       integer not null default 0,
+    processed   integer not null default 0,
+    failed      integer not null default 0,
+    error       text,
+    created_at  integer not null default (unixepoch()),
+    started_at  integer,
+    finished_at integer,
+    owner_pid   integer
+  );
+  create index if not exists tasks_status on tasks(status, id);
+  `,
 ];
 
 export function migrate(db: Db): number {

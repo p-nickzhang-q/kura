@@ -27,6 +27,8 @@ import {
   getItem,
   listItems,
   listFiles,
+  listTasks,
+  retryTask,
   listLibraries,
   openRuntime,
   organize,
@@ -232,6 +234,26 @@ function registerIpc(): void {
     currentAbort?.abort();
     return { cancelled };
   });
+
+  ipcMain.handle("item:list", (_event, input: { limit?: number } = {}) =>
+    listItems(mustRuntime(), { limit: input.limit ?? 100 }),
+  );
+
+  ipcMain.handle("files:unparsed", (_event, input: { libraryId?: number } = {}) =>
+    listFiles(mustRuntime(), { libraryId: input.libraryId, unparsedOnly: true, limit: 500 }),
+  );
+
+  ipcMain.handle("tasks:list", (_event, input: { limit?: number } = {}) =>
+    listTasks(mustRuntime(), { limit: input.limit ?? 20 }),
+  );
+
+  ipcMain.handle("tasks:retry", (_event, input: { id: number }) => retryTask(mustRuntime(), input.id));
+
+  ipcMain.handle("item:get", (_event, number: string) => getItem(mustRuntime(), number));
+
+  ipcMain.handle("item:update", (_event, input: { key: string; pin?: string[]; unpin?: string[] }) =>
+    updateItem(mustRuntime(), { key: input.key, pin: input.pin as never, unpin: input.unpin as never }),
+  );
 
   ipcMain.handle("scrape:keys", (_event, input: { keys: string[] }) =>
     exclusive("刮削", async () => {

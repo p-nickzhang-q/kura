@@ -4,6 +4,7 @@ import { aggregate, mergeWithPinned } from "../domain/aggregate";
 import type { ItemKey, Metadata, SourceRecord } from "../domain/types";
 import { metadataColumns, parseJson, pinnedFields, rowToMetadata, stringify, type ItemRow } from "../db/rows";
 import type { Runtime } from "../runtime";
+import { createTask, runTask, type TaskRow } from "./queue";
 import { routeFor, type Registry } from "../sources";
 import type { Translator } from "../llm/translate";
 
@@ -178,6 +179,44 @@ export interface ScrapeProgress {
 export interface ScrapePendingOptions extends Omit<ScrapeOptions, "key"> {
   limit?: number;
   onProgress?: (progress: ScrapeProgress) => void;
+}
+
+export interface TaskScrapeResult extends ScrapePendingResult {
+  taskId: number;
+}
+
+export interface TaskScrapeOptions extends ScrapePendingOptions {}
+
+/**
+ * 把批量刮削跑成一条可追溯的任务: 写 tasks 表 + 每任务日志, 退出后仍能看到进度。
+ * 逐条逻辑仍复用 scrapePending, 不复制第二份循环。
+ */
+export async function scrapePendingTask(
+  rt: Runtime,
+  options: TaskScrapeOptions,
+  signal: AbortSignal,
+): Promise<{ task: TaskRow; result: TaskScrapeResult | null }> {
+  const total = pendingKeys(rt, options.limit ?? 50).length;
+  const task = createTask(rt, {
+    type: "scrape.pending",
+    payload: { limit: options.limit ?? 50, sources: options.sources ?? null },
+    total,
+  });
+
+  return runTask(rt, task, signal, async (run) => {
+    // 用外部 signal 时, run.signal 就是它
+    const result = await scrapePending(rt, {
+      ...options,
+      signal: run.signal,
+      onProgress: (progress) => {
+        run.progress(progress.index, progress.ok ? 0 : 1, progress.total);
+        run.log.write("item", progress as unknown as Record<string, unknown>);
+        options.onProgress?.(progress);
+      },
+    });
+    const failed = result.reports.filter((report) => !report.ok).length;
+    return { result: { ...result, taskId: task.id }, processed: result.reports.length, failed };
+  });
 }
 
 export interface ScrapePendingResult {

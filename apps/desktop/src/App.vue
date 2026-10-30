@@ -33,7 +33,7 @@ const info = ref<KuraAppInfo | null>(null);
 const libraries = ref<KuraLibrary[]>([]);
 const selectedId = ref<number | null>(null);
 const items = ref<KuraItem[]>([]);
-const tab = ref<"items" | "plan" | "settings">("items");
+const tab = ref<"items" | "plan" | "tasks" | "settings">("items");
 const busy = ref(false);
 const error = ref<string | null>(null);
 const note = ref<string | null>(null);
@@ -47,6 +47,7 @@ const dimension = ref("");
 const unparsed = ref<{ path: string }[] | null>(null);
 const unparsedCount = ref(0);
 const progress = ref<{ index: number; total: number; key: string; ok: boolean } | null>(null);
+const tasks = ref<KuraTask[]>([]);
 
 const config = ref<KuraConfig | null>(null);
 const apiIdInput = ref("");
@@ -86,6 +87,7 @@ async function refreshAll(): Promise<void> {
   if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
   items.value = await window.kura.items(200);
   unparsedCount.value = (await window.kura.unparsedFiles(selectedId.value ?? undefined)).length;
+  tasks.value = await window.kura.tasks(20);
   // 把当前模板反查成维度, 让下拉框显示"现在是什么"
   const current = libraries.value.find((library) => library.id === selectedId.value);
   const matched = info.value?.dimensions.find((item) => item.template === current?.template);
@@ -155,6 +157,14 @@ function toggle(key: string): void {
 
 function toggleAll(): void {
   picked.value = picked.value.length === items.value.length ? [] : items.value.map((item) => item.key);
+}
+
+async function retryTask(task: KuraTask): Promise<void> {
+  const created = await run("重试任务", () => window.kura.retryTask(task.id));
+  if (created) {
+    await refreshAll();
+    note.value = `已重新入队 #${created.id} —— 用「刮削待处理」继续`;
+  }
 }
 
 async function toggleUnparsed(): Promise<void> {
@@ -359,6 +369,7 @@ async function testDmm(): Promise<void> {
         <nav class="tabs">
           <button type="button" :class="{ on: tab === 'items' }" @click="tab = 'items'">条目</button>
           <button type="button" :class="{ on: tab === 'plan' }" @click="tab = 'plan'">整理预览</button>
+          <button type="button" :class="{ on: tab === 'tasks' }" @click="tab = 'tasks'">任务</button>
           <button type="button" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">设置</button>
           <span class="spacer" />
           <span v-if="progress" class="progress">
@@ -537,6 +548,39 @@ async function testDmm(): Promise<void> {
               </template>
             </div>
           </template>
+        </div>
+
+        <!-- 任务 -->
+        <div v-else-if="tab === 'tasks'" class="pane">
+          <p class="muted">批量操作会留下记录；关掉软件后仍能看到跑到哪、并重试。</p>
+          <table>
+            <thead>
+              <tr><th>#</th><th>类型</th><th>状态</th><th>进度</th><th>失败</th><th>备注</th><th /></tr>
+            </thead>
+            <tbody>
+              <tr v-for="task in tasks" :key="task.id">
+                <td class="mono">{{ task.id }}</td>
+                <td>{{ task.type }}</td>
+                <td :class="`st-${task.status}`">{{ task.status }}</td>
+                <td class="mono">{{ task.processed }}/{{ task.total }}</td>
+                <td class="mono">{{ task.failed }}</td>
+                <td class="muted">{{ task.error ?? "—" }}</td>
+                <td>
+                  <button
+                    v-if="['interrupted', 'failed', 'cancelled', 'done'].includes(task.status)"
+                    type="button"
+                    :disabled="busy"
+                    @click="retryTask(task)"
+                  >
+                    重试
+                  </button>
+                </td>
+              </tr>
+              <tr v-if="tasks.length === 0">
+                <td colspan="7" class="muted">还没有任务记录。</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
 
         <!-- 设置 -->
@@ -841,6 +885,17 @@ button:disabled {
 
 .spacer {
   flex: 1;
+}
+
+.st-running {
+  color: var(--warn);
+}
+.st-done {
+  color: var(--ok);
+}
+.st-interrupted,
+.st-failed {
+  color: #ff7b72;
 }
 
 .progress {

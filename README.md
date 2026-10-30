@@ -105,6 +105,18 @@ kura translate --pending             # 补历史条目
 
 任何 OpenAI 兼容端点都行(DeepSeek / 通义 / Ollama / LM Studio)。译文缓存独立在 `<数据目录>/translations.db`,删掉即重翻。
 
+## 任务与日志
+
+批量操作会留下一条任务记录（进度、失败数、中断状态），关掉软件后仍能查到并重试：
+
+```bash
+kura task list              # 最近的任务
+kura task show 3            # 详情 + 日志文件路径
+kura task retry 3           # 重新入队（用 scrape --pending 继续）
+```
+
+日志在 `<数据目录>/logs/tasks/*.jsonl`（JSONL，已脱敏），GUI 的「任务」页也能看并点重试。
+
 ## 手动改字段与锁定
 
 ```bash

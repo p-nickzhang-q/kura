@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { openDb, type Db, type DbInfo } from "./db/driver";
 import { migrate } from "./db/schema";
 import { loadSettings, type Settings } from "./config";
+import { recoverInterrupted } from "./tasks/queue";
 import { resolvePaths, type Paths } from "./paths";
 
 /**
@@ -33,7 +34,17 @@ export async function openRuntime(opts: RuntimeOptions = {}): Promise<Runtime> {
   const { db, info } = await openDb(paths.dbFile);
   try {
     const schemaVersion = migrate(db);
-    return { paths, db, dbInfo: info, schemaVersion, settings: loadSettings(paths), close: () => db.close() };
+    const runtime: Runtime = {
+      paths,
+      db,
+      dbInfo: info,
+      schemaVersion,
+      settings: loadSettings(paths),
+      close: () => db.close(),
+    };
+    // 上次被强杀的任务会停在 running, 这里改成 interrupted, 否则界面上永远显示"还在跑"。
+    recoverInterrupted(runtime);
+    return runtime;
   } catch (err) {
     db.close();
     throw err;

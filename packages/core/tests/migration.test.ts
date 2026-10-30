@@ -22,13 +22,15 @@ describe("迁移", () => {
     const { db } = await openDb(dbFile);
     try {
       const version = migrate(db);
-      expect(version).toBe(5);
+      expect(version).toBe(6);
 
       const columns = db.all<{ name: string }>("pragma table_info(libraries)").map((row) => row.name);
       expect(columns).toContain("organize_enabled");
 
       const itemColumns = db.all<{ name: string }>("pragma table_info(items)").map((row) => row.name);
       expect(itemColumns).toContain("title_original");
+      const taskColumns = db.all<{ name: string }>("pragma table_info(tasks)").map((row) => row.name);
+      expect(taskColumns).toContain("owner_pid");
       expect(itemColumns).toContain("plot_original");
 
       db.run("insert into libraries (name, root) values ('主库', '/media')");
@@ -57,7 +59,7 @@ describe("迁移", () => {
       db.run("insert into libraries (name, root) values ('老库', '/old')");
       db.exec("pragma user_version = 3");
 
-      expect(migrate(db)).toBe(5);
+      expect(migrate(db)).toBe(6);
       const row = db.get<{ name: string; organize_enabled: number }>(
         "select name, organize_enabled from libraries",
       );
@@ -72,8 +74,8 @@ describe("迁移", () => {
     const { db } = await openDb(dbFile);
     try {
       migrate(db);
-      expect(migrate(db)).toBe(5);
-      expect(migrate(db)).toBe(5);
+      expect(migrate(db)).toBe(6);
+      expect(migrate(db)).toBe(6);
     } finally {
       db.close();
     }
