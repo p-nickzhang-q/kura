@@ -70,6 +70,17 @@ describe("迁移", () => {
     }
   });
 
+  test("拒绝用旧版打开新版建的库 (降级保护)", async () => {
+    const { db } = await openDb(dbFile);
+    try {
+      migrate(db);
+      db.exec("pragma user_version = 99");
+      expect(() => migrate(db)).toThrow(/更新的版本建的/);
+    } finally {
+      db.close();
+    }
+  });
+
   test("重复 migrate 是幂等的", async () => {
     const { db } = await openDb(dbFile);
     try {

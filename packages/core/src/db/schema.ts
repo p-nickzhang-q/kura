@@ -1,5 +1,6 @@
 import type { Db } from "./driver";
 import { backfillActors } from "./actors";
+import { AppError, EXIT } from "../exit";
 
 /**
  * 迁移用 `pragma user_version` 递增, 不引入迁移框架。
@@ -151,6 +152,15 @@ const AFTER_MIGRATIONS: Record<number, (db: Db) => void> = {
 export function migrate(db: Db): number {
   const row = db.get<{ user_version: number }>("pragma user_version");
   const from = row?.user_version ?? 0;
+
+  // 降级: 装了旧版去开新版建的库。旧代码不认识新列, 继续跑会写出半残数据 —— 宁可拒绝。
+  if (from > MIGRATIONS.length) {
+    throw new AppError(
+      `数据库是这个程序更新的版本建的 (schema v${from}, 当前支持到 v${MIGRATIONS.length})。请装回新版, 不要用旧版打开。`,
+      EXIT.NEEDS_INPUT,
+      { schemaVersion: from, supported: MIGRATIONS.length },
+    );
+  }
 
   for (let v = from; v < MIGRATIONS.length; v++) {
     db.exec("begin");
