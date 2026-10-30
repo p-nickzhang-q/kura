@@ -80,6 +80,8 @@ onMounted(async () => {
   });
   unsubscribeProgress = window.kura.onScrapeProgress((update) => {
     progress.value = update;
+    // 每 5 条刷一次当前页: 刮到的结果立刻可见, 又不会每条都去查库。
+    if (update.index > 0 && update.index % 5 === 0) void refreshItems();
   });
   await refreshAll();
 });
@@ -462,9 +464,10 @@ async function testDmm(): Promise<void> {
               共 {{ itemTotal }} 条 · 待刮削 {{ pendingTotal }}
               <template v-if="exhaustedTotal > 0"> · 已达上限 {{ exhaustedTotal }}（用 --retry-failed 重试）</template>
             </span>
-            <button type="button" :disabled="busy || page === 0" @click="goPage(page - 1)">‹</button>
+            <!-- 翻页是只读操作, 不该被长任务锁住: 刮削 200 条要十几分钟, 期间连看下一页都不行毫无道理 -->
+            <button type="button" :disabled="page === 0" @click="goPage(page - 1)">‹</button>
             <span class="muted">{{ page + 1 }}/{{ pageCount }}</span>
-            <button type="button" :disabled="busy || page >= pageCount - 1" @click="goPage(page + 1)">›</button>
+            <button type="button" :disabled="page >= pageCount - 1" @click="goPage(page + 1)">›</button>
             <button type="button" :disabled="busy || picked.length === 0" @click="scrapePicked">
               刮削选中 ({{ picked.length }})
             </button>
