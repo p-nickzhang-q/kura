@@ -10,6 +10,7 @@ import {
   getItem,
   isSiteKey,
   listItems,
+  listFiles,
   listLibraries,
   organize,
   parseFieldList,
@@ -424,6 +425,37 @@ export const COMMANDS: Command[] = [
     },
     render(data: { key: string; path: string; size: number }) {
       return `${data.key} 海报已缓存\n  ${data.path} (${Math.round(data.size / 1024)} KB)`;
+    },
+  },
+
+  {
+    name: "file",
+    summary: "文件: list [--library 库] [--unparsed] [--limit N] —— 看索引里的文件(含未识别)",
+    needsDb: true,
+    args: [
+      { name: "action", type: "string", description: "目前只有 list", positional: true, default: "list" },
+      { name: "library", type: "string", description: "只看某个库" },
+      { name: "unparsed", type: "boolean", description: "只看认不出番号的文件", default: false },
+      { name: "limit", type: "number", description: "条数", default: 200 },
+    ],
+    async run(ctx, args) {
+      const action = args.positionals.action ?? "list";
+      if (action !== "list") throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
+
+      const libraryRef = typeof args.options.library === "string" ? args.options.library : null;
+      const library = libraryRef ? requireLibrary(ctx, libraryRef) : null;
+      const files = listFiles(ctx.rt!, {
+        libraryId: library?.id,
+        unparsedOnly: Boolean(args.options.unparsed),
+        limit: Number(args.options.limit ?? 200),
+      });
+      return { count: files.length, files };
+    },
+    render(data: { count: number; files: { path: string; number: string | null }[] }) {
+      if (data.count === 0) return "没有匹配的文件。";
+      return data.files
+        .map((file) => `${(file.number ?? "(未识别)").padEnd(14)} ${file.path}`)
+        .join("\n");
     },
   },
 

@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld("kura", {
   scrapePending: (limit) => ipcRenderer.invoke("scrape:pending", { limit }),
   items: (limit) => ipcRenderer.invoke("item:list", { limit }),
   item: (number) => ipcRenderer.invoke("item:get", number),
+  unparsedFiles: (libraryId) => ipcRenderer.invoke("files:unparsed", { libraryId }),
   updateItem: (input) => ipcRenderer.invoke("item:update", input),
   scrapeKeys: (keys) => ipcRenderer.invoke("scrape:keys", { keys }),
   fetchPoster: (key) => ipcRenderer.invoke("resource:fetch", { key }),

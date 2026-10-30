@@ -37,6 +37,8 @@ kura scan 主库
 kura scrape ABC-123 --json
 kura organize 主库              # 只看计划
 kura organize 主库 --apply      # 真的移动
+
+kura file list --unparsed       # 扫到了但认不出番号的文件(不会进刮削)
 ```
 
 ## 整理维度

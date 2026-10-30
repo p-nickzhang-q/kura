@@ -3,6 +3,7 @@ import { extname, join } from "node:path";
 import { detectContentType, extractNumber, parseFileInfo } from "../domain/identify";
 import type { Library } from "../domain/materialize";
 import { parsePhase, stringify, type MediaFileRow } from "../db/rows";
+import type { FileInfo } from "../domain/types";
 import type { Runtime } from "../runtime";
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mkv", ".avi", ".wmv", ".mov", ".ts", ".m2ts", ".iso", ".rmvb", ".flv", ".webm", ".m4v"]);
@@ -121,6 +122,46 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
   }
 
   return { libraryId: library.id, root: library.root, dryRun, counts, durationMs: Date.now() - started };
+}
+
+export interface MediaFileView {
+  path: string;
+  number: string | null;
+  libraryId: number;
+  size: number;
+  mtimeMs: number;
+  phase: FileInfo;
+}
+
+/**
+ * 索引里的文件清单。`unparsedOnly` 就是"扫到了但认不出番号"的那批 ——
+ * 它们不会有 items 行, 所以在条目列表里永远看不到, 必须单独给入口。
+ */
+export function listFiles(
+  rt: Runtime,
+  options: { libraryId?: number; unparsedOnly?: boolean; limit?: number } = {},
+): MediaFileView[] {
+  const where: string[] = [];
+  const params: (number | string)[] = [];
+  if (options.libraryId !== undefined) {
+    where.push("library_id = ?");
+    params.push(options.libraryId);
+  }
+  if (options.unparsedOnly) where.push("number is null");
+
+  const sql = `select path, number, library_id, size, mtime_ms, phase from media_files
+    ${where.length > 0 ? `where ${where.join(" and ")}` : ""}
+    order by path limit ?`;
+  params.push(options.limit ?? 200);
+
+  return rt.db.all<MediaFileRow & { library_id: number; size: number; mtime_ms: number }>(sql, params).map((row) => ({
+    path: row.path,
+    number: row.number,
+    libraryId: row.library_id,
+    size: row.size,
+    mtimeMs: row.mtime_ms,
+    phase: parsePhase(row.phase),
+  }));
 }
 
 /** 供 GUI / 排查用: 某个文件当前登记到的相位。 */

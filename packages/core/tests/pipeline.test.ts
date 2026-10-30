@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createLibrary, getItem } from "../src/index";
 import { openRuntime } from "../src/runtime";
 import { createRegistry, defaultSources, fixtureSource } from "../src/sources";
+import { listFiles } from "../src/tasks/scan";
 import { scan } from "../src/tasks/scan";
 import { scrape } from "../src/tasks/scrape";
 import { organize } from "../src/tasks/organize";
@@ -92,6 +93,30 @@ describe("scan → scrape → organize", () => {
       expect(after.counts.removed).toBe(0);
       expect(after.counts.added).toBe(0);
       expect(after.counts.unchanged).toBe(1);
+    } finally {
+      rt.close();
+    }
+  });
+
+  test("认不出番号的文件留在索引里, 可按 unparsed 列出", async () => {
+    const rt = await openRuntime({ dataDir });
+    try {
+      const library = createLibrary(rt.db, { name: "主库", root: libraryRoot });
+      await writeFile(join(libraryRoot, "找不到番号的片子.mkv"), "v", "utf8");
+      await writeFile(join(libraryRoot, "2024-01-01 家庭录像.mp4"), "v", "utf8");
+
+      const report = await scan(rt, { library });
+      expect(report.counts.unparsed).toBe(2);
+
+      const all = listFiles(rt, { libraryId: library.id });
+      expect(all).toHaveLength(3);
+
+      const unparsed = listFiles(rt, { libraryId: library.id, unparsedOnly: true });
+      expect(unparsed).toHaveLength(2);
+      expect(unparsed.every((file) => file.number === null)).toBe(true);
+      expect(unparsed.map((file) => file.path).sort()).toEqual(
+        [join(libraryRoot, "2024-01-01 家庭录像.mp4"), join(libraryRoot, "找不到番号的片子.mkv")].sort(),
+      );
     } finally {
       rt.close();
     }

@@ -26,6 +26,7 @@ import {
   findLibrary,
   getItem,
   listItems,
+  listFiles,
   listLibraries,
   openRuntime,
   organize,
@@ -231,6 +232,10 @@ function registerIpc(): void {
 
   ipcMain.handle("item:list", (_event, input: { limit?: number } = {}) =>
     listItems(mustRuntime(), { limit: input.limit ?? 100 }),
+  );
+
+  ipcMain.handle("files:unparsed", (_event, input: { libraryId?: number } = {}) =>
+    listFiles(mustRuntime(), { libraryId: input.libraryId, unparsedOnly: true, limit: 500 }),
   );
 
   ipcMain.handle("item:get", (_event, number: string) => getItem(mustRuntime(), number));

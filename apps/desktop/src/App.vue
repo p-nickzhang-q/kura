@@ -44,6 +44,8 @@ const confirmApply = ref(false);
 const picked = ref<string[]>([]);
 const detail = ref<KuraItem | null>(null);
 const dimension = ref("");
+const unparsed = ref<{ path: string }[] | null>(null);
+const unparsedCount = ref(0);
 
 const config = ref<KuraConfig | null>(null);
 const apiIdInput = ref("");
@@ -75,6 +77,7 @@ async function refreshAll(): Promise<void> {
   libraries.value = await window.kura.libraries();
   if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
   items.value = await window.kura.items(200);
+  unparsedCount.value = (await window.kura.unparsedFiles(selectedId.value ?? undefined)).length;
   // 把当前模板反查成维度, 让下拉框显示"现在是什么"
   const current = libraries.value.find((library) => library.id === selectedId.value);
   const matched = info.value?.dimensions.find((item) => item.template === current?.template);
@@ -135,6 +138,15 @@ function toggle(key: string): void {
 
 function toggleAll(): void {
   picked.value = picked.value.length === items.value.length ? [] : items.value.map((item) => item.key);
+}
+
+async function toggleUnparsed(): Promise<void> {
+  if (unparsed.value) {
+    unparsed.value = null;
+    return;
+  }
+  const files = await run("读取未识别文件", () => window.kura.unparsedFiles(selectedId.value ?? undefined));
+  if (files) unparsed.value = files;
 }
 
 async function openDetail(item: KuraItem): Promise<void> {
@@ -350,6 +362,14 @@ async function testDmm(): Promise<void> {
               全选
             </label>
             <span class="muted">已选 {{ picked.length }}</span>
+            <button
+              type="button"
+              :disabled="busy || unparsedCount === 0"
+              :title="unparsedCount === 0 ? '没有未识别的文件' : '扫描到但认不出番号的文件'"
+              @click="toggleUnparsed"
+            >
+              未识别 ({{ unparsedCount }})
+            </button>
             <span class="spacer" />
             <button type="button" :disabled="busy || picked.length === 0" @click="scrapePicked">
               刮削选中 ({{ picked.length }})
@@ -357,6 +377,16 @@ async function testDmm(): Promise<void> {
             <button type="button" :disabled="busy || picked.length === 0" @click="postersPicked">
               下载海报 ({{ picked.length }})
             </button>
+          </div>
+
+          <div v-if="unparsed" class="unparsed">
+            <div class="unparsed-head">
+              <span>未识别文件 {{ unparsed.length }} 个（没有番号，不会进入刮削）</span>
+              <button class="ghost" type="button" @click="unparsed = null">×</button>
+            </div>
+            <ul>
+              <li v-for="file in unparsed" :key="file.path" class="mono">{{ file.path }}</li>
+            </ul>
           </div>
 
           <div class="split">
@@ -809,6 +839,38 @@ button:disabled {
   align-items: center;
   gap: 10px;
   font-size: 13px;
+}
+
+.unparsed {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 10px 12px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.unparsed-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  color: var(--warn);
+  margin-bottom: 6px;
+}
+
+.unparsed ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.unparsed li {
+  padding: 3px 0;
+  color: #b9c0d0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .split {
