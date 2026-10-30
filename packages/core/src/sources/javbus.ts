@@ -26,10 +26,10 @@ export function createJavbusSource(http: HttpClient): Source {
     status: "ready",
     contentTypes: ["censored", "uncensored", "fc2", "amateur"],
     requirements: () => [],
-    async fetch(key) {
-      const url = await resolveDetailUrl(http, key.value);
+    async fetch(key, ctx) {
+      const url = await resolveDetailUrl(http, key.value, ctx.signal);
       if (!url) return null;
-      const html = await http.getText(url, { headers: SITE_HEADERS });
+      const html = await http.getText(url, { headers: SITE_HEADERS, signal: ctx.signal });
       return parseDetail(html, url);
     },
   };
@@ -85,12 +85,12 @@ export function selectCandidateIndex(found: string[], query: string): number | n
   return loose.length === 1 ? loose[0]! : null;
 }
 
-async function resolveDetailUrl(http: HttpClient, number: string): Promise<string | null> {
+async function resolveDetailUrl(http: HttpClient, number: string, signal?: AbortSignal): Promise<string | null> {
   for (const variant of numberVariants(number)) {
     // 1) 直达详情页
     const direct = `${JAVBUS_BASE}/${encodeURIComponent(variant)}`;
     try {
-      const html = await http.getText(direct, { headers: SITE_HEADERS });
+      const html = await http.getText(direct, { headers: SITE_HEADERS, signal });
       if (isDetailPage(html)) return direct;
     } catch (err) {
       if (!isNotFound(err)) throw err;
@@ -99,7 +99,7 @@ async function resolveDetailUrl(http: HttpClient, number: string): Promise<strin
     // 2) 回退站内检索, 并按番号逐条比对
     const searchUrl = `${JAVBUS_BASE}/search/${encodeURIComponent(variant)}&type=&parent=ce`;
     try {
-      const html = await http.getText(searchUrl, { headers: SITE_HEADERS });
+      const html = await http.getText(searchUrl, { headers: SITE_HEADERS, signal });
       const candidates = parseSearch(html);
       const index = selectCandidateIndex(
         candidates.map((candidate) => candidate.number),

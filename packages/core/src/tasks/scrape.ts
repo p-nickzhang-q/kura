@@ -16,6 +16,8 @@ export interface ScrapeOptions {
   dryRun?: boolean;
   /** 传了就在落库前翻译 title/plot; 失败保留原值, 不影响刮削。 */
   translator?: Translator | null;
+  /** 用户取消: 传给每个请求, 已发出的请求会立刻中断。 */
+  signal?: AbortSignal;
 }
 
 export interface ScrapeReport {
@@ -50,8 +52,10 @@ export async function scrape(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRe
     );
   }
 
+  if (opts.signal?.aborted) throw new AppError("已取消", EXIT.RETRYABLE);
+
   const settled = await Promise.allSettled(
-    usable.map((source) => source.fetch(opts.key, { fixturesDir: opts.fixturesDir ?? null })),
+    usable.map((source) => source.fetch(opts.key, { fixturesDir: opts.fixturesDir ?? null, signal: opts.signal })),
   );
 
   const records: SourceRecord[] = [];
@@ -162,6 +166,62 @@ function persist(rt: Runtime, metadata: Metadata, records: SourceRecord[]): void
 }
 
 /** 待刮削 = 有番号但还没有标题的条目。 */
+export interface ScrapeProgress {
+  index: number;
+  total: number;
+  key: string;
+  ok: boolean;
+  filled: number;
+  error?: string;
+}
+
+export interface ScrapePendingOptions extends Omit<ScrapeOptions, "key"> {
+  limit?: number;
+  onProgress?: (progress: ScrapeProgress) => void;
+}
+
+export interface ScrapePendingResult {
+  total: number;
+  reports: ScrapeProgress[];
+  cancelled: boolean;
+}
+
+/**
+ * 批量刮削。逐条落库、逐条回报进度, 并在每条之间检查取消信号。
+ * CLI 与 GUI 都走这里 —— 之前两边各写一份循环, 进度与取消的语义必然会漂。
+ */
+export async function scrapePending(
+  rt: Runtime,
+  options: ScrapePendingOptions,
+): Promise<ScrapePendingResult> {
+  const keys = pendingKeys(rt, options.limit ?? 50);
+  const reports: ScrapeProgress[] = [];
+  // 先报总数: 否则第一条请求的几秒里界面只能显示"准备中"。
+  options.onProgress?.({ index: 0, total: keys.length, key: "", ok: true, filled: 0 });
+
+  for (const [index, key] of keys.entries()) {
+    if (options.signal?.aborted) return { total: keys.length, reports, cancelled: true };
+
+    let progress: ScrapeProgress;
+    try {
+      const report = await scrape(rt, { ...options, key });
+      progress = { index: index + 1, total: keys.length, key: key.value, ok: true, filled: report.filled.length };
+    } catch (err) {
+      progress = {
+        index: index + 1,
+        total: keys.length,
+        key: key.value,
+        ok: false,
+        filled: 0,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    reports.push(progress);
+    options.onProgress?.(progress);
+  }
+
+  return { total: keys.length, reports, cancelled: false };
+}
 export function pendingKeys(rt: Runtime, limit = 50): ItemKey[] {
   const rows = rt.db.all<{ number: string; content_type: string }>(
     "select number, content_type from items where title is null or title = '' order by number limit ?",

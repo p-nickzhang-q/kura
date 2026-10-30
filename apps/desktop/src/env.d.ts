@@ -124,7 +124,13 @@ interface KuraBridge {
   scan(libraryId: number): Promise<KuraScanReport>;
   setLibraryTemplate(libraryId: number, dimension: string): Promise<KuraLibrary>;
   setLibraryOrganize(libraryId: number, enabled: boolean): Promise<KuraLibrary>;
-  scrapePending(limit?: number): Promise<KuraScrapeBatch>;
+  scrapePending(limit?: number): Promise<{
+    total: number;
+    cancelled: boolean;
+    reports: { index: number; total: number; key: string; ok: boolean; filled: number; error?: string }[];
+  }>;
+  cancelScrape(): Promise<{ cancelled: boolean }>;
+  onScrapeProgress(callback: (progress: { index: number; total: number; key: string; ok: boolean; filled: number; error?: string }) => void): () => void;
   items(limit?: number): Promise<KuraItem[]>;
   item(number: string): Promise<KuraItem | null>;
   unparsedFiles(libraryId?: number): Promise<{ path: string; number: string | null; libraryId: number }[]>;

@@ -8,3 +8,4 @@ release/
 *.db-shm
 .DS_Store
 .vite/
+demo-data/

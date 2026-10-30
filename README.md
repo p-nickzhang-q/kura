@@ -35,6 +35,7 @@
 kura library add 主库 ~/Videos
 kura scan 主库
 kura scrape ABC-123 --json
+kura scrape --pending            # 批量: 逐条进度打到 stderr, Ctrl-C 可中断
 kura organize 主库              # 只看计划
 kura organize 主库 --apply      # 真的移动
 
@@ -128,6 +129,10 @@ WSL 里指向宿主机 Clash 要用网关地址,`auto` 会自动探测。
 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`。
 
 ```bash
+# 造一批测试数据(假文件 + 离线样本), 不碰真实站点
+node scripts/make-demo-data.mjs --count 40 --out ./demo-data
+node scripts/make-demo-data.mjs --numbers "SSIS-001,MIDV-001" --out ./demo-real   # 假文件 + 真站点
+
 bun run cli --help               # 零 install 跑 CLI
 pnpm install && pnpm dev         # 桌面端
 bun test                         # 111 个用例, 全部离线

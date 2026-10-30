@@ -85,6 +85,10 @@ kura source test dmm --json
 kura doctor --json
 ```
 
+**长时间批量任务**: `scrape --pending` 会逐条把进度写到 **stderr**(`[3/200] ABC-123 ✓ 11 字段`),
+stdout 仍只有最后那一个结果信封。Ctrl-C 会中断在途请求并提前收尾, 结果里 `cancelled: true`、`count` 为已完成条数,
+退出码仍是 `0`(主动停止不是错误)。需要机器可读的逐条进度时加 `--stream`(JSONL 事件)。
+
 `scrape` 的失败语义:
 - 有任一来源拿到数据 → 正常返回, 失败的来源进 `failures`(不中断);
 - **一条都没拿到** → 不落空条目: 缺凭据给 `4`, 网络/站点给 `3`, 确实没有这条给 `5`。

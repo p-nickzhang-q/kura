@@ -27,6 +27,7 @@ import {
   updateLibraryOrganize,
   openTranslator,
   pendingTranslationKeys,
+  scrapePending,
   resolveLlm,
   translateEnabled,
   translateItem,
@@ -242,16 +243,42 @@ export const COMMANDS: Command[] = [
         scrape(ctx.rt!, { key, registry, fixturesDir, sources, dryRun, translator });
 
       if (args.options.pending) {
-        const keys = pendingKeys(ctx.rt!, Number(args.options.limit ?? 50));
-        const reports = [];
-        for (const key of keys) {
-          try {
-            reports.push(await runOne(key));
-          } catch (err) {
-            reports.push({ key: key.value, error: err instanceof Error ? err.message : String(err) });
-          }
+        // Ctrl-C 不再静默杀进程: 先中断当前请求, 再把已完成的条数报出来。
+        const controller = new AbortController();
+        const onInterrupt = () => {
+          ctx.out.log("收到中断, 正在停止…");
+          controller.abort();
+        };
+        process.once("SIGINT", onInterrupt);
+
+        try {
+          const result = await scrapePending(ctx.rt!, {
+            registry,
+            fixturesDir,
+            sources,
+            translator,
+            dryRun,
+            signal: controller.signal,
+            limit: Number(args.options.limit ?? 50),
+            onProgress: (progress) => {
+              ctx.out.log(
+                progress.ok
+                  ? `[${progress.index}/${progress.total}] ${progress.key} ✓ ${progress.filled} 字段`
+                  : `[${progress.index}/${progress.total}] ${progress.key} ✗ ${progress.error}`,
+              );
+              ctx.out.event({ event: "scrape", ...progress });
+            },
+          });
+          return {
+            pending: true,
+            total: result.total,
+            cancelled: result.cancelled,
+            count: result.reports.length,
+            reports: result.reports,
+          };
+        } finally {
+          process.off("SIGINT", onInterrupt);
         }
-        return { pending: true, count: reports.length, reports };
       }
 
       const raw = args.positionals.number;
@@ -284,11 +311,22 @@ export const COMMANDS: Command[] = [
         metadata?: { title?: string; actors?: string[] } | null;
       };
       if ("reports" in (data as object)) {
-        const batch = data as { count: number; reports: { key: string; error?: string; filled?: string[] }[] };
+        const batch = data as {
+          count: number;
+          total?: number;
+          cancelled?: boolean;
+          reports: { key: string; ok?: boolean; error?: string; filled?: number }[];
+        };
+        const failed = batch.reports.filter((report) => report.ok === false).length;
+        const head = batch.cancelled
+          ? `已取消: 完成 ${batch.count}/${batch.total ?? "?"} 条`
+          : `批量刮削 ${batch.count} 条, 失败 ${failed} 条`;
         return [
-          `批量刮削 ${batch.count} 条`,
+          head,
           ...batch.reports.map((report) =>
-            report.error ? `  ✗ ${report.key}: ${report.error}` : `  ✓ ${report.key} (${report.filled?.length ?? 0} 字段)`,
+            report.ok === false
+              ? `  ✗ ${report.key}: ${report.error}`
+              : `  ✓ ${report.key} (${report.filled ?? 0} 字段)`,
           ),
         ].join("\n");
       }

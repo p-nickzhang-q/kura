@@ -51,12 +51,12 @@ export { filePhase, listFiles, scan } from "./tasks/scan";
 export type { MediaFileView } from "./tasks/scan";
 export type { ScanEvent, ScanOptions, ScanReport } from "./tasks/scan";
 
-export { getItem, listItems, pendingKeys, scrape } from "./tasks/scrape";
+export { getItem, listItems, pendingKeys, scrape, scrapePending } from "./tasks/scrape";
 export { pendingTranslationKeys, translateItem } from "./tasks/translate";
 export type { TranslateReport } from "./tasks/translate";
 export { buildSystemPrompt, chatEndpoint, createTranslator, hasKana, needsTranslation, openTranslator, TranslationCache } from "./llm/translate";
 export type { LlmConfig, Translator } from "./llm/translate";
-export type { ItemView, ScrapeOptions, ScrapeReport } from "./tasks/scrape";
+export type { ItemView, ScrapeOptions, ScrapePendingOptions, ScrapePendingResult, ScrapeProgress, ScrapeReport } from "./tasks/scrape";
 
 export { parseFieldList, parseListValue, updateItem } from "./tasks/item";
 export type { UpdateItemOptions } from "./tasks/item";

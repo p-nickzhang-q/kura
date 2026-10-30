@@ -33,6 +33,7 @@ import {
   pendingKeys,
   scan,
   scrape,
+  scrapePending,
   type Library,
   type Runtime,
   type ScanEvent,
@@ -51,6 +52,8 @@ const fixturesDir = process.env.KURA_FIXTURE_DIR ?? null;
 let runtime: Runtime | null = null;
 let win: BrowserWindow | null = null;
 let busy: string | null = null;
+/** 当前长任务的取消句柄; 停止按钮通过它中断在途请求。 */
+let currentAbort: AbortController | null = null;
 /** 设置改了就地更新, 不重建 runtime; 网络层每次按当前值构造。 */
 let settings: Settings = { dmm: { apiId: "", affiliateId: "" }, proxy: "", llm: { baseUrl: "", apiKey: "", model: "" }, translate: false };
 
@@ -103,12 +106,16 @@ function mustLibrary(id: number): Library {
 }
 
 /** 同一时刻只允许一个长任务: 扫描与整理并发只会互相拖慢, 进度条也没法用。 */
-function exclusive<T>(label: string, fn: () => Promise<T>): Promise<T> {
+async function exclusive<T>(label: string, fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
   if (busy) throw new AppError(`已有任务在进行: ${busy}`, EXIT.RETRYABLE, { busy });
   busy = label;
-  return fn().finally(() => {
+  currentAbort = new AbortController();
+  try {
+    return await fn(currentAbort.signal);
+  } finally {
     busy = null;
-  });
+    currentAbort = null;
+  }
 }
 
 async function createWindow(): Promise<void> {
@@ -205,44 +212,26 @@ function registerIpc(): void {
   );
 
   ipcMain.handle("scrape:pending", (_event, input: { limit?: number }) =>
-    exclusive("刮削", async () => {
+    exclusive("刮削", async (signal) => {
       const rt = mustRuntime();
-      const translator = await buildTranslator();
-      const keys = pendingKeys(rt, input.limit ?? 20);
-      const reports: { key: string; ok: boolean; filled: number; error?: string }[] = [];
-
-      for (const key of keys) {
-        try {
-          const report = await scrape(rt, {
-            key,
-            registry: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) }),
-            fixturesDir,
-            // 真实站点尚未实现; 有样本目录时走离线源, 否则如实报错。
-            sources: fixturesDir ? ["fixture"] : undefined,
-            translator,
-          });
-          reports.push({ key: report.key, ok: true, filled: report.filled.length });
-        } catch (err) {
-          reports.push({ key: key.value, ok: false, filled: 0, error: err instanceof Error ? err.message : String(err) });
-        }
-      }
-      return { count: reports.length, reports };
+      const result = await scrapePending(rt, {
+        registry: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) }),
+        fixturesDir,
+        sources: fixturesDir ? ["fixture"] : undefined,
+        translator: await buildTranslator(),
+        limit: input.limit ?? 20,
+        signal,
+        onProgress: (progress) => win?.webContents.send("scrape:progress", progress),
+      });
+      return result;
     }),
   );
 
-  ipcMain.handle("item:list", (_event, input: { limit?: number } = {}) =>
-    listItems(mustRuntime(), { limit: input.limit ?? 100 }),
-  );
-
-  ipcMain.handle("files:unparsed", (_event, input: { libraryId?: number } = {}) =>
-    listFiles(mustRuntime(), { libraryId: input.libraryId, unparsedOnly: true, limit: 500 }),
-  );
-
-  ipcMain.handle("item:get", (_event, number: string) => getItem(mustRuntime(), number));
-
-  ipcMain.handle("item:update", (_event, input: { key: string; pin?: string[]; unpin?: string[] }) =>
-    updateItem(mustRuntime(), { key: input.key, pin: input.pin as never, unpin: input.unpin as never }),
-  );
+  ipcMain.handle("scrape:cancel", () => {
+    const cancelled = Boolean(currentAbort);
+    currentAbort?.abort();
+    return { cancelled };
+  });
 
   ipcMain.handle("scrape:keys", (_event, input: { keys: string[] }) =>
     exclusive("刮削", async () => {

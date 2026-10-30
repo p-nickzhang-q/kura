@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("kura", {
   setLibraryTemplate: (libraryId, dimension) => ipcRenderer.invoke("library:set-template", { libraryId, dimension }),
   setLibraryOrganize: (libraryId, enabled) => ipcRenderer.invoke("library:set-organize", { libraryId, enabled }),
   scrapePending: (limit) => ipcRenderer.invoke("scrape:pending", { limit }),
+  cancelScrape: () => ipcRenderer.invoke("scrape:cancel"),
   items: (limit) => ipcRenderer.invoke("item:list", { limit }),
   item: (number) => ipcRenderer.invoke("item:get", number),
   unparsedFiles: (libraryId) => ipcRenderer.invoke("files:unparsed", { libraryId }),
@@ -22,6 +23,11 @@ contextBridge.exposeInMainWorld("kura", {
   configSet: (patch) => ipcRenderer.invoke("config:set", patch),
   testDmm: (probe) => ipcRenderer.invoke("dmm:test", probe),
   /** 返回取消订阅函数, 供组件卸载时调用。 */
+  onScrapeProgress: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on("scrape:progress", handler);
+    return () => ipcRenderer.off("scrape:progress", handler);
+  },
   onScanEvent: (callback) => {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on("scan:event", handler);

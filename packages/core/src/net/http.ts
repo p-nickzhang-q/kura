@@ -17,6 +17,8 @@ export interface RequestOptions {
   method?: string;
   /** 仅 POST 用; 序列化为 JSON。 */
   body?: unknown;
+  /** 外部取消信号(用户点停止); 与超时信号合并。 */
+  signal?: AbortSignal;
 }
 
 export interface HttpClientOptions {
@@ -167,7 +169,9 @@ export class HttpClient {
             "accept-language": "zh-CN,zh;q=0.9,ja;q=0.8,en;q=0.7",
             ...(init.headers ?? {}),
           },
-          signal: AbortSignal.timeout(this.options.timeoutMs),
+          signal: init.signal
+            ? AbortSignal.any([AbortSignal.timeout(this.options.timeoutMs), init.signal])
+            : AbortSignal.timeout(this.options.timeoutMs),
           proxy: this.options.proxy,
         });
 

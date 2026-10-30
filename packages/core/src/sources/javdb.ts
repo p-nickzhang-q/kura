@@ -26,18 +26,18 @@ export function createJavdbSource(http: HttpClient): Source {
     status: "ready",
     contentTypes: "all",
     requirements: () => [],
-    async fetch(key) {
-      const url = await findDetailUrl(http, key.value);
+    async fetch(key, ctx) {
+      const url = await findDetailUrl(http, key.value, ctx.signal);
       if (!url) return null;
-      const html = await http.getText(url, { headers: SITE_HEADERS });
+      const html = await http.getText(url, { headers: SITE_HEADERS, signal: ctx.signal });
       return parseDetail(html, url);
     },
   };
 }
 
-async function findDetailUrl(http: HttpClient, number: string): Promise<string | null> {
+async function findDetailUrl(http: HttpClient, number: string, signal?: AbortSignal): Promise<string | null> {
   const searchUrl = `${JAVDB_BASE}/search?q=${encodeURIComponent(number)}&locale=zh`;
-  const html = await http.getText(searchUrl, { headers: SITE_HEADERS });
+  const html = await http.getText(searchUrl, { headers: SITE_HEADERS, signal });
   const candidates = parseSearch(html);
   const index = selectCandidateIndex(
     candidates.map((candidate) => candidate.number),

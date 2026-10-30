@@ -46,6 +46,7 @@ const detail = ref<KuraItem | null>(null);
 const dimension = ref("");
 const unparsed = ref<{ path: string }[] | null>(null);
 const unparsedCount = ref(0);
+const progress = ref<{ index: number; total: number; key: string; ok: boolean } | null>(null);
 
 const config = ref<KuraConfig | null>(null);
 const apiIdInput = ref("");
@@ -58,6 +59,7 @@ const translateOn = ref(false);
 const dmmTest = ref<KuraDmmTest | null>(null);
 
 let unsubscribe: (() => void) | null = null;
+let unsubscribeProgress: (() => void) | null = null;
 
 const selected = computed(() => libraries.value.find((library) => library.id === selectedId.value) ?? null);
 
@@ -65,10 +67,16 @@ onMounted(async () => {
   unsubscribe = window.kura.onScanEvent((event) => {
     events.value = [event, ...events.value].slice(0, 200);
   });
+  unsubscribeProgress = window.kura.onScrapeProgress((update) => {
+    progress.value = update;
+  });
   await refreshAll();
 });
 
-onUnmounted(() => unsubscribe?.());
+onUnmounted(() => {
+  unsubscribe?.();
+  unsubscribeProgress?.();
+});
 
 async function refreshAll(): Promise<void> {
   info.value = await window.kura.info();
@@ -122,12 +130,21 @@ async function doScan(): Promise<void> {
 }
 
 async function doScrape(): Promise<void> {
+  progress.value = { index: 0, total: 0, key: "准备中", ok: true };
   const batch = await run("刮削", () => window.kura.scrapePending(20));
+  progress.value = null;
   if (batch) {
     const failed = batch.reports.filter((report) => !report.ok);
-    note.value = `刮削 ${batch.count} 条, 失败 ${failed.length} 条${failed[0]?.error ? ` (${failed[0].error})` : ""}`;
+    note.value = batch.cancelled
+      ? `已取消: 完成 ${batch.reports.length}/${batch.total} 条`
+      : `刮削 ${batch.reports.length} 条, 失败 ${failed.length} 条${failed[0]?.error ? ` (${failed[0].error})` : ""}`;
     await refreshAll();
   }
+}
+
+async function cancelScrape(): Promise<void> {
+  await window.kura.cancelScrape();
+  note.value = "正在停止…已发出的请求会立刻中断";
 }
 
 /* ---------- 条目选择与详情 ---------- */
@@ -344,7 +361,11 @@ async function testDmm(): Promise<void> {
           <button type="button" :class="{ on: tab === 'plan' }" @click="tab = 'plan'">整理预览</button>
           <button type="button" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">设置</button>
           <span class="spacer" />
-          <span v-if="busy" class="muted">进行中…</span>
+          <span v-if="progress" class="progress">
+            {{ progress.index }}/{{ progress.total || "?" }} · {{ progress.key }}
+          </span>
+          <button v-if="progress" type="button" class="danger" @click="cancelScrape">停止</button>
+          <span v-else-if="busy" class="muted">进行中…</span>
         </nav>
 
         <p v-if="error" class="error">{{ error }}</p>
@@ -820,6 +841,16 @@ button:disabled {
 
 .spacer {
   flex: 1;
+}
+
+.progress {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--warn);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pane {

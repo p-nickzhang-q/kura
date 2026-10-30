@@ -3,6 +3,8 @@ import type { ContentType, ItemKey, RawFields } from "../domain/types";
 export interface SourceContext {
   /** 离线样本目录; 只有 fixture 源使用。 */
   fixturesDir: string | null;
+  /** 外部取消信号, 供会发请求的来源透传给 HttpClient。 */
+  signal?: AbortSignal;
 }
 
 /**
