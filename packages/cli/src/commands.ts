@@ -10,6 +10,8 @@ import {
   getItem,
   isSiteKey,
   listItems,
+  countItems,
+  countPending,
   listFiles,
   listLibraries,
   organize,
@@ -524,6 +526,7 @@ export const COMMANDS: Command[] = [
       { name: "fields", type: "string", description: "lock/unlock 的字段, 逗号分隔", positional: true },
       { name: "type", type: "string", description: "按类型筛选 (list)" },
       { name: "limit", type: "number", description: "条数 (list)", default: 20 },
+      { name: "offset", type: "number", description: "跳过条数 (list)", default: 0 },
       { name: "title", type: "string", description: "set: 标题" },
       { name: "plot", type: "string", description: "set: 简介" },
       { name: "studio", type: "string", description: "set: 片商" },
@@ -548,11 +551,13 @@ export const COMMANDS: Command[] = [
       }
 
       if (action === "list") {
+        const type = typeof args.options.type === "string" ? args.options.type : undefined;
         const items = listItems(ctx.rt!, {
           limit: Number(args.options.limit ?? 20),
-          type: typeof args.options.type === "string" ? args.options.type : undefined,
+          offset: Number(args.options.offset ?? 0),
+          type,
         });
-        return { items };
+        return { items, total: countItems(ctx.rt!, { type }), pending: countPending(ctx.rt!) };
       }
 
       if (action === "set" || action === "lock" || action === "unlock") {
@@ -615,13 +620,16 @@ export const COMMANDS: Command[] = [
           .join("\n");
       }
       const items = data.items ?? [];
+      const total = (data as { total?: number }).total;
+      const pending = (data as { pending?: number }).pending ?? 0;
       if (items.length === 0) return "没有条目。先 `kura scan <库>`。";
-      return items
-        .map((item) => {
-          const pinned = ((item.pinned as string[] | undefined) ?? []).length > 0 ? "🔒" : "  ";
-          return `${pinned} ${String(item.number).padEnd(13)} ${String(item.contentType).padEnd(10)} ${item.title ?? "(未刮削)"}`;
-        })
-        .join("\n");
+
+      const lines = items.map((item) => {
+        const pinned = ((item.pinned as string[] | undefined) ?? []).length > 0 ? "🔒" : "  ";
+        return `${pinned} ${String(item.number).padEnd(13)} ${String(item.contentType).padEnd(10)} ${item.title ?? "(未刮削)"}`;
+      });
+      if (total !== undefined) lines.push(`— 共 ${total} 条, 待刮削 ${pending} 条 —`);
+      return lines.join("\n");
     },
   },
 

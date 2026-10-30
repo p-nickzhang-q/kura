@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, net, session } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, session, shell } from "electron";
 import { basename, join } from "node:path";
 import {
   AppError,
@@ -26,7 +26,10 @@ import {
   findLibrary,
   getItem,
   listItems,
+  countItems,
+  countPending,
   listFiles,
+  countFiles,
   listTasks,
   retryTask,
   listLibraries,
@@ -235,13 +238,35 @@ function registerIpc(): void {
     return { cancelled };
   });
 
-  ipcMain.handle("item:list", (_event, input: { limit?: number } = {}) =>
-    listItems(mustRuntime(), { limit: input.limit ?? 100 }),
+  ipcMain.handle("item:list", (_event, input: { limit?: number; offset?: number; type?: string } = {}) => {
+    const rt = mustRuntime();
+    return {
+      items: listItems(rt, { limit: input.limit ?? 100, offset: input.offset ?? 0, type: input.type }),
+      total: countItems(rt, { type: input.type }),
+      pending: countPending(rt),
+    };
+  });
+
+  ipcMain.handle(
+    "files:unparsed",
+    (_event, input: { libraryId?: number; limit?: number; offset?: number } = {}) => {
+      const rt = mustRuntime();
+      return {
+        files: listFiles(rt, {
+          libraryId: input.libraryId,
+          unparsedOnly: true,
+          limit: input.limit ?? 100,
+          offset: input.offset ?? 0,
+        }),
+        total: countFiles(rt, { libraryId: input.libraryId, unparsedOnly: true }),
+      };
+    },
   );
 
-  ipcMain.handle("files:unparsed", (_event, input: { libraryId?: number } = {}) =>
-    listFiles(mustRuntime(), { libraryId: input.libraryId, unparsedOnly: true, limit: 500 }),
-  );
+  ipcMain.handle("files:reveal", (_event, path: string) => {
+    shell.showItemInFolder(path);
+    return true;
+  });
 
   ipcMain.handle("tasks:list", (_event, input: { limit?: number } = {}) =>
     listTasks(mustRuntime(), { limit: input.limit ?? 20 }),

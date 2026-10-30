@@ -40,6 +40,7 @@ kura organize 主库              # 只看计划
 kura organize 主库 --apply      # 真的移动
 
 kura file list --unparsed       # 扫到了但认不出番号的文件(不会进刮削)
+kura item list --limit 20 --offset 40   # 分页
 ```
 
 ## 整理维度
@@ -104,6 +105,15 @@ kura translate --pending             # 补历史条目
 ```
 
 任何 OpenAI 兼容端点都行(DeepSeek / 通义 / Ollama / LM Studio)。译文缓存独立在 `<数据目录>/translations.db`,删掉即重翻。
+
+## 界面
+
+「条目」「未识别」「整理预览」「任务」「设置」五个页签：
+
+- **条目**：分页（每页 100），显示总数与待刮削数；多选后可批量刮削/下载海报
+- **未识别**：扫到但认不出番号的文件，独立列表面板（可复制路径、在文件夹中定位）
+- **任务**：批量操作的进度/中断记录，可重试
+- **设置**：DMM 凭据、翻译、代理、来源状态
 
 ## 任务与日志
 

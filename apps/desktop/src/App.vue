@@ -33,7 +33,7 @@ const info = ref<KuraAppInfo | null>(null);
 const libraries = ref<KuraLibrary[]>([]);
 const selectedId = ref<number | null>(null);
 const items = ref<KuraItem[]>([]);
-const tab = ref<"items" | "plan" | "tasks" | "settings">("items");
+const tab = ref<"items" | "unparsed" | "plan" | "tasks" | "settings">("items");
 const busy = ref(false);
 const error = ref<string | null>(null);
 const note = ref<string | null>(null);
@@ -42,10 +42,17 @@ const events = ref<KuraScanEvent[]>([]);
 const confirmApply = ref(false);
 
 const picked = ref<string[]>([]);
+const page = ref(0);
+const pageSize = 100;
+const itemTotal = ref(0);
+const pendingTotal = ref(0);
+const pageCount = computed(() => Math.max(1, Math.ceil(itemTotal.value / pageSize)));
 const detail = ref<KuraItem | null>(null);
 const dimension = ref("");
-const unparsed = ref<{ path: string }[] | null>(null);
+const unparsedFiles = ref<{ path: string; size: number; libraryId: number }[]>([]);
 const unparsedCount = ref(0);
+const unparsedPage = ref(0);
+const unparsedPageSize = 100;
 const progress = ref<{ index: number; total: number; key: string; ok: boolean } | null>(null);
 const tasks = ref<KuraTask[]>([]);
 
@@ -85,8 +92,8 @@ async function refreshAll(): Promise<void> {
   translateOn.value = config.value?.settings.translate ?? false;
   libraries.value = await window.kura.libraries();
   if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
-  items.value = await window.kura.items(200);
-  unparsedCount.value = (await window.kura.unparsedFiles(selectedId.value ?? undefined)).length;
+  await refreshItems();
+  await refreshUnparsed();
   tasks.value = await window.kura.tasks(20);
   // 把当前模板反查成维度, 让下拉框显示"现在是什么"
   const current = libraries.value.find((library) => library.id === selectedId.value);
@@ -95,6 +102,43 @@ async function refreshAll(): Promise<void> {
   // 选中项里可能有已经被删掉的条目
   picked.value = picked.value.filter((key) => items.value.some((item) => item.key === key));
   if (detail.value) detail.value = await window.kura.item(detail.value.key);
+}
+
+async function refreshUnparsed(): Promise<void> {
+  const result = await window.kura.unparsedFiles({
+    libraryId: selectedId.value ?? undefined,
+    limit: unparsedPageSize,
+    offset: unparsedPage.value * unparsedPageSize,
+  });
+  unparsedFiles.value = result.files;
+  unparsedCount.value = result.total;
+}
+
+async function goUnparsedPage(next: number): Promise<void> {
+  const pages = Math.max(1, Math.ceil(unparsedCount.value / unparsedPageSize));
+  unparsedPage.value = Math.min(Math.max(next, 0), pages - 1);
+  await refreshUnparsed();
+}
+
+async function copyPath(path: string): Promise<void> {
+  await navigator.clipboard.writeText(path);
+  note.value = "路径已复制";
+}
+
+async function reveal(path: string): Promise<void> {
+  await window.kura.revealFile(path);
+}
+
+async function refreshItems(): Promise<void> {
+  const result = await window.kura.items({ limit: pageSize, offset: page.value * pageSize });
+  items.value = result.items;
+  itemTotal.value = result.total;
+  pendingTotal.value = result.pending;
+}
+
+async function goPage(next: number): Promise<void> {
+  page.value = Math.min(Math.max(next, 0), pageCount.value - 1);
+  await refreshItems();
 }
 
 async function run<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
@@ -127,13 +171,15 @@ async function doScan(): Promise<void> {
   if (report) {
     const { counts } = report;
     note.value = `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}`;
+    page.value = 0;
     await refreshAll();
   }
 }
 
 async function doScrape(): Promise<void> {
   progress.value = { index: 0, total: 0, key: "准备中", ok: true };
-  const batch = await run("刮削", () => window.kura.scrapePending(20));
+  // 不再固定 20 条: 待刮削多少就跑多少(进度与停止已有)
+  const batch = await run("刮削", () => window.kura.scrapePending(pendingTotal.value || 1000));
   progress.value = null;
   if (batch) {
     const failed = batch.reports.filter((report) => !report.ok);
@@ -165,15 +211,6 @@ async function retryTask(task: KuraTask): Promise<void> {
     await refreshAll();
     note.value = `已重新入队 #${created.id} —— 用「刮削待处理」继续`;
   }
-}
-
-async function toggleUnparsed(): Promise<void> {
-  if (unparsed.value) {
-    unparsed.value = null;
-    return;
-  }
-  const files = await run("读取未识别文件", () => window.kura.unparsedFiles(selectedId.value ?? undefined));
-  if (files) unparsed.value = files;
 }
 
 async function openDetail(item: KuraItem): Promise<void> {
@@ -368,6 +405,9 @@ async function testDmm(): Promise<void> {
       <section class="main">
         <nav class="tabs">
           <button type="button" :class="{ on: tab === 'items' }" @click="tab = 'items'">条目</button>
+          <button type="button" :class="{ on: tab === 'unparsed' }" @click="tab = 'unparsed'; goUnparsedPage(unparsedPage)">
+            未识别 ({{ unparsedCount }})
+          </button>
           <button type="button" :class="{ on: tab === 'plan' }" @click="tab = 'plan'">整理预览</button>
           <button type="button" :class="{ on: tab === 'tasks' }" @click="tab = 'tasks'">任务</button>
           <button type="button" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">设置</button>
@@ -394,31 +434,17 @@ async function testDmm(): Promise<void> {
               全选
             </label>
             <span class="muted">已选 {{ picked.length }}</span>
-            <button
-              type="button"
-              :disabled="busy || unparsedCount === 0"
-              :title="unparsedCount === 0 ? '没有未识别的文件' : '扫描到但认不出番号的文件'"
-              @click="toggleUnparsed"
-            >
-              未识别 ({{ unparsedCount }})
-            </button>
             <span class="spacer" />
+            <span class="muted">共 {{ itemTotal }} 条 · 待刮削 {{ pendingTotal }}</span>
+            <button type="button" :disabled="busy || page === 0" @click="goPage(page - 1)">‹</button>
+            <span class="muted">{{ page + 1 }}/{{ pageCount }}</span>
+            <button type="button" :disabled="busy || page >= pageCount - 1" @click="goPage(page + 1)">›</button>
             <button type="button" :disabled="busy || picked.length === 0" @click="scrapePicked">
               刮削选中 ({{ picked.length }})
             </button>
             <button type="button" :disabled="busy || picked.length === 0" @click="postersPicked">
               下载海报 ({{ picked.length }})
             </button>
-          </div>
-
-          <div v-if="unparsed" class="unparsed">
-            <div class="unparsed-head">
-              <span>未识别文件 {{ unparsed.length }} 个（没有番号，不会进入刮削）</span>
-              <button class="ghost" type="button" @click="unparsed = null">×</button>
-            </div>
-            <ul>
-              <li v-for="file in unparsed" :key="file.path" class="mono">{{ file.path }}</li>
-            </ul>
           </div>
 
           <div class="split">
@@ -488,6 +514,41 @@ async function testDmm(): Promise<void> {
               <p class="muted hint">锁定后重新刮削不会覆盖该字段。</p>
             </aside>
           </div>
+        </div>
+
+        <!-- 未识别 -->
+        <div v-else-if="tab === 'unparsed'" class="pane">
+          <div class="toolbar">
+            <span class="muted">扫到了但认不出番号的文件: {{ unparsedCount }} 个（不会进入刮削）</span>
+            <span class="spacer" />
+            <button type="button" :disabled="unparsedPage === 0" @click="goUnparsedPage(unparsedPage - 1)">‹</button>
+            <span class="muted">{{ unparsedPage + 1 }}/{{ Math.max(1, Math.ceil(unparsedCount / unparsedPageSize)) }}</span>
+            <button
+              type="button"
+              :disabled="unparsedPage >= Math.max(1, Math.ceil(unparsedCount / unparsedPageSize)) - 1"
+              @click="goUnparsedPage(unparsedPage + 1)"
+            >
+              ›
+            </button>
+          </div>
+          <table>
+            <thead>
+              <tr><th>路径</th><th>大小</th><th /></tr>
+            </thead>
+            <tbody>
+              <tr v-for="file in unparsedFiles" :key="file.path">
+                <td class="mono" :title="file.path">{{ file.path }}</td>
+                <td class="mono">{{ Math.max(1, Math.round(file.size / 1024)) }} KB</td>
+                <td class="row-actions">
+                  <button type="button" @click="copyPath(file.path)">复制路径</button>
+                  <button type="button" @click="reveal(file.path)">定位</button>
+                </td>
+              </tr>
+              <tr v-if="unparsedFiles.length === 0">
+                <td colspan="3" class="muted">没有未识别的文件。</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
 
         <!-- 整理预览 -->
@@ -927,36 +988,15 @@ button:disabled {
   font-size: 13px;
 }
 
-.unparsed {
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel);
-  padding: 10px 12px;
-  max-height: 220px;
-  overflow: auto;
-}
-
-.unparsed-head {
+.row-actions {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.row-actions button {
+  padding: 3px 8px;
   font-size: 12px;
-  color: var(--warn);
-  margin-bottom: 6px;
-}
-
-.unparsed ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.unparsed li {
-  padding: 3px 0;
-  color: #b9c0d0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .split {

@@ -139,7 +139,7 @@ export interface MediaFileView {
  */
 export function listFiles(
   rt: Runtime,
-  options: { libraryId?: number; unparsedOnly?: boolean; limit?: number } = {},
+  options: { libraryId?: number; unparsedOnly?: boolean; limit?: number; offset?: number } = {},
 ): MediaFileView[] {
   const where: string[] = [];
   const params: (number | string)[] = [];
@@ -151,8 +151,8 @@ export function listFiles(
 
   const sql = `select path, number, library_id, size, mtime_ms, phase from media_files
     ${where.length > 0 ? `where ${where.join(" and ")}` : ""}
-    order by path limit ?`;
-  params.push(options.limit ?? 200);
+    order by path limit ? offset ?`;
+  params.push(options.limit ?? 200, options.offset ?? 0);
 
   return rt.db.all<MediaFileRow & { library_id: number; size: number; mtime_ms: number }>(sql, params).map((row) => ({
     path: row.path,
@@ -162,6 +162,21 @@ export function listFiles(
     mtimeMs: row.mtime_ms,
     phase: parsePhase(row.phase),
   }));
+}
+
+export function countFiles(
+  rt: Runtime,
+  options: { libraryId?: number; unparsedOnly?: boolean } = {},
+): number {
+  const where: string[] = [];
+  const params: number[] = [];
+  if (options.libraryId !== undefined) {
+    where.push("library_id = ?");
+    params.push(options.libraryId);
+  }
+  if (options.unparsedOnly) where.push("number is null");
+  const sql = `select count(*) c from media_files ${where.length > 0 ? `where ${where.join(" and ")}` : ""}`;
+  return rt.db.get<{ c: number }>(sql, params)?.c ?? 0;
 }
 
 /** 供 GUI / 排查用: 某个文件当前登记到的相位。 */

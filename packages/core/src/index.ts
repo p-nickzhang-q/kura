@@ -47,11 +47,11 @@ export type { FetchInit, FetchLike, HttpClientOptions, RequestOptions } from "./
 export { createLibrary, findLibrary, listLibraries, pinnedFields, rowToMetadata, updateLibraryOrganize, updateLibraryTemplate } from "./db/rows";
 export type { ItemRow, MediaFileRow } from "./db/rows";
 
-export { filePhase, listFiles, scan } from "./tasks/scan";
+export { countFiles, filePhase, listFiles, scan } from "./tasks/scan";
 export type { MediaFileView } from "./tasks/scan";
 export type { ScanEvent, ScanOptions, ScanReport } from "./tasks/scan";
 
-export { getItem, listItems, pendingKeys, scrape, scrapePending, scrapePendingTask } from "./tasks/scrape";
+export { countItems, countPending, getItem, listItems, pendingKeys, scrape, scrapePending, scrapePendingTask } from "./tasks/scrape";
 export { pendingTranslationKeys, translateItem } from "./tasks/translate";
 export type { TranslateReport } from "./tasks/translate";
 export { buildSystemPrompt, chatEndpoint, createTranslator, hasKana, needsTranslation, openTranslator, TranslationCache } from "./llm/translate";

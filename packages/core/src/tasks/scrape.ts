@@ -283,13 +283,32 @@ export function getItem(rt: Runtime, key: string): ItemView | null {
   return { ...rowToMetadata(row), pinned: pinnedFields(rt.db, key) };
 }
 
-export function listItems(rt: Runtime, options: { limit?: number; type?: string } = {}): ItemView[] {
+export function listItems(
+  rt: Runtime,
+  options: { limit?: number; offset?: number; type?: string } = {},
+): ItemView[] {
   const limit = options.limit ?? 50;
+  const offset = options.offset ?? 0;
   const rows = options.type
-    ? rt.db.all<ItemRow>("select * from items where content_type = ? order by updated_at desc limit ?", [
-        options.type,
-        limit,
-      ])
-    : rt.db.all<ItemRow>("select * from items order by updated_at desc limit ?", [limit]);
+    ? rt.db.all<ItemRow>(
+        "select * from items where content_type = ? order by updated_at desc limit ? offset ?",
+        [options.type, limit, offset],
+      )
+    : rt.db.all<ItemRow>("select * from items order by updated_at desc limit ? offset ?", [limit, offset]);
   return rows.map((row) => ({ ...rowToMetadata(row), pinned: parseJson<string[]>(row.pinned) ?? [] }));
+}
+
+/** 分页要显示"第 x/共 N 条", 所以总数得单独算一次。 */
+export function countItems(rt: Runtime, options: { type?: string } = {}): number {
+  const row = options.type
+    ? rt.db.get<{ c: number }>("select count(*) c from items where content_type = ?", [options.type])
+    : rt.db.get<{ c: number }>("select count(*) c from items");
+  return row?.c ?? 0;
+}
+
+export function countPending(rt: Runtime): number {
+  const row = rt.db.get<{ c: number }>(
+    "select count(*) c from items where title is null or title = ''",
+  );
+  return row?.c ?? 0;
 }

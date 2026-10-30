@@ -142,9 +142,17 @@ interface KuraBridge {
   }>;
   cancelScrape(): Promise<{ cancelled: boolean }>;
   onScrapeProgress(callback: (progress: { index: number; total: number; key: string; ok: boolean; filled: number; error?: string }) => void): () => void;
-  items(limit?: number): Promise<KuraItem[]>;
+  items(params?: { limit?: number; offset?: number; type?: string }): Promise<{
+    items: KuraItem[];
+    total: number;
+    pending: number;
+  }>;
   item(number: string): Promise<KuraItem | null>;
-  unparsedFiles(libraryId?: number): Promise<{ path: string; number: string | null; libraryId: number }[]>;
+  unparsedFiles(params?: { libraryId?: number; limit?: number; offset?: number }): Promise<{
+    files: { path: string; number: string | null; libraryId: number; size: number }[];
+    total: number;
+  }>;
+  revealFile(path: string): Promise<boolean>;
   tasks(limit?: number): Promise<KuraTask[]>;
   retryTask(id: number): Promise<KuraTask>;
   updateItem(input: { key: string; pin?: string[]; unpin?: string[] }): Promise<KuraItem>;
