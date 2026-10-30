@@ -54,6 +54,21 @@ describe("HttpClient", () => {
     expect((error as AppError).exitCode).toBe(EXIT.RETRYABLE);
   });
 
+  test("不同 host 之间不互相阻塞 (per-host 漏桶)", async () => {
+    // 同一台服务器, 两个不同 host: 端口节流应各自独立。
+    const http = new HttpClient({ minIntervalMs: 300 });
+    const started = Date.now();
+    const [a, b] = await Promise.all([
+      http.getJson(`http://127.0.0.1:${server.port}/a`),
+      http.getJson(`http://127.0.0.2:${server.port}/b`),
+    ]);
+    const elapsed = Date.now() - started;
+    expect(a).toBeDefined();
+    expect(b).toBeDefined();
+    // 串行的话至少 300ms+; 并行应明显更快
+    expect(elapsed).toBeLessThan(250);
+  });
+
   test("同一客户端串行节流", async () => {
     const http = new HttpClient({ minIntervalMs: 60 });
     const started = Date.now();

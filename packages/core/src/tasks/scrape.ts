@@ -19,6 +19,11 @@ export interface ScrapeOptions {
   translator?: Translator | null;
   /** 用户取消: 传给每个请求, 已发出的请求会立刻中断。 */
   signal?: AbortSignal;
+  /**
+   * 单条目的总预算(毫秒)。默认 20s。
+   * 没有它时, 一个源卡住会走满 "15s 超时 × 3 次重试" ≈ 45s, 批量跑时就是灾难。
+   */
+  itemBudgetMs?: number;
 }
 
 export interface ScrapeReport {
@@ -55,8 +60,12 @@ export async function scrape(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRe
 
   if (opts.signal?.aborted) throw new AppError("已取消", EXIT.RETRYABLE);
 
+  // 单条目的总预算: 卡住的源不该拖住整批。
+  const budget = AbortSignal.timeout(opts.itemBudgetMs ?? 20_000);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, budget]) : budget;
+
   const settled = await Promise.allSettled(
-    usable.map((source) => source.fetch(opts.key, { fixturesDir: opts.fixturesDir ?? null, signal: opts.signal })),
+    usable.map((source) => source.fetch(opts.key, { fixturesDir: opts.fixturesDir ?? null, signal })),
   );
 
   const records: SourceRecord[] = [];

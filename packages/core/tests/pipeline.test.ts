@@ -98,6 +98,38 @@ describe("scan → scrape → organize", () => {
     }
   });
 
+  test("卡住的来源不会拖住整条目 (单条目预算)", async () => {
+    const rt = await openRuntime({ dataDir });
+    try {
+      const hanging = {
+        id: "hang",
+        label: "挂起源",
+        status: "ready" as const,
+        contentTypes: "all" as const,
+        requirements: () => [],
+        // 永不 resolve, 但要尊重 signal —— 与真实来源的契约一致
+        fetch: (_key: unknown, ctx: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            ctx.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+          }),
+      };
+
+      const started = Date.now();
+      const error = await scrape(rt, {
+        key: { value: "ABC-123", number: "ABC-123", contentType: "censored" },
+        registry: createRegistry([hanging]),
+        fixturesDir: null,
+        sources: ["hang"],
+        itemBudgetMs: 200,
+      }).catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(Date.now() - started).toBeLessThan(2000);
+    } finally {
+      rt.close();
+    }
+  });
+
   test("认不出番号的文件留在索引里, 可按 unparsed 列出", async () => {
     const rt = await openRuntime({ dataDir });
     try {

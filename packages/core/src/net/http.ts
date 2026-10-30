@@ -98,8 +98,11 @@ export class HttpClient {
     proxy?: string;
   };
   private readonly fetchImpl: FetchLike;
-  private queue: Promise<unknown> = Promise.resolve();
-  private lastAt = 0;
+  /**
+   * 按 host 排队。之前只有一个全局队列, 于是"并发请求多个站点"其实是串行:
+   * javbus 与 javdb 互相阻塞, 双源耗时变成两者之和。对齐 Amane 的 per-host 漏桶。
+   */
+  private readonly queues = new Map<string, { chain: Promise<unknown>; lastAt: number }>();
 
   constructor(options: HttpClientOptions = {}) {
     this.options = {
@@ -154,7 +157,7 @@ export class HttpClient {
 
   /** 重试/4xx/超时的唯一实现; 三个公开方法都只是它的消费者。 */
   private async execute(url: string, init: RequestOptions): Promise<Response> {
-    await this.throttle();
+    await this.throttle(url);
 
     let lastError: unknown = null;
     for (let attempt = 0; attempt <= this.options.retries; attempt++) {
@@ -194,6 +197,10 @@ export class HttpClient {
         if (err instanceof AppError && err.exitCode === EXIT.NOT_FOUND) throw err;
         if (err instanceof AppError && err.exitCode === EXIT.NEEDS_INPUT) throw err;
         lastError = err;
+
+        // 超时是"这条路慢/堵", 立刻重试大概率再等一个完整超时; 只再试一次。
+        const timedOut = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+        if (timedOut && attempt >= 1) break;
         await sleep(300 * (attempt + 1));
       }
     }
@@ -202,15 +209,28 @@ export class HttpClient {
     throw new AppError(`请求失败: ${message}`, EXIT.RETRYABLE, { url });
   }
 
-  /** 串行 + 最小间隔。并发刮削时由任务层控制并发度。 */
-  private throttle(): Promise<void> {
-    const run = this.queue.then(async () => {
-      const wait = this.options.minIntervalMs - (Date.now() - this.lastAt);
+  /** 同一个 host 串行 + 最小间隔; 不同 host 之间互不阻塞。 */
+  private throttle(url: string): Promise<void> {
+    const host = hostOf(url);
+    const entry = this.queues.get(host) ?? { chain: Promise.resolve(), lastAt: 0 };
+
+    const run = entry.chain.then(async () => {
+      const wait = this.options.minIntervalMs - (Date.now() - entry.lastAt);
       if (wait > 0) await sleep(wait);
-      this.lastAt = Date.now();
+      entry.lastAt = Date.now();
     });
-    this.queue = run.catch(() => undefined);
+
+    entry.chain = run.catch(() => undefined);
+    this.queues.set(host, entry);
     return run;
+  }
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
   }
 }
 
