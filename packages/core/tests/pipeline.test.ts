@@ -152,6 +152,29 @@ describe("scan → scrape → organize", () => {
     }
   });
 
+  test("重扫会重新解析番号: 解析器升级后旧库能自愈", async () => {
+    const rt = await openRuntime({ dataDir });
+    try {
+      const library = createLibrary(rt.db, { name: "主库", root: libraryRoot });
+      await scan(rt, { library });
+
+      // 模拟"上一版解析器没认出这个文件": 清掉已解析的番号与条目
+      rt.db.run("update media_files set number = null where path like '%ABC-123%'");
+      rt.db.run("delete from items where number = 'ABC-123'");
+
+      // 文件本身没变 (size/mtime 相同), 但解析结果必须重新算
+      await scan(rt, { library });
+
+      const row = rt.db.get<{ number: string | null }>(
+        "select number from media_files where path like '%ABC-123%'",
+      );
+      expect(row?.number).toBe("ABC-123");
+      expect(getItem(rt, "ABC-123")).not.toBeNull();
+    } finally {
+      rt.close();
+    }
+  });
+
   test("认不出番号的文件留在索引里, 可按 unparsed 列出", async () => {
     const rt = await openRuntime({ dataDir });
     try {

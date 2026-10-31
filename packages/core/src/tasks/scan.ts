@@ -71,15 +71,18 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
       seen.add(file.path);
       const previous = known.get(file.path);
 
-      if (previous && previous.size === file.size && previous.mtime_ms === file.mtimeMs) {
-        counts.unchanged++;
-        emit({ type: "file.unchanged", path: file.path, number: previous.number });
-        continue;
-      }
-
+      // 解析本身是纯函数、不花 IO, 所以每次都重算, 不跟着 size/mtime 一起跳过。
+      // 这样解析器升级后, 旧库里"以前认不出"的文件重扫一次就能自愈。
       const number = extractNumber(file.path);
       const phase = parseFileInfo(file.path);
       if (!number) counts.unparsed++;
+
+      const untouched = previous && previous.size === file.size && previous.mtime_ms === file.mtimeMs;
+      if (untouched && previous.number === number) {
+        counts.unchanged++;
+        emit({ type: "file.unchanged", path: file.path, number });
+        continue;
+      }
 
       if (number && !dryRun) {
         // 条目是一等公民: 有番号就先建占位行, 刮削再填字段。
