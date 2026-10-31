@@ -44,6 +44,7 @@ import {
   translateEnabled,
   translateItem,
   translatePending,
+  probeTranslator,
   updateLibraryTemplate,
   cachedPoster,
   downloadPoster,
@@ -287,6 +288,9 @@ export const COMMANDS: Command[] = [
               limit: Number(args.options.limit ?? 50),
               includeFailed: Boolean(args.options["retry-failed"]),
               onProgress: (progress) => {
+                if ("translateErrors" in progress && Array.isArray((progress as { translateErrors?: string[] }).translateErrors)) {
+                  ctx.out.log(`  ⚠ ${progress.key} 翻译失败: ${(progress as { translateErrors: string[] }).translateErrors[0]}`);
+                }
                 ctx.out.log(
                   progress.ok
                     ? `[${progress.index}/${progress.total}] ${progress.key} ✓ ${progress.filled} 字段`
@@ -846,10 +850,10 @@ export const COMMANDS: Command[] = [
 
   {
     name: "config",
-    summary: "配置: get (脱敏) | set --dmm-api-id ... --dmm-affiliate-id ... | path",
+    summary: "配置: get (脱敏) | set --llm-base-url ... | test-llm (真发一次模型请求) | path",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "get | set | path", positional: true, default: "get" },
+      { name: "action", type: "string", description: "get | set | test-llm | path", positional: true, default: "get" },
       { name: "dmm-api-id", type: "string", description: "set: DMM API ID" },
       { name: "dmm-affiliate-id", type: "string", description: "set: DMM affiliate ID" },
       { name: "proxy", type: "string", description: "set: 代理地址, auto 表示运行时探测, 空串清除" },
@@ -857,6 +861,7 @@ export const COMMANDS: Command[] = [
       { name: "llm-api-key", type: "string", description: "set: 模型 API Key" },
       { name: "llm-model", type: "string", description: "set: 模型名, 如 deepseek-chat" },
       { name: "translate", type: "boolean", description: "set: 刮削后自动翻译" },
+      { name: "no-translate", type: "boolean", description: "set: 关闭翻译开关", default: false },
     ],
     async run(ctx, args) {
       const action = args.positionals.action ?? "get";
@@ -880,6 +885,24 @@ export const COMMANDS: Command[] = [
         };
       }
 
+      if (action === "test-llm") {
+        const config = resolveLlm(ctx.rt!.settings);
+        if (!config) {
+          throw new AppError("未配置 LLM", EXIT.NEEDS_INPUT, {
+            hint: "kura config set --llm-base-url https://api.deepseek.com/v1 --llm-api-key ... --llm-model deepseek-chat",
+          });
+        }
+        const http = new HttpClient({ proxy: await resolveProxyUrl(ctx.rt!.settings) });
+        const translated = await probeTranslator(http, config);
+        return {
+          ok: true,
+          endpoint: `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`,
+          model: config.model,
+          sample: translated,
+          translateEnabled: translateEnabled(ctx.rt!.settings),
+        };
+      }
+
       if (action === "set") {
         const patch: {
           dmm: { apiId?: string; affiliateId?: string };
@@ -894,6 +917,7 @@ export const COMMANDS: Command[] = [
         if (typeof args.options["llm-api-key"] === "string") patch.llm.apiKey = args.options["llm-api-key"];
         if (typeof args.options["llm-model"] === "string") patch.llm.model = args.options["llm-model"];
         if (typeof args.options.translate === "boolean") patch.translate = args.options.translate;
+        if (args.options["no-translate"] === true) patch.translate = false;
 
         const touched =
           Object.keys(patch.dmm).length > 0 ||

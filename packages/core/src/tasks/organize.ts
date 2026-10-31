@@ -2,7 +2,7 @@ import { buildPlan, applyPlan, type ApplyResult, type Library, type Plan, type P
 import type { Metadata } from "../domain/types";
 import { parsePhase, rowToMetadata, type ItemRow } from "../db/rows";
 import type { Runtime } from "../runtime";
-import { cachedPoster, cachedThumb } from "./resources";
+import { cachedPoster, cachedThumb, findSidecarImages } from "./resources";
 
 export interface OrganizeOptions {
   library: Library;
@@ -53,12 +53,14 @@ export async function organize(rt: Runtime, opts: OrganizeOptions): Promise<Orga
   for (const row of rows) {
     const metadata: Metadata = rowToMetadata(row);
     if (!metadata.title) continue; // 没刮削过的条目不整理
+    // 优先用缓存 (刮削时下的), 其次用视频旁边已经存在的图 (别的工具下的)
+    const sidecar = findSidecarImages(row.path);
     inputs.push({
       path: row.path,
       metadata,
       phase: parsePhase(row.phase),
-      posterPath: cachedPoster(rt, metadata)?.path,
-      thumbPath: cachedThumb(rt, metadata)?.path,
+      posterPath: cachedPoster(rt, metadata)?.path ?? sidecar.poster ?? undefined,
+      thumbPath: cachedThumb(rt, metadata)?.path ?? sidecar.thumb ?? undefined,
     });
   }
 

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import type { Metadata } from "../domain/types";
 import type { HttpClient } from "../net/http";
 import type { Runtime } from "../runtime";
@@ -139,6 +139,34 @@ export async function downloadPoster(
   const thumb = await firstOk(rt, http, thumbCandidates, failures);
 
   return { key: metadata.key, poster, thumb, tried: [...posterCandidates, ...thumbCandidates], failures };
+}
+
+const SIDECAR_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
+
+/**
+ * 视频文件旁边**已经存在**的图片 (别的工具下好的), 按常见命名找一遍。
+ *
+ * 存在的理由: 很多人早就用别的工具把图存成了 `<视频名>-poster.jpg`, 再让 Kura 下一遍
+ * 既浪费流量又可能存成两张不同的图。有就地用, 没有才下载。
+ */
+export function findSidecarImages(videoPath: string): { poster: string | null; thumb: string | null } {
+  const directory = dirname(videoPath);
+  const base = basename(videoPath, extname(videoPath));
+
+  const pick = (names: string[]): string | null => {
+    for (const name of names) {
+      for (const extension of SIDECAR_EXTENSIONS) {
+        const candidate = join(directory, `${name}${extension}`);
+        if (existsSync(candidate)) return candidate;
+      }
+    }
+    return null;
+  };
+
+  return {
+    poster: pick([`${base}-poster`, `${base}-cover`, base, "poster", "folder", "cover"]),
+    thumb: pick([`${base}-thumb`, `${base}-fanart`, "fanart", "backdrop", "thumb"]),
+  };
 }
 
 /** 整理时用: 已缓存的横版缩略图, 没有网络请求。 */

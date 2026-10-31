@@ -230,7 +230,8 @@ export async function applyPlan(plan: Plan): Promise<ApplyResult[]> {
       if (entry.action === "write-nfo") {
         await writeFile(entry.to, entry.content ?? "", "utf8");
       } else if (entry.action === "copy-image" && entry.from) {
-        await copyFile(entry.from, entry.to);
+        // 图片已经在目标位置 (整理过的库再跑一遍): 不复制, 否则等于自己覆盖自己
+        if (resolve(entry.from) !== resolve(entry.to)) await copyFile(entry.from, entry.to);
       } else if (entry.action === "move" && entry.from) {
         await moveFile(entry.from, entry.to);
       }

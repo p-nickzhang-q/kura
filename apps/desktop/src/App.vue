@@ -66,6 +66,9 @@ const FILTER_LABEL: Record<FilterKey, string> = {
 };
 const filters = ref<Partial<Record<FilterKey, string>>>({});
 const searchDraft = ref("");
+/** 刷新请求的序号, 用来丢弃乱序返回的旧结果。 */
+let refreshSeq = 0;
+const llmTest = ref<{ ok: boolean; model: string; endpoint: string; sample: string } | null>(null);
 const translateProgress = ref<{ index: number; total: number; key: string } | null>(null);
 const pendingTotal = ref(0);
 const exhaustedTotal = ref(0);
@@ -159,19 +162,29 @@ async function reveal(path: string): Promise<void> {
 }
 
 async function refreshItems(): Promise<void> {
+  // 每次请求带一个序号: 刮削时进度会频繁触发刷新, 早发出的请求可能晚回来,
+  // 用旧数据覆盖新数据 (页码突然只剩一页就是这么来的)。
+  const seq = ++refreshSeq;
   const result = await window.kura.items({
     ...filters.value,
     limit: pageSize,
     offset: page.value * pageSize,
-    // 选了库就只看这个库的条目; 没选库看全部
-    libraryId: selectedId.value ?? undefined,
   });
+  if (seq !== refreshSeq) return;
+
   items.value = result.items;
   itemTotal.value = result.total;
-  // 过滤/刮削都会改变当前页, 输入框跟着页码走, 免得显示上一个页面的数字
-  pageInput.value = String(page.value + 1);
   pendingTotal.value = result.pending;
   exhaustedTotal.value = result.exhausted;
+
+  // 总数变少 (筛选、刮削后条目合并等) 时, 停在越界的页码上会看到空列表
+  if (page.value > pageCount.value - 1) {
+    page.value = pageCount.value - 1;
+    pageInput.value = String(page.value + 1);
+    if (items.value.length === 0) void refreshItems();
+    return;
+  }
+  pageInput.value = String(page.value + 1);
 }
 
 async function jumpToPage(): Promise<void> {
@@ -215,16 +228,7 @@ async function clearFilters(): Promise<void> {
   await refreshItems();
 }
 
-async function selectLibrary(id: number): Promise<void> {
-  if (selectedId.value === id) return;
-  selectedId.value = id;
-  // 换库等于换数据集: 页码与选中都清掉, 否则会停在一个不存在的页上
-  page.value = 0;
-  pageInput.value = "1";
-  picked.value = [];
-  detail.value = null;
-  await refreshItems();
-}
+
 
 async function goPage(next: number): Promise<void> {
   page.value = Math.min(Math.max(next, 0), pageCount.value - 1);
@@ -494,6 +498,10 @@ async function saveConfig(): Promise<void> {
   }
 }
 
+async function testLlm(): Promise<void> {
+  llmTest.value = await run("测试 LLM", () => window.kura.testLlm());
+}
+
 async function testDmm(): Promise<void> {
   dmmTest.value = await run("测试 DMM", () => window.kura.testDmm("SSIS-001"));
 }
@@ -531,7 +539,7 @@ async function testDmm(): Promise<void> {
                 @blur="commitRename(library)"
               />
             </div>
-            <button v-else type="button" class="lib" @click="selectLibrary(library.id)">
+            <button v-else type="button" class="lib" @click="selectedId = library.id">
               <strong>
                 {{ library.name }}
                 <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
@@ -937,6 +945,8 @@ async function testDmm(): Promise<void> {
           <div class="row">
             <button type="button" class="primary" :disabled="busy" @click="saveConfig">保存</button>
             <button type="button" :disabled="busy" @click="testDmm">测试连接</button>
+            <button type="button" :disabled="busy" @click="testLlm">测试 LLM</button>
+            <span v-if="llmTest" class="muted">模型 {{ llmTest.model }} 回: {{ llmTest.sample }}</span>
             <span class="muted">
               {{ config?.dmmConfigured ? "DMM 已配置" : "DMM 未配置" }}
               <template v-if="config?.dmmFromEnv">(环境变量生效中)</template>

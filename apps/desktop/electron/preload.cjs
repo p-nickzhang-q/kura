@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld("kura", {
   configGet: () => ipcRenderer.invoke("config:get"),
   configSet: (patch) => ipcRenderer.invoke("config:set", patch),
   testDmm: (probe) => ipcRenderer.invoke("dmm:test", probe),
+  testLlm: () => ipcRenderer.invoke("llm:test"),
   /** 返回取消订阅函数, 供组件卸载时调用。 */
   onScrapeProgress: (callback) => {
     const handler = (_event, payload) => callback(payload);

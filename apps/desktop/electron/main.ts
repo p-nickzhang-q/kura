@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from "electron";
-import { basename, join } from "node:path";
+import { basename, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   AppError,
@@ -15,6 +15,7 @@ import {
   dimensionTemplate,
   updateLibraryOrganize,
   openTranslator,
+  probeTranslator,
   resolveLlm,
   translateEnabled,
   updateLibraryTemplate,
@@ -28,6 +29,7 @@ import {
   type Settings,
   findLibrary,
   findResource,
+  findSidecarImages,
   resourceDir,
   getItem,
   listItems,
@@ -70,6 +72,7 @@ let currentAbort: AbortController | null = null;
 /** 设置改了就地更新, 不重建 runtime; 网络层每次按当前值构造。 */
 protocol.registerSchemesAsPrivileged([
   { scheme: "kura-res", privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: "kura-file", privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
 
 let settings: Settings = { dmm: { apiId: "", affiliateId: "" }, proxy: "", llm: { baseUrl: "", apiKey: "", model: "" }, translate: false };
@@ -119,12 +122,27 @@ interface ItemListInput {
   tag?: string;
 }
 
-/** 已缓存的海报 → 渲染进程能用的 URL; 没缓存返回 null (界面显示占位)。 */
-function coverUrlFor(rt: Runtime, item: { poster_urls?: string[]; cover_urls?: string[]; thumb_urls?: string[] }): string | null {
+/**
+ * 条目封面 → 渲染进程能用的 URL。
+ * 优先级: Kura 下载的缓存 → 视频旁边已有的图 (别的工具下的) → null (界面显示占位)。
+ */
+function coverUrlFor(
+  rt: Runtime,
+  item: { key: string; poster_urls?: string[]; cover_urls?: string[]; thumb_urls?: string[] },
+): string | null {
   const urls = [...(item.poster_urls ?? []), ...(item.cover_urls ?? []), ...(item.thumb_urls ?? [])];
   for (const url of urls) {
     const found = findResource(rt, url);
     if (found) return `kura-res://local/${basename(found.path)}`;
+  }
+
+  const file = rt.db.get<{ path: string }>(
+    "select path from media_files where number = ? order by path limit 1",
+    [item.key],
+  );
+  if (file) {
+    const sidecar = findSidecarImages(file.path).poster;
+    if (sidecar) return `kura-file://local/${encodeURIComponent(sidecar)}`;
   }
   return null;
 }
@@ -273,6 +291,17 @@ function registerIpc(): void {
       return result;
     }),
   );
+
+  ipcMain.handle("llm:test", async () => {
+    const config = resolveLlm(settings);
+    if (!config) {
+      throw new AppError("未配置 LLM", EXIT.NEEDS_INPUT, { hint: "先填地址、Key、模型并保存" });
+    }
+    // 代理走 Electron 的 session (系统代理或固定服务器), 这里不再自己解析
+    const http = new HttpClient({ fetchImpl: browserFetch });
+    const sample = await probeTranslator(http, config);
+    return { ok: true, model: config.model, endpoint: config.baseUrl, sample };
+  });
 
   ipcMain.handle("translate:pending", (_event, input: { limit?: number } = {}) =>
     exclusive("翻译", async (signal) => {
@@ -502,6 +531,17 @@ if (!app.requestSingleInstanceLock()) {
     if (!win) return;
     if (win.isMinimized()) win.restore();
     win.focus();
+  });
+
+  // 库目录里的现成图片 (不是 Kura 下载的): 只允许读库根目录下的图片文件。
+  protocol.handle("kura-file", (request) => {
+    const raw = decodeURIComponent(new URL(request.url).pathname.replace(/^\//, ""));
+    const target = resolve(raw);
+    const roots = listLibraries(mustRuntime().db).map((library) => resolve(library.root));
+    const inside = roots.some((root) => target === root || target.startsWith(root + sep));
+    const isImage = /\.(jpe?g|png|webp|gif)$/i.test(target);
+    if (!inside || !isImage) return new Response("forbidden", { status: 403 });
+    return net.fetch(pathToFileURL(target).href);
   });
 
   // 本地图片走自定义协议: 渲染进程没有 file:// 权限, 也不该有。

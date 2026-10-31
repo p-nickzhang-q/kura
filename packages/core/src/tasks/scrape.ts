@@ -40,6 +40,8 @@ export interface ScrapeReport {
   failures: { site: string; error: string; code?: string }[];
   metadata: Metadata | null;
   dryRun: boolean;
+  /** 翻译失败的原因 (模型不通/配置错)。刮削照常成功, 但这里必须有话说。 */
+  translateErrors?: string[];
 }
 
 /**
@@ -137,7 +139,9 @@ async function scrapeOnce(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRepor
     fieldSources: merged.fieldSources,
   };
 
+  const errorsBefore = opts.translator?.errors.length ?? 0;
   if (opts.translator) await translateMetadata(metadata, opts.translator);
+  const translateErrors = opts.translator?.errors.slice(errorsBefore) ?? [];
   if (!dryRun) persist(rt, metadata, records);
 
   const filled = Object.entries(merged.fields)
@@ -156,6 +160,7 @@ async function scrapeOnce(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRepor
     failures,
     metadata: dryRun ? null : metadata,
     dryRun,
+    ...(translateErrors.length > 0 ? { translateErrors } : {}),
   };
 }
 

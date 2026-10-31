@@ -99,6 +99,11 @@ export class TranslationCache {
 
 export interface Translator {
   translate(field: string, text: string): Promise<string | null>;
+  /**
+   * 最近的失败原因。翻译失败不该阻断刮削, 但**必须留下痕迹** ——
+   * 之前一律返回 null 就完事, 结果是"配置错了"表现成"翻译没生效", 完全无法自查。
+   */
+  errors: string[];
 }
 
 /**
@@ -107,8 +112,10 @@ export interface Translator {
  */
 export function createTranslator(http: HttpClient, config: LlmConfig, cache: TranslationCache): Translator {
   const inflight = new Map<string, Promise<string | null>>();
+  const errors: string[] = [];
 
   return {
+    errors,
     async translate(field, text) {
       if (!needsTranslation(text)) return null;
 
@@ -143,6 +150,7 @@ export function createTranslator(http: HttpClient, config: LlmConfig, cache: Tra
           return cleaned;
         } catch (err) {
           if (err instanceof AppError && err.exitCode === EXIT.NEEDS_INPUT) throw err;
+          errors.push(`${field}: ${err instanceof Error ? err.message : String(err)}`);
           return null;
         } finally {
           inflight.delete(key);
@@ -153,6 +161,33 @@ export function createTranslator(http: HttpClient, config: LlmConfig, cache: Tra
       return task;
     },
   };
+}
+
+/**
+ * 连通性自检: 真发一次请求, 成功返回译文, 失败抛出带原始报错信息的错误。
+ * 存在的理由: 命令行/界面上"翻译没生效"和"模型调不通"长得一模一样。
+ */
+export async function probeTranslator(http: HttpClient, config: LlmConfig): Promise<string> {
+  const prompt = buildSystemPrompt("title", config.targetLang ?? "简体中文");
+  try {
+    const translated = await http.postJson<string>(chatEndpoint(config), {
+      model: config.model,
+      temperature: 0,
+      messages: [
+        { role: "system", content: prompt },
+        { role: "user", content: "テスト用の文章です。" },
+      ],
+    }, {
+      headers: config.apiKey ? { authorization: `Bearer ${config.apiKey}` } : {},
+    }, (payload) => extractContent(payload));
+    return translated.trim();
+  } catch (err) {
+    throw new AppError(
+      `模型调用失败: ${err instanceof Error ? err.message : String(err)}`,
+      EXIT.NEEDS_INPUT,
+      { endpoint: chatEndpoint(config), model: config.model },
+    );
+  }
 }
 
 export function chatEndpoint(config: LlmConfig): string {

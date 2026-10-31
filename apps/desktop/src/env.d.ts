@@ -191,6 +191,7 @@ interface KuraBridge {
     translate?: boolean;
   }): Promise<{ settings: KuraConfig["settings"]; dmmConfigured: boolean }>;
   testDmm(probe?: string): Promise<KuraDmmTest>;
+  testLlm(): Promise<{ ok: boolean; model: string; endpoint: string; sample: string }>;
   onScanEvent(callback: (event: KuraScanEvent) => void): () => void;
 }
 
