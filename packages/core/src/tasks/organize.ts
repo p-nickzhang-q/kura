@@ -2,7 +2,7 @@ import { buildPlan, applyPlan, type ApplyResult, type Library, type Plan, type P
 import type { Metadata } from "../domain/types";
 import { parsePhase, rowToMetadata, type ItemRow } from "../db/rows";
 import type { Runtime } from "../runtime";
-import { cachedPoster } from "./resources";
+import { cachedPoster, cachedThumb } from "./resources";
 
 export interface OrganizeOptions {
   library: Library;
@@ -53,7 +53,13 @@ export async function organize(rt: Runtime, opts: OrganizeOptions): Promise<Orga
   for (const row of rows) {
     const metadata: Metadata = rowToMetadata(row);
     if (!metadata.title) continue; // 没刮削过的条目不整理
-    inputs.push({ path: row.path, metadata, phase: parsePhase(row.phase), posterPath: cachedPoster(rt, metadata)?.path });
+    inputs.push({
+      path: row.path,
+      metadata,
+      phase: parsePhase(row.phase),
+      posterPath: cachedPoster(rt, metadata)?.path,
+      thumbPath: cachedThumb(rt, metadata)?.path,
+    });
   }
 
   const plan = await buildPlan(opts.library, inputs);

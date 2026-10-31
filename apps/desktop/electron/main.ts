@@ -1,5 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, net, session, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from "electron";
 import { basename, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   AppError,
   EXIT,
@@ -9,6 +10,7 @@ import {
   defaultSources,
   downloadPoster,
   updateItem,
+  translateItem,
   DIMENSIONS,
   dimensionTemplate,
   updateLibraryOrganize,
@@ -25,11 +27,15 @@ import {
   settingsPath,
   type Settings,
   findLibrary,
+  findResource,
+  resourceDir,
   getItem,
   listItems,
   countItems,
   countPending,
   countExhausted,
+  countPendingTranslation,
+  translatePending,
   listFiles,
   countFiles,
   listTasks,
@@ -62,6 +68,10 @@ let busy: string | null = null;
 /** 当前长任务的取消句柄; 停止按钮通过它中断在途请求。 */
 let currentAbort: AbortController | null = null;
 /** 设置改了就地更新, 不重建 runtime; 网络层每次按当前值构造。 */
+protocol.registerSchemesAsPrivileged([
+  { scheme: "kura-res", privileges: { standard: true, secure: true, supportFetchAPI: true } },
+]);
+
 let settings: Settings = { dmm: { apiId: "", affiliateId: "" }, proxy: "", llm: { baseUrl: "", apiKey: "", model: "" }, translate: false };
 
 /** Electron 主进程的 fetch: 跟随系统代理(Clash 开了系统代理/TUN 就直接生效)。 */
@@ -93,6 +103,30 @@ async function applyProxy(): Promise<void> {
 
 function createHttp(): HttpClient {
   return new HttpClient({ fetchImpl: browserFetch });
+}
+
+interface ItemListInput {
+  limit?: number;
+  offset?: number;
+  type?: string;
+  actor?: string;
+  libraryId?: number;
+  q?: string;
+  studio?: string;
+  label?: string;
+  series?: string;
+  director?: string;
+  tag?: string;
+}
+
+/** 已缓存的海报 → 渲染进程能用的 URL; 没缓存返回 null (界面显示占位)。 */
+function coverUrlFor(rt: Runtime, item: { poster_urls?: string[]; cover_urls?: string[]; thumb_urls?: string[] }): string | null {
+  const urls = [...(item.poster_urls ?? []), ...(item.cover_urls ?? []), ...(item.thumb_urls ?? [])];
+  for (const url of urls) {
+    const found = findResource(rt, url);
+    if (found) return `kura-res://local/${basename(found.path)}`;
+  }
+  return null;
 }
 
 /** 翻译是可选后处理: 没开或没配置就返回 null, 刮削照常继续。 */
@@ -179,6 +213,7 @@ function registerIpc(): void {
       dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
       llmConfigured: Boolean(resolveLlm(settings)),
       translate: translateEnabled(settings),
+      pendingTranslation: translateEnabled(settings) ? countPendingTranslation(rt) : 0,
       dimensions: DIMENSIONS,
       sources: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) })
         .list()
@@ -239,29 +274,76 @@ function registerIpc(): void {
     }),
   );
 
+  ipcMain.handle("translate:pending", (_event, input: { limit?: number } = {}) =>
+    exclusive("翻译", async (signal) => {
+      const rt = mustRuntime();
+      const translator = await buildTranslator();
+      if (!translator) {
+        throw new AppError("未配置 LLM 或未开启翻译", EXIT.NEEDS_INPUT, {
+          hint: "到「设置」填 LLM 地址/Key/模型, 并打开翻译开关",
+        });
+      }
+      return translatePending(rt, {
+        translator,
+        limit: input.limit ?? 1000,
+        signal,
+        onProgress: (progress) => win?.webContents.send("translate:progress", progress),
+      });
+    }),
+  );
+
+  ipcMain.handle("translate:items", (_event, input: { keys: string[] }) =>
+    exclusive("翻译", async () => {
+      const rt = mustRuntime();
+      const translator = await buildTranslator();
+      if (!translator) throw new AppError("未配置 LLM 或未开启翻译", EXIT.NEEDS_INPUT);
+
+      const reports = [];
+      for (const key of input.keys) {
+        try {
+          const report = await translateItem(rt, key, translator);
+          reports.push({ ...report, key });
+        } catch (err) {
+          reports.push({ key, translated: [], error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      return { count: reports.length, cancelled: false, reports };
+    }),
+  );
+
+  ipcMain.handle("translate:cancel", () => {
+    currentAbort?.abort();
+    return { cancelled: Boolean(currentAbort) };
+  });
+
   ipcMain.handle("scrape:cancel", () => {
     const cancelled = Boolean(currentAbort);
     currentAbort?.abort();
     return { cancelled };
   });
 
-  ipcMain.handle(
-    "item:list",
-    (_event, input: { limit?: number; offset?: number; type?: string; actor?: string } = {}) => {
-      const rt = mustRuntime();
-      return {
-        items: listItems(rt, {
-          limit: input.limit ?? 100,
-          offset: input.offset ?? 0,
-          type: input.type,
-          actor: input.actor,
-        }),
-        total: countItems(rt, { type: input.type, actor: input.actor }),
-        pending: countPending(rt),
-        exhausted: countExhausted(rt),
-      };
-    },
-  );
+  ipcMain.handle("item:list", (_event, input: ItemListInput = {}) => {
+    const rt = mustRuntime();
+    const filters = {
+      type: input.type,
+      actor: input.actor,
+      libraryId: input.libraryId,
+      q: input.q,
+      studio: input.studio,
+      label: input.label,
+      series: input.series,
+      director: input.director,
+      tag: input.tag,
+    };
+    const items = listItems(rt, { ...filters, limit: input.limit ?? 100, offset: input.offset ?? 0 });
+    return {
+      // 封面是本地缓存的文件, 走自定义协议给渲染进程读 (不给它 file:// 权限)
+      items: items.map((item) => ({ ...item, coverUrl: coverUrlFor(rt, item) })),
+      total: countItems(rt, filters),
+      pending: countPending(rt),
+      exhausted: countExhausted(rt),
+    };
+  });
 
   ipcMain.handle(
     "files:unparsed",
@@ -376,6 +458,7 @@ function registerIpc(): void {
       dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
       llmConfigured: Boolean(resolveLlm(settings)),
       translate: translateEnabled(settings),
+      pendingTranslation: translateEnabled(settings) ? countPendingTranslation(rt) : 0,
       dimensions: DIMENSIONS,
     };
   });
@@ -419,6 +502,15 @@ if (!app.requestSingleInstanceLock()) {
     if (!win) return;
     if (win.isMinimized()) win.restore();
     win.focus();
+  });
+
+  // 本地图片走自定义协议: 渲染进程没有 file:// 权限, 也不该有。
+  protocol.handle("kura-res", (request) => {
+    const name = decodeURIComponent(new URL(request.url).pathname.replace(/^\//, ""));
+    if (!/^[a-f0-9]{8,64}\.(jpg|jpeg|png|webp|gif)$/i.test(name)) {
+      return new Response("bad resource name", { status: 400 });
+    }
+    return net.fetch(pathToFileURL(join(resourceDir(mustRuntime()), name)).href);
   });
 
   app.whenReady().then(async () => {

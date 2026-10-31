@@ -88,33 +88,66 @@ export async function downloadResource(rt: Runtime, http: HttpClient, url: strin
 
 export interface PosterDownloadResult {
   key: string;
+  /** 竖版海报 (Emby 的 poster 位)。 */
   poster: LocalResource | null;
+  /** 横版缩略图 (Emby 的 thumb 位)。没有就是一个 null —— 整理时退回用 poster。 */
+  thumb: LocalResource | null;
   tried: string[];
   failures: { url: string; error: string }[];
 }
 
+/** 依次尝试候选地址, 第一个成功的就返回; 全失败返回 null。 */
+async function firstOk(
+  rt: Runtime,
+  http: HttpClient,
+  candidates: string[],
+  failures: { url: string; error: string }[],
+): Promise<LocalResource | null> {
+  for (const url of candidates) {
+    try {
+      return await downloadResource(rt, http, url);
+    } catch (err) {
+      failures.push({ url, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  return null;
+}
+
+function unique(urls: string[] | undefined): string[] {
+  const list = urls ?? [];
+  return list.filter((url, index) => url && list.indexOf(url) === index);
+}
+
 /**
- * 按 poster → cover 的顺序试, 第一个成功的就用。
- * 单张图失败不影响其它候选 —— 站点图片 CDN 比页面更容易抽风。
+ * 下载两张图: 竖版海报 (poster → cover 兜底) 与横版缩略图 (thumb)。
+ *
+ * 分开下是因为它们在 Emby/Kodi 里位子不同: `<poster>` 是竖版主图, `<thumb>` 是横版缩略图。
+ * 之前只下一张, 再把竖版图塞进 `<thumb>`, 于是缩略图位显示的是被压扁的海报。
+ * 缩略图很小 (几十 KB), 多一次请求换来正确的版面。
  */
 export async function downloadPoster(
   rt: Runtime,
   http: HttpClient,
   metadata: Metadata,
 ): Promise<PosterDownloadResult> {
-  const candidates = [...(metadata.poster_urls ?? []), ...(metadata.cover_urls ?? [])].filter(
-    (url, index, all) => url && all.indexOf(url) === index,
-  );
-
   const failures: { url: string; error: string }[] = [];
-  for (const url of candidates) {
-    try {
-      return { key: metadata.key, poster: await downloadResource(rt, http, url), tried: candidates, failures };
-    } catch (err) {
-      failures.push({ url, error: err instanceof Error ? err.message : String(err) });
-    }
+
+  const posterCandidates = unique([...(metadata.poster_urls ?? []), ...(metadata.cover_urls ?? [])]);
+  const poster = await firstOk(rt, http, posterCandidates, failures);
+
+  const thumbCandidates = unique(metadata.thumb_urls);
+  const thumb = await firstOk(rt, http, thumbCandidates, failures);
+
+  return { key: metadata.key, poster, thumb, tried: [...posterCandidates, ...thumbCandidates], failures };
+}
+
+/** 整理时用: 已缓存的横版缩略图, 没有网络请求。 */
+export function cachedThumb(rt: Runtime, metadata: Metadata): LocalResource | null {
+  for (const url of metadata.thumb_urls ?? []) {
+    const found = findResource(rt, url);
+    if (found) return found;
   }
-  return { key: metadata.key, poster: null, tried: candidates, failures };
+  return null;
 }
 
 /** 整理时用: 已缓存的海报/封面里取第一张, 不做任何网络请求。 */

@@ -34,8 +34,10 @@ export interface PlanInput {
   path: string;
   metadata: Metadata;
   phase: FileInfo;
-  /** 已缓存的本地海报; 没有就不产生 copy-image 条目。 */
+  /** 已缓存的本地海报 (竖版); 没有就不产生 copy-image 条目。 */
   posterPath?: string;
+  /** 已缓存的本地缩略图 (横版); 没有就退回用海报那张。 */
+  thumbPath?: string;
 }
 
 const ILLEGAL = /[\\/:*?"<>|]/g;
@@ -170,7 +172,7 @@ export async function buildPlan(library: Library, inputs: PlanInput[]): Promise<
       summary.skip++;
     }
 
-    // 海报按 Emby/Kodi 的命名约定放成 `<视频名>-poster.<ext>`。
+    // 图片按 Emby/Kodi 的命名约定: 竖版 `<视频名>-poster.<ext>`, 横版 `<视频名>-thumb.<ext>`。
     let thumbFile: string | undefined;
     if (input.posterPath) {
       const extension = extname(input.posterPath) || ".jpg";
@@ -178,6 +180,15 @@ export async function buildPlan(library: Library, inputs: PlanInput[]): Promise<
       entries.push({ action: "copy-image", from: input.posterPath, to: resolve(join(root, directory, posterName)) });
       summary.copyImage++;
       thumbFile = posterName;
+    }
+
+    // 缩略图单独一张; 和海报是同一个文件时不再复制第二次。
+    if (input.thumbPath && input.thumbPath !== input.posterPath) {
+      const extension = extname(input.thumbPath) || ".jpg";
+      const thumbName = `${baseName}-thumb${extension}`;
+      entries.push({ action: "copy-image", from: input.thumbPath, to: resolve(join(root, directory, thumbName)) });
+      summary.copyImage++;
+      thumbFile = thumbName;
     }
 
     entries.push({

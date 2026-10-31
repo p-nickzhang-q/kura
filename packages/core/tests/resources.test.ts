@@ -6,7 +6,7 @@ import { buildNfo, buildPlan } from "../src/domain/materialize";
 import type { Metadata } from "../src/domain/types";
 import { HttpClient } from "../src/net/http";
 import { openRuntime } from "../src/runtime";
-import { cachedPoster, downloadPoster, downloadResource, findResource, refererFor, resourceDir } from "../src/tasks/resources";
+import { cachedPoster, cachedThumb, downloadPoster, downloadResource, findResource, refererFor, resourceDir } from "../src/tasks/resources";
 
 // 最小的"JPEG": 只要字节能落盘、扩展名按 content-type 推断即可。
 const FAKE_JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9]);
@@ -17,6 +17,10 @@ const server = Bun.serve({
     const url = new URL(request.url);
     if (url.pathname === "/poster.jpg") {
       return new Response(FAKE_JPEG, { headers: { "content-type": "image/jpeg" } });
+    }
+    if (url.pathname === "/thumb.jpg") {
+      // 横版缩略图, 内容无所谓 —— 但要是不同的字节, 免得撞上同一份缓存
+      return new Response(new Uint8Array([...FAKE_JPEG, 9, 9]), { headers: { "content-type": "image/jpeg" } });
     }
     if (url.pathname === "/broken.jpg") {
       return new Response("nope", { status: 404 });
@@ -113,9 +117,38 @@ describe("downloadPoster", () => {
 
   test("没有任何 URL 时返回 null 且不报错", async () => {
     const http = new HttpClient({ minIntervalMs: 0 });
-    const result = await downloadPoster(rt, http, { ...metadata, poster_urls: [], cover_urls: [] });
+    const result = await downloadPoster(rt, http, { ...metadata, poster_urls: [], cover_urls: [], thumb_urls: [] });
     expect(result.poster).toBeNull();
+    expect(result.thumb).toBeNull();
     expect(result.tried).toHaveLength(0);
+  });
+
+  test("缩略图单独下载: 海报竖版、缩略图横版各一张", async () => {
+    const http = new HttpClient({ minIntervalMs: 0 });
+    const result = await downloadPoster(rt, http, {
+      ...metadata,
+      poster_urls: [`${base}/poster.jpg`],
+      cover_urls: [],
+      thumb_urls: [`${base}/thumb.jpg`],
+    });
+
+    expect(result.poster?.url).toBe(`${base}/poster.jpg`);
+    expect(result.thumb?.url).toBe(`${base}/thumb.jpg`);
+    expect(result.thumb?.path).not.toBe(result.poster?.path);
+  });
+
+  test("缩略图下载失败时不影响海报", async () => {
+    const http = new HttpClient({ minIntervalMs: 0, retries: 0 });
+    const result = await downloadPoster(rt, http, {
+      ...metadata,
+      poster_urls: [`${base}/poster.jpg`],
+      cover_urls: [],
+      thumb_urls: [`${base}/broken-thumb.jpg`],
+    });
+
+    expect(result.poster).not.toBeNull();
+    expect(result.thumb).toBeNull();
+    expect(result.failures.some((failure) => failure.url.includes("broken-thumb"))).toBe(true);
   });
 });
 
@@ -144,6 +177,66 @@ describe("整理时的海报落地", () => {
     expect(copy.to).toBe("/media/library/有码/ABC-123/ABC-123-poster.jpg");
     expect(copy.from).toBe(poster!.path);
 
+    const nfo = plan.entries.find((entry) => entry.action === "write-nfo")!;
+    expect(nfo.content).toContain("<thumb>ABC-123-poster.jpg</thumb>");
+  });
+
+  test("海报与缩略图各落地一张, NFO 的 thumb 指向横版那张", async () => {
+    const withThumb: Metadata = {
+      ...metadata,
+      poster_urls: [`${base}/poster.jpg`],
+      cover_urls: [],
+      thumb_urls: [`${base}/thumb.jpg`],
+    };
+
+    const http = new HttpClient({ minIntervalMs: 0 });
+    const result = await downloadPoster(rt, http, withThumb);
+
+    const poster = cachedPoster(rt, withThumb);
+    const thumb = cachedThumb(rt, withThumb);
+    expect(thumb?.path).toBe(result.thumb?.path);
+
+    const plan = await buildPlan(
+      { id: 1, name: "主库", root: "/media/library", template: "{content_type}/{number}" },
+      [
+        {
+          path: "/media/library/in/ABC-123.mkv",
+          metadata: withThumb,
+          phase: { cd: null, part: null, hasSubtitle: false, mosaic: null, definition: null },
+          posterPath: poster!.path,
+          thumbPath: thumb!.path,
+        },
+      ],
+    );
+
+    expect(plan.summary.copyImage).toBe(2);
+    const targets = plan.entries.filter((entry) => entry.action === "copy-image").map((entry) => entry.to);
+    expect(targets).toContain("/media/library/有码/ABC-123/ABC-123-poster.jpg");
+    expect(targets).toContain("/media/library/有码/ABC-123/ABC-123-thumb.jpg");
+
+    const nfo = plan.entries.find((entry) => entry.action === "write-nfo")!;
+    expect(nfo.content).toContain("<thumb>ABC-123-thumb.jpg</thumb>");
+  });
+
+  test("缩略图与海报是同一张时只复制一次", async () => {
+    const http = new HttpClient({ minIntervalMs: 0 });
+    await downloadResource(rt, http, `${base}/poster.jpg`);
+    const poster = cachedPoster(rt, metadata)!;
+
+    const plan = await buildPlan(
+      { id: 1, name: "主库", root: "/media/library", template: "{number}" },
+      [
+        {
+          path: "/media/library/in/ABC-123.mkv",
+          metadata,
+          phase: { cd: null, part: null, hasSubtitle: false, mosaic: null, definition: null },
+          posterPath: poster.path,
+          thumbPath: poster.path,
+        },
+      ],
+    );
+
+    expect(plan.summary.copyImage).toBe(1);
     const nfo = plan.entries.find((entry) => entry.action === "write-nfo")!;
     expect(nfo.content).toContain("<thumb>ABC-123-poster.jpg</thumb>");
   });

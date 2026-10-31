@@ -51,8 +51,22 @@ const renameInput = ref<HTMLInputElement | null>(null);
 const pageInput = ref("1");
 const pageSize = 100;
 const itemTotal = ref(0);
-/** 演员过滤: null = 不过滤。实体索引在 core 里, 这里只传名字。 */
-const actorFilter = ref<string | null>(null);
+/** 当前生效的筛选条件。空对象 = 不过滤。键名与 core 的 listItems 选项一致。 */
+type FilterKey = "q" | "actor" | "studio" | "label" | "series" | "director" | "tag";
+const FILTERABLE_SINGLE: string[] = ["studio", "label", "series"];
+const LIST_FIELDS: string[] = ["actors", "directors", "tags"];
+const FILTER_LABEL: Record<FilterKey, string> = {
+  q: "关键词",
+  actor: "演员",
+  studio: "片商",
+  label: "厂牌",
+  series: "系列",
+  director: "导演",
+  tag: "标签",
+};
+const filters = ref<Partial<Record<FilterKey, string>>>({});
+const searchDraft = ref("");
+const translateProgress = ref<{ index: number; total: number; key: string } | null>(null);
 const pendingTotal = ref(0);
 const exhaustedTotal = ref(0);
 const pageCount = computed(() => Math.max(1, Math.ceil(itemTotal.value / pageSize)));
@@ -84,6 +98,9 @@ onMounted(async () => {
   unsubscribe = window.kura.onScanEvent((event) => {
     events.value = [event, ...events.value].slice(0, 200);
   });
+  unsubscribeTranslate = window.kura.onTranslateProgress((update) => {
+    translateProgress.value = { index: update.index, total: update.total, key: update.key };
+  });
   unsubscribeProgress = window.kura.onScrapeProgress((update) => {
     progress.value = update;
     // 每 5 条刷一次当前页: 刮到的结果立刻可见, 又不会每条都去查库。
@@ -95,6 +112,7 @@ onMounted(async () => {
 onUnmounted(() => {
   unsubscribe?.();
   unsubscribeProgress?.();
+  unsubscribeTranslate?.();
 });
 
 async function refreshAll(): Promise<void> {
@@ -142,9 +160,11 @@ async function reveal(path: string): Promise<void> {
 
 async function refreshItems(): Promise<void> {
   const result = await window.kura.items({
+    ...filters.value,
     limit: pageSize,
     offset: page.value * pageSize,
-    actor: actorFilter.value ?? undefined,
+    // 选了库就只看这个库的条目; 没选库看全部
+    libraryId: selectedId.value ?? undefined,
   });
   items.value = result.items;
   itemTotal.value = result.total;
@@ -171,15 +191,38 @@ async function goLast(): Promise<void> {
   await goPage(pageCount.value - 1);
 }
 
-async function filterByActor(name: string): Promise<void> {
-  actorFilter.value = actorFilter.value === name ? null : name;
+/** 点同一个值第二次就取消该条件。 */
+async function applyFilter(key: FilterKey, value: string): Promise<void> {
+  if (!value) return;
+  if (filters.value[key] === value) delete filters.value[key];
+  else filters.value[key] = value;
   page.value = 0;
   await refreshItems();
 }
 
-async function clearActorFilter(): Promise<void> {
-  actorFilter.value = null;
+async function applySearch(): Promise<void> {
+  const q = searchDraft.value.trim();
+  if (q) filters.value.q = q;
+  else delete filters.value.q;
   page.value = 0;
+  await refreshItems();
+}
+
+async function clearFilters(): Promise<void> {
+  filters.value = {};
+  searchDraft.value = "";
+  page.value = 0;
+  await refreshItems();
+}
+
+async function selectLibrary(id: number): Promise<void> {
+  if (selectedId.value === id) return;
+  selectedId.value = id;
+  // 换库等于换数据集: 页码与选中都清掉, 否则会停在一个不存在的页上
+  page.value = 0;
+  pageInput.value = "1";
+  picked.value = [];
+  detail.value = null;
   await refreshItems();
 }
 
@@ -263,6 +306,38 @@ async function doScrape(): Promise<void> {
   }
 }
 
+async function translateAll(): Promise<void> {
+  if (!info.value?.translate) {
+    note.value = "先在「设置」里配置 LLM 并打开翻译开关";
+    return;
+  }
+  translateProgress.value = { index: 0, total: 0, key: "准备中" };
+  const result = await run("批量翻译", () => window.kura.translatePending(1000));
+  translateProgress.value = null;
+  if (result) {
+    await refreshAll();
+    note.value = result.cancelled
+      ? `翻译已取消: 完成 ${result.count} 条`
+      : `翻译完成 ${result.count} 条`;
+  }
+}
+
+async function translateSelected(): Promise<void> {
+  if (picked.value.length === 0) return;
+  translateProgress.value = { index: 0, total: picked.value.length, key: "准备中" };
+  const result = await run("翻译选中", () => window.kura.translateItems(picked.value));
+  translateProgress.value = null;
+  if (result) {
+    note.value = `翻译 ${result.count} 条`;
+    await refreshAll();
+  }
+}
+
+async function cancelTranslate(): Promise<void> {
+  await window.kura.cancelTranslate();
+  note.value = "正在停止翻译…";
+}
+
 async function cancelScrape(): Promise<void> {
   await window.kura.cancelScrape();
   note.value = "正在停止…已发出的请求会立刻中断";
@@ -305,12 +380,15 @@ async function scrapePicked(): Promise<void> {
 
 async function postersPicked(): Promise<void> {
   if (picked.value.length === 0) return;
-  const result = await run("下载海报", async () => {
+  const result = await run("下载图片", async () => {
     const outputs = [];
     for (const key of picked.value) outputs.push(await window.kura.fetchPoster(key));
     return outputs;
   });
-  if (result) note.value = `海报已缓存 ${result.length} 张, 整理时会复制进库`;
+  if (result) {
+    const thumbs = result.filter((entry) => entry.thumb).length;
+    note.value = `已缓存 ${result.length} 条: 海报 ${result.filter((entry) => entry.poster).length} 张, 缩略图 ${thumbs} 张 —— 整理时会复制进库`;
+  }
 }
 
 async function togglePin(field: string): Promise<void> {
@@ -453,7 +531,7 @@ async function testDmm(): Promise<void> {
                 @blur="commitRename(library)"
               />
             </div>
-            <button v-else type="button" class="lib" @click="selectedId = library.id">
+            <button v-else type="button" class="lib" @click="selectLibrary(library.id)">
               <strong>
                 {{ library.name }}
                 <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
@@ -468,6 +546,14 @@ async function testDmm(): Promise<void> {
         <div class="actions">
           <button type="button" :disabled="busy || !selected" @click="doScan">扫描</button>
           <button type="button" :disabled="busy" @click="doScrape">刮削待处理</button>
+          <button
+            type="button"
+            :disabled="busy || !info?.translate"
+            :title="info?.translate ? '把已有条目里的日文标题/简介翻译成中文' : '先在设置里配置 LLM 并打开翻译开关'"
+            @click="translateAll"
+          >
+            翻译待处理{{ info?.translate && info.pendingTranslation ? ` (${info.pendingTranslation})` : "" }}
+          </button>
           <button
             type="button"
             :disabled="busy || !selected || selected.organizeEnabled === false"
@@ -500,6 +586,9 @@ async function testDmm(): Promise<void> {
             {{ progress.index }}/{{ progress.total || "?" }} · {{ progress.key }}
           </span>
           <button v-if="progress" type="button" class="danger" @click="cancelScrape">停止</button>
+          <span v-else-if="translateProgress" class="muted">
+            翻译 {{ translateProgress.index }}/{{ translateProgress.total }} · {{ translateProgress.key }}
+          </span>
           <span v-else-if="busy" class="muted">进行中…</span>
         </nav>
 
@@ -518,8 +607,17 @@ async function testDmm(): Promise<void> {
               全选
             </label>
             <span class="muted">已选 {{ picked.length }}</span>
-            <button v-if="actorFilter" type="button" class="chip" :title="`取消过滤`" @click="clearActorFilter">
-              演员: {{ actorFilter }} ✕
+            <span class="spacer" />
+            <input
+              v-model="searchDraft"
+              class="search"
+              type="search"
+              placeholder="搜番号 / 标题 / 演员 / 标签…"
+              @keyup.enter="applySearch"
+              @search="applySearch"
+            />
+            <button v-if="Object.keys(filters).length" type="button" class="chip" @click="clearFilters">
+              清空筛选 ✕
             </button>
             <span class="spacer" />
             <span class="muted">
@@ -545,8 +643,26 @@ async function testDmm(): Promise<void> {
               刮削选中 ({{ picked.length }})
             </button>
             <button type="button" :disabled="busy || picked.length === 0" @click="postersPicked">
-              下载海报 ({{ picked.length }})
+              下载图片 ({{ picked.length }})
             </button>
+            <button type="button" :disabled="busy || picked.length === 0" @click="translateSelected">
+              翻译选中 ({{ picked.length }})
+            </button>
+            <button v-if="translateProgress" type="button" class="danger" @click="cancelTranslate">
+              停止翻译
+            </button>
+          </div>
+
+          <div v-if="Object.keys(filters).length" class="filter-bar">
+            <span
+              v-for="(value, key) in filters"
+              :key="key"
+              class="chip"
+              :title="`点一下取消这个条件`"
+              @click="applyFilter(key as FilterKey, value as string)"
+            >
+              {{ FILTER_LABEL[key as FilterKey] }}: {{ value }} ✕
+            </span>
           </div>
 
           <div class="split">
@@ -576,13 +692,22 @@ async function testDmm(): Promise<void> {
                         @change="toggle(item.key)"
                       />
                     </td>
+                    <td>
+                      <img v-if="item.coverUrl" class="cover" :src="item.coverUrl" :alt="item.number" loading="lazy" />
+                      <span v-else class="cover placeholder">无图</span>
+                    </td>
                     <td class="mono">
                       {{ item.number }}
                       <span v-if="item.pinned.length" title="有锁定字段">🔒</span>
                     </td>
                     <td>{{ TYPE_LABEL[item.contentType] ?? item.contentType }}</td>
                     <td>{{ item.title ?? "未刮削" }}</td>
-                    <td>{{ item.studio ?? "—" }}</td>
+                    <td>
+                      <button v-if="item.studio" type="button" class="actor" :title="`只看 ${item.studio}`" @click="applyFilter('studio', item.studio!)">
+                        {{ item.studio }}
+                      </button>
+                      <span v-else>—</span>
+                    </td>
                     <td>
                       <template v-if="item.actors?.length">
                         <button
@@ -601,7 +726,9 @@ async function testDmm(): Promise<void> {
                     </td>
                   </tr>
                   <tr v-if="items.length === 0">
-                    <td colspan="6" class="muted">没有条目。先扫描一个媒体库。</td>
+                    <td colspan="7" class="muted">
+                      {{ Object.keys(filters).length ? "没有符合筛选条件的条目。" : "没有条目。先扫描一个媒体库。" }}
+                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -613,9 +740,20 @@ async function testDmm(): Promise<void> {
                 <button class="ghost" type="button" @click="detail = null">×</button>
               </header>
               <ul>
-                <li v-for="field in FIELDS" :key="field" v-show="fieldValue(detail, field)">
+                <li
+                  v-for="field in FIELDS"
+                  :key="field"
+                  v-show="fieldValue(detail, field) && !LIST_FIELDS.includes(field)"
+                >
                   <span class="label">{{ FIELD_LABEL[field] }}</span>
-                  <span class="value" :title="fieldValue(detail, field)">{{ fieldValue(detail, field) }}</span>
+                  <span
+                    class="value"
+                    :class="{ link: FILTERABLE_SINGLE.includes(field) }"
+                    :title="FILTERABLE_SINGLE.includes(field) ? '点一下只看这个' : fieldValue(detail, field)"
+                    @click="FILTERABLE_SINGLE.includes(field) && applyFilter(field as FilterKey, fieldValue(detail, field))"
+                  >
+                    {{ fieldValue(detail, field) }}
+                  </span>
                   <button
                     class="pin"
                     type="button"
@@ -628,7 +766,23 @@ async function testDmm(): Promise<void> {
                   <span class="from" :title="'字段来源'">{{ detail.fieldSources?.[field] ?? "" }}</span>
                 </li>
               </ul>
-              <p class="muted hint">锁定后重新刮削不会覆盖该字段。</p>
+              <div v-for="field in ['actors', 'directors', 'tags'] as const" :key="field" class="detail-chips">
+                <span class="muted">{{ FIELD_LABEL[field] }}</span>
+                <template v-if="detail[field]?.length">
+                  <button
+                    v-for="value in detail[field]"
+                    :key="value"
+                    type="button"
+                    class="chip"
+                    :title="`只看这个${FIELD_LABEL[field]}`"
+                    @click="applyFilter(field === 'actors' ? 'actor' : field === 'directors' ? 'director' : 'tag', value)"
+                  >
+                    {{ value }}
+                  </button>
+                </template>
+                <span v-else class="muted">—</span>
+              </div>
+              <p class="muted hint">锁定后重新刮削不会覆盖该字段。点片商/厂牌/系列/演员/导演/标签可以筛出同类条目。</p>
             </aside>
           </div>
         </div>
@@ -927,6 +1081,71 @@ h1 {
   background: var(--panel);
   color: var(--text);
   font: inherit;
+}
+
+/* 条目列表里的封面缩略图 */
+.cover {
+  width: 46px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+  background: #1d2431;
+}
+
+.cover.placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.search {
+  width: 220px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.filter-bar .chip {
+  cursor: pointer;
+}
+
+.value.link {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.value.link:hover {
+  text-decoration: underline;
+}
+
+.detail-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--line);
+}
+
+.detail-chips .chip {
+  cursor: pointer;
+  border-color: var(--line);
+  color: var(--text);
 }
 
 /* 页码输入框: 和翻页按钮同高, 窄到只放几位数字 */

@@ -55,6 +55,8 @@ interface KuraScanReport {
 interface KuraItem {
   number: string;
   key: string;
+  /** 已缓存封面的本地 URL (kura-res://...); 没缓存为 null。 */
+  coverUrl?: string | null;
   content_type?: string;
   contentType: string;
   title?: string;
@@ -143,7 +145,23 @@ interface KuraBridge {
   }>;
   cancelScrape(): Promise<{ cancelled: boolean }>;
   onScrapeProgress(callback: (progress: { index: number; total: number; key: string; ok: boolean; filled: number; error?: string }) => void): () => void;
-  items(params?: { limit?: number; offset?: number; type?: string; actor?: string }): Promise<{
+  translatePending(limit?: number): Promise<{ count: number; cancelled: boolean }>;
+  translateItems(keys: string[]): Promise<{ count: number; cancelled: boolean }>;
+  cancelTranslate(): Promise<{ cancelled: boolean }>;
+  onTranslateProgress(callback: (progress: { index: number; total: number; key: string; translated: string[]; error?: string }) => void): () => void;
+  items(params?: {
+    limit?: number;
+    offset?: number;
+    type?: string;
+    actor?: string;
+    libraryId?: number;
+    q?: string;
+    studio?: string;
+    label?: string;
+    series?: string;
+    director?: string;
+    tag?: string;
+  }): Promise<{
     items: KuraItem[];
     total: number;
     pending: number;

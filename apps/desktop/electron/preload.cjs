@@ -12,6 +12,14 @@ contextBridge.exposeInMainWorld("kura", {
   setLibraryOrganize: (libraryId, enabled) => ipcRenderer.invoke("library:set-organize", { libraryId, enabled }),
   scrapePending: (limit) => ipcRenderer.invoke("scrape:pending", { limit }),
   cancelScrape: () => ipcRenderer.invoke("scrape:cancel"),
+  translatePending: (limit) => ipcRenderer.invoke("translate:pending", { limit }),
+  translateItems: (keys) => ipcRenderer.invoke("translate:items", { keys }),
+  cancelTranslate: () => ipcRenderer.invoke("translate:cancel"),
+  onTranslateProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on("translate:progress", listener);
+    return () => ipcRenderer.off("translate:progress", listener);
+  },
   items: (params) => ipcRenderer.invoke("item:list", params ?? {}),
   item: (number) => ipcRenderer.invoke("item:get", number),
   unparsedFiles: (params) => ipcRenderer.invoke("files:unparsed", params ?? {}),
