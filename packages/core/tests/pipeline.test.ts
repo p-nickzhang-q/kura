@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLibrary, getItem } from "../src/index";
+import { createLibrary, getItem, updateItem } from "../src/index";
 import { openRuntime } from "../src/runtime";
 import { createRegistry, defaultSources, fixtureSource } from "../src/sources";
 import { listFiles } from "../src/tasks/scan";
@@ -115,6 +115,49 @@ describe("scan → scrape → organize", () => {
       expect(countItems(rt, { actor: "乙" })).toBe(1);
       expect(listItems(rt, { actor: "丙" })).toEqual([]);
       expect(countItems(rt)).toBe(1);
+    } finally {
+      rt.close();
+    }
+  });
+
+  test("按关键词/片商/导演/标签/媒体库筛选, 且 total 与列表一致", async () => {
+    const rt = await openRuntime({ dataDir });
+    try {
+      const library = createLibrary(rt.db, { name: "主库", root: libraryRoot });
+      await scan(rt, { library });
+      await scrape(rt, {
+        key: { value: "ABC-123", number: "ABC-123", contentType: "censored" },
+        registry: defaultSources({ env: {} }),
+        fixturesDir,
+        sources: ["fixture"],
+      });
+      updateItem(rt, {
+        key: "ABC-123",
+        patch: { tags: ["巨乳", "单体作品"], directors: ["某导演"] },
+      });
+
+      // 关键词: 标题、番号(大小写不敏感)、演员、标签都算命中
+      expect(listItems(rt, { q: "离线样本" }).map((item) => item.key)).toEqual(["ABC-123"]);
+      expect(listItems(rt, { q: "abc-123" }).length).toBe(1);
+      expect(listItems(rt, { q: "某导演" }).length).toBe(1);
+      expect(listItems(rt, { q: "巨乳" }).length).toBe(1);
+      expect(listItems(rt, { q: "完全不存在的词" }).length).toBe(0);
+
+      // 单值字段精确匹配 (不区分大小写)
+      expect(listItems(rt, { studio: "某片商" }).length).toBe(1);
+      expect(listItems(rt, { studio: "某" }).length).toBe(0); // 不是 like
+
+      // 多值字段用 json_each 精确比对: "巨" 不该命中 "巨乳"
+      expect(listItems(rt, { tag: "巨乳" }).length).toBe(1);
+      expect(listItems(rt, { tag: "巨" }).length).toBe(0);
+      expect(listItems(rt, { director: "某导演" }).length).toBe(1);
+
+      // 按库过滤: 这个文件属于主库, 换成不存在的库就查不到
+      expect(countItems(rt, { libraryId: library.id })).toBe(1);
+      expect(countItems(rt, { libraryId: library.id + 99 })).toBe(0);
+
+      // total 与列表用的是同一套 where
+      expect(countItems(rt, { q: "离线样本" })).toBe(listItems(rt, { q: "离线样本" }).length);
     } finally {
       rt.close();
     }

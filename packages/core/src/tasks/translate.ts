@@ -55,13 +55,74 @@ export async function translateItem(
   return { key, translated };
 }
 
-/** 待翻译 = 含假名且还没被翻译过(显示值仍等于原文或原文为空)。 */
-export function pendingTranslationKeys(rt: Runtime, limit = 20): string[] {
+/**
+ * 待翻译 = 标题里还有假名, 且 `title_original` 为空 (从没翻过)。
+ *
+ * 用后者的原因: 翻译后 `title` 是中文、`title_original` 是日文原文,
+ * 这样"翻过没有"是一个确定的布尔值, 不用去比较两个字符串。
+ */
+export function pendingTranslationKeys(rt: Runtime, limit = 1000): string[] {
   const rows = rt.db.all<{ number: string; title: string | null; title_original: string | null }>(
-    "select number, title, title_original from items where title is not null order by updated_at desc limit ?",
+    "select number, title, title_original from items where title is not null and (title_original is null or title_original = '') order by updated_at desc limit ?",
     [limit],
   );
   return rows
     .filter((row) => needsTranslation(row.title ?? undefined))
     .map((row) => row.number);
+}
+
+/** 界面上显示"还有 N 条可翻译"。 */
+export function countPendingTranslation(rt: Runtime): number {
+  return pendingTranslationKeys(rt).length;
+}
+
+export interface TranslateProgress {
+  index: number;
+  total: number;
+  key: string;
+  translated: string[];
+  error?: string;
+}
+
+export interface TranslateBatchOptions {
+  translator: Translator;
+  limit?: number;
+  signal?: AbortSignal;
+  onProgress?: (progress: TranslateProgress) => void;
+}
+
+/**
+ * 批量翻译。与 scrape 分开是因为失败原因不同: 模型限流/超时不影响已翻好的条目,
+ * 所以逐条 catch, 一条失败不中断整批。
+ */
+export async function translatePending(
+  rt: Runtime,
+  options: TranslateBatchOptions,
+): Promise<{ count: number; cancelled: boolean; reports: TranslateProgress[] }> {
+  const keys = pendingTranslationKeys(rt, options.limit ?? 1000);
+  const reports: TranslateProgress[] = [];
+
+  for (const [index, key] of keys.entries()) {
+    if (options.signal?.aborted) {
+      return { count: reports.length, cancelled: true, reports };
+    }
+    try {
+      const report = await translateItem(rt, key, options.translator);
+      const progress = { index: index + 1, total: keys.length, key, translated: report.translated };
+      reports.push(progress);
+      options.onProgress?.(progress);
+    } catch (err) {
+      const progress = {
+        index: index + 1,
+        total: keys.length,
+        key,
+        translated: [],
+        error: err instanceof Error ? err.message : String(err),
+      };
+      reports.push(progress);
+      options.onProgress?.(progress);
+    }
+  }
+
+  return { count: reports.length, cancelled: false, reports };
 }

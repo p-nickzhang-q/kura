@@ -337,17 +337,33 @@ export interface ListItemOptions {
   type?: string;
   /** 按演员过滤。接受任意写法, 内部按 normalizeActorName 归一后匹配。 */
   actor?: string;
+  /** 只看这个媒体库里的条目 (按 media_files 反查)。 */
+  libraryId?: number;
+  /** 关键词: 番号/标题/原名/片商/系列/演员/标签 都算命中。 */
+  q?: string;
+  studio?: string;
+  label?: string;
+  series?: string;
+  director?: string;
+  tag?: string;
 }
 
-export function listItems(rt: Runtime, options: ListItemOptions = {}): ItemView[] {
-  const limit = options.limit ?? 50;
-  const offset = options.offset ?? 0;
+/**
+ * 过滤条件集中在一处: listItems 与 countItems 必须用同一套 where,
+ * 否则"共 N 条"和列表长度会对不上。
+ */
+function itemFilters(options: Omit<ListItemOptions, "limit" | "offset">): { where: string[]; params: unknown[] } {
   const where: string[] = [];
   const params: unknown[] = [];
 
   if (options.type) {
     where.push("items.content_type = ?");
     params.push(options.type);
+  }
+
+  if (options.libraryId !== undefined) {
+    where.push("items.number in (select number from media_files where library_id = ? and number is not null)");
+    params.push(options.libraryId);
   }
 
   if (options.actor) {
@@ -358,25 +374,59 @@ export function listItems(rt: Runtime, options: ListItemOptions = {}): ItemView[
     params.push(normalizeActorName(options.actor));
   }
 
+  for (const [field, column] of [
+    ["studio", "studio"],
+    ["label", "label"],
+    ["series", "series"],
+  ] as const) {
+    const value = options[field];
+    if (value) {
+      where.push(`${column} = ? collate nocase`);
+      params.push(value);
+    }
+  }
+
+  // 多值字段是 JSON 数组, 用 json_each 拆开精确比对 (LIKE 会把 "甲" 匹配到 "甲乙")
+  for (const [field, column] of [
+    ["director", "directors"],
+    ["tag", "tags"],
+  ] as const) {
+    const value = options[field];
+    if (value) {
+      where.push(`exists (select 1 from json_each(items.${column}) where value = ? collate nocase)`);
+      params.push(value);
+    }
+  }
+
+  if (options.q) {
+    const like = `%${options.q}%`;
+    where.push(`(
+      items.number like ? collate nocase
+      or items.title like ?
+      or items.title_original like ?
+      or items.studio like ?
+      or items.label like ?
+      or items.series like ?
+      or exists (select 1 from json_each(items.actors) where value like ?)
+      or exists (select 1 from json_each(items.tags) where value like ?)
+      or exists (select 1 from json_each(items.directors) where value like ?)
+    )`);
+    params.push(like, like, like, like, like, like, like, like, like);
+  }
+
+  return { where, params };
+}
+
+export function listItems(rt: Runtime, options: ListItemOptions = {}): ItemView[] {
+  const { where, params } = itemFilters(options);
   const sql = `select items.* from items${where.length > 0 ? ` where ${where.join(" and ")}` : ""} order by items.updated_at desc limit ? offset ?`;
-  const rows = rt.db.all<ItemRow>(sql, [...params, limit, offset]);
+  const rows = rt.db.all<ItemRow>(sql, [...params, options.limit ?? 50, options.offset ?? 0]);
   return rows.map((row) => ({ ...rowToMetadata(row), pinned: parseJson<string[]>(row.pinned) ?? [] }));
 }
 
 /** 分页要显示"第 x/共 N 条", 所以总数得单独算一次。 */
-export function countItems(rt: Runtime, options: { type?: string; actor?: string } = {}): number {
-  const where: string[] = [];
-  const params: unknown[] = [];
-  if (options.type) {
-    where.push("content_type = ?");
-    params.push(options.type);
-  }
-  if (options.actor) {
-    where.push(
-      "number in (select ia.number from item_actors ia join actors a on a.id = ia.actor_id where a.normalized = ?)",
-    );
-    params.push(normalizeActorName(options.actor));
-  }
+export function countItems(rt: Runtime, options: Omit<ListItemOptions, "limit" | "offset"> = {}): number {
+  const { where, params } = itemFilters(options);
   const row = rt.db.get<{ c: number }>(
     `select count(*) c from items${where.length > 0 ? ` where ${where.join(" and ")}` : ""}`,
     params,

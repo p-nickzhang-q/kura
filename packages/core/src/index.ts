@@ -52,7 +52,7 @@ export type { MediaFileView } from "./tasks/scan";
 export type { ScanEvent, ScanOptions, ScanReport } from "./tasks/scan";
 
 export { countExhausted, countItems, countPending, getItem, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys, scrape, scrapePending, scrapePendingTask } from "./tasks/scrape";
-export { pendingTranslationKeys, translateItem } from "./tasks/translate";
+export { countPendingTranslation, pendingTranslationKeys, translateItem, translatePending, type TranslateProgress } from "./tasks/translate";
 export type { TranslateReport } from "./tasks/translate";
 export { buildSystemPrompt, chatEndpoint, createTranslator, hasKana, needsTranslation, openTranslator, TranslationCache } from "./llm/translate";
 export type { LlmConfig, Translator } from "./llm/translate";
@@ -61,7 +61,7 @@ export type { ItemView, ScrapeOptions, ScrapePendingOptions, ScrapePendingResult
 export { parseFieldList, parseListValue, updateItem } from "./tasks/item";
 export type { UpdateItemOptions } from "./tasks/item";
 
-export { cachedPoster, downloadPoster, downloadResource, findResource, refererFor, resourceDir } from "./tasks/resources";
+export { cachedPoster, cachedThumb, downloadPoster, downloadResource, findResource, refererFor, resourceDir } from "./tasks/resources";
 export type { LocalResource, PosterDownloadResult } from "./tasks/resources";
 
 export { cancelTask, createTask, finishTask, getTask, listTasks, markRunning, recoverInterrupted, retryTask, runTask, updateProgress } from "./tasks/queue";

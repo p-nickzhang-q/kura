@@ -43,6 +43,7 @@ import {
   resolveLlm,
   translateEnabled,
   translateItem,
+  translatePending,
   updateLibraryTemplate,
   cachedPoster,
   downloadPoster,
@@ -419,7 +420,7 @@ export const COMMANDS: Command[] = [
     args: [
       { name: "number", type: "string", description: "番号", positional: true },
       { name: "pending", type: "boolean", description: "翻译所有含日文且未翻译的条目", default: false },
-      { name: "limit", type: "number", description: "--pending 时的批大小", default: 20 },
+      { name: "limit", type: "number", description: "--pending 时的批大小", default: 1000 },
     ],
     async run(ctx, args) {
       const config = resolveLlm(ctx.rt!.settings);
@@ -434,16 +435,15 @@ export const COMMANDS: Command[] = [
       if (!translator) throw new AppError("翻译器初始化失败", EXIT.INTERNAL);
 
       if (args.options.pending) {
-        const keys = pendingTranslationKeys(ctx.rt!, Number(args.options.limit ?? 20));
-        const reports = [];
-        for (const key of keys) {
-          try {
-            reports.push(await translateItem(ctx.rt!, key, translator));
-          } catch (err) {
-            reports.push({ key, translated: [], skipped: err instanceof Error ? err.message : String(err) });
-          }
-        }
-        return { pending: true, count: reports.length, reports };
+        const result = await translatePending(ctx.rt!, {
+          translator,
+          limit: Number(args.options.limit ?? 1000),
+          onProgress: (progress) => {
+            if (progress.error) ctx.out.log(`[${progress.index}/${progress.total}] ${progress.key} ✗ ${progress.error}`);
+            else ctx.out.log(`[${progress.index}/${progress.total}] ${progress.key} ✓ ${progress.translated.join(", ") || "无变化"}`);
+          },
+        });
+        return { pending: true, count: result.count, reports: result.reports };
       }
 
       const number = args.positionals.number;
@@ -471,7 +471,7 @@ export const COMMANDS: Command[] = [
 
   {
     name: "resource",
-    summary: "资源: fetch <番号> 下载海报到本地缓存 (整理时再复制进库)",
+    summary: "资源: fetch <番号> 下载海报(竖版)+缩略图(横版)到本地缓存 (整理时再复制进库)",
     needsDb: true,
     args: [
       { name: "action", type: "string", description: "目前只有 fetch", positional: true, default: "fetch" },
@@ -493,10 +493,17 @@ export const COMMANDS: Command[] = [
           { failures: result.failures },
         );
       }
-      return { key, path: result.poster.path, size: result.poster.size, contentType: result.poster.contentType, failures: result.failures };
+      return {
+        key,
+        poster: result.poster ? { path: result.poster.path, size: result.poster.size } : null,
+        thumb: result.thumb ? { path: result.thumb.path, size: result.thumb.size } : null,
+        failures: result.failures,
+      };
     },
-    render(data: { key: string; path: string; size: number }) {
-      return `${data.key} 海报已缓存\n  ${data.path} (${Math.round(data.size / 1024)} KB)`;
+    render(data: { key: string; poster: { path: string; size: number } | null; thumb: { path: string; size: number } | null }) {
+      const line = (label: string, file: { path: string; size: number } | null): string =>
+        file ? `  ${label} ${file.path} (${Math.round(file.size / 1024)} KB)` : `  ${label} (无)`;
+      return `${data.key} 图片已缓存\n${line("海报", data.poster)}\n${line("缩略图", data.thumb)}`;
     },
   },
 
@@ -541,6 +548,13 @@ export const COMMANDS: Command[] = [
       { name: "fields", type: "string", description: "lock/unlock 的字段, 逗号分隔", positional: true },
       { name: "type", type: "string", description: "按类型筛选 (list)" },
       { name: "actor", type: "string", description: "按演员筛选 (list), 空白与全半角差异不影响命中" },
+      { name: "q", type: "string", description: "关键词: 番号/标题/原名/片商/系列/演员/标签" },
+      { name: "studio", type: "string", description: "按片商筛选 (list)" },
+      { name: "label", type: "string", description: "按厂牌筛选 (list)" },
+      { name: "series", type: "string", description: "按系列筛选 (list)" },
+      { name: "director", type: "string", description: "按导演筛选 (list)" },
+      { name: "tag", type: "string", description: "按标签筛选 (list)" },
+      { name: "library", type: "string", description: "只看某个媒体库 (list)" },
       { name: "limit", type: "number", description: "条数 (list)", default: 20 },
       { name: "offset", type: "number", description: "跳过条数 (list)", default: 0 },
       { name: "title", type: "string", description: "set: 标题" },
@@ -567,17 +581,28 @@ export const COMMANDS: Command[] = [
       }
 
       if (action === "list") {
-        const type = typeof args.options.type === "string" ? args.options.type : undefined;
-        const actor = typeof args.options.actor === "string" ? args.options.actor : undefined;
+        const text = (name: string) => (typeof args.options[name] === "string" ? (args.options[name] as string) : undefined);
+        const libraryRef = text("library");
+        const library = libraryRef ? requireLibrary(ctx, libraryRef) : null;
+        const filters = {
+          type: text("type"),
+          actor: text("actor"),
+          q: text("q"),
+          studio: text("studio"),
+          label: text("label"),
+          series: text("series"),
+          director: text("director"),
+          tag: text("tag"),
+          libraryId: library?.id,
+        };
         const items = listItems(ctx.rt!, {
+          ...filters,
           limit: Number(args.options.limit ?? 20),
           offset: Number(args.options.offset ?? 0),
-          type,
-          actor,
         });
         return {
           items,
-          total: countItems(ctx.rt!, { type, actor }),
+          total: countItems(ctx.rt!, filters),
           pending: countPending(ctx.rt!),
           exhausted: countExhausted(ctx.rt!),
         };
