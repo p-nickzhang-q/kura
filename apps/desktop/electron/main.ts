@@ -153,6 +153,33 @@ async function buildTranslator() {
   return openTranslator(mustRuntime(), createHttp(), resolveLlm(settings));
 }
 
+/**
+ * 自定义协议必须在 app ready **之后**注册: protocol.handle 内部会拿 defaultSession,
+ * 在 ready 之前调用直接抛 "Session can only be received when app is ready"。
+ * (registerSchemesAsPrivileged 相反, 必须在那之前 —— 见文件顶部。)
+ */
+function registerProtocols(): void {
+  // 库目录里的现成图片 (不是 Kura 下载的): 只允许读库根目录下的图片文件。
+  protocol.handle("kura-file", (request) => {
+    const raw = decodeURIComponent(new URL(request.url).pathname.replace(/^\//, ""));
+    const target = resolve(raw);
+    const roots = listLibraries(mustRuntime().db).map((library) => resolve(library.root));
+    const inside = roots.some((root) => target === root || target.startsWith(root + sep));
+    const isImage = /\.(jpe?g|png|webp|gif)$/i.test(target);
+    if (!inside || !isImage) return new Response("forbidden", { status: 403 });
+    return net.fetch(pathToFileURL(target).href);
+  });
+
+  // Kura 自己下载的图片缓存: 渲染进程没有 file:// 权限, 也不该有。
+  protocol.handle("kura-res", (request) => {
+    const name = decodeURIComponent(new URL(request.url).pathname.replace(/^\//, ""));
+    if (!/^[a-f0-9]{8,64}\.(jpg|jpeg|png|webp|gif)$/i.test(name)) {
+      return new Response("bad resource name", { status: 400 });
+    }
+    return net.fetch(pathToFileURL(join(resourceDir(mustRuntime()), name)).href);
+  });
+}
+
 function mustRuntime(): Runtime {
   if (!runtime) throw new AppError("运行时尚未就绪", EXIT.RETRYABLE);
   return runtime;
@@ -533,26 +560,6 @@ if (!app.requestSingleInstanceLock()) {
     win.focus();
   });
 
-  // 库目录里的现成图片 (不是 Kura 下载的): 只允许读库根目录下的图片文件。
-  protocol.handle("kura-file", (request) => {
-    const raw = decodeURIComponent(new URL(request.url).pathname.replace(/^\//, ""));
-    const target = resolve(raw);
-    const roots = listLibraries(mustRuntime().db).map((library) => resolve(library.root));
-    const inside = roots.some((root) => target === root || target.startsWith(root + sep));
-    const isImage = /\.(jpe?g|png|webp|gif)$/i.test(target);
-    if (!inside || !isImage) return new Response("forbidden", { status: 403 });
-    return net.fetch(pathToFileURL(target).href);
-  });
-
-  // 本地图片走自定义协议: 渲染进程没有 file:// 权限, 也不该有。
-  protocol.handle("kura-res", (request) => {
-    const name = decodeURIComponent(new URL(request.url).pathname.replace(/^\//, ""));
-    if (!/^[a-f0-9]{8,64}\.(jpg|jpeg|png|webp|gif)$/i.test(name)) {
-      return new Response("bad resource name", { status: 400 });
-    }
-    return net.fetch(pathToFileURL(join(resourceDir(mustRuntime()), name)).href);
-  });
-
   app.whenReady().then(async () => {
     try {
       runtime = await openRuntime();
@@ -563,6 +570,7 @@ if (!app.requestSingleInstanceLock()) {
       return;
     }
     await applyProxy();
+    registerProtocols();
     registerIpc();
     await createWindow();
   });
