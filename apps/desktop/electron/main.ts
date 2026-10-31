@@ -438,7 +438,12 @@ function registerIpc(): void {
 
   ipcMain.handle("tasks:retry", (_event, input: { id: number }) => retryTask(mustRuntime(), input.id));
 
-  ipcMain.handle("item:get", (_event, number: string) => getItem(mustRuntime(), number));
+  ipcMain.handle("item:get", (_event, number: string) => {
+    const rt = mustRuntime();
+    const item = getItem(rt, number);
+    // 详情面板要显示图, 与列表用同一套解析 (缓存 → 视频旁现成图)
+    return item ? { ...item, coverUrl: coverUrlFor(rt, item) } : null;
+  });
 
   ipcMain.handle("item:update", (_event, input: { key: string; pin?: string[]; unpin?: string[] }) =>
     updateItem(mustRuntime(), { key: input.key, pin: input.pin as never, unpin: input.unpin as never }),

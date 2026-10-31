@@ -746,16 +746,12 @@ async function testDmm(): Promise<void> {
                         @change="toggle(item.key)"
                       />
                     </td>
-                    <td>
-                      <img v-if="item.coverUrl" class="cover" :src="item.coverUrl" :alt="item.number" loading="lazy" />
-                      <span v-else class="cover placeholder">无图</span>
-                    </td>
                     <td class="mono">
                       {{ item.number }}
                       <span v-if="item.pinned.length" title="有锁定字段">🔒</span>
                     </td>
                     <td>{{ TYPE_LABEL[item.contentType] ?? item.contentType }}</td>
-                    <td>{{ item.title ?? "未刮削" }}</td>
+                    <td class="wrap-2" :title="item.title ?? ''">{{ item.title ?? "未刮削" }}</td>
                     <td>
                       <button v-if="item.studio" type="button" class="actor" :title="`只看 ${item.studio}`" @click="applyFilter('studio', item.studio!)">
                         {{ item.studio }}
@@ -780,7 +776,7 @@ async function testDmm(): Promise<void> {
                     </td>
                   </tr>
                   <tr v-if="items.length === 0">
-                    <td colspan="7" class="muted">
+                    <td colspan="6" class="muted">
                       {{ Object.keys(filters).length ? "没有符合筛选条件的条目。" : "没有条目。先扫描一个媒体库。" }}
                     </td>
                   </tr>
@@ -793,6 +789,9 @@ async function testDmm(): Promise<void> {
                 <strong class="mono">{{ detail.number }}</strong>
                 <button class="ghost" type="button" @click="detail = null">×</button>
               </header>
+              <div v-if="detail.coverUrl" class="detail-cover">
+                <img :src="detail.coverUrl" :alt="detail.number" />
+              </div>
               <ul>
                 <li
                   v-for="field in FIELDS"
@@ -803,7 +802,7 @@ async function testDmm(): Promise<void> {
                   <span
                     class="value"
                     :class="{ link: FILTERABLE_SINGLE.includes(field) }"
-                    :title="FILTERABLE_SINGLE.includes(field) ? '点一下只看这个' : fieldValue(detail, field)"
+                    :title="FILTERABLE_SINGLE.includes(field) ? '点一下只看这个' : ''"
                     @click="FILTERABLE_SINGLE.includes(field) && applyFilter(field as FilterKey, fieldValue(detail, field))"
                   >
                     {{ fieldValue(detail, field) }}
@@ -1516,6 +1515,28 @@ td {
   white-space: nowrap;
 }
 
+/* 标题这类长文本: 允许折两行, 鼠标悬停看完整内容 */
+td.wrap-2 {
+  max-width: 380px;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.35;
+}
+
+.detail-cover {
+  margin: 8px 0 10px;
+  text-align: center;
+}
+
+.detail-cover img {
+  max-width: 100%;
+  max-height: 260px;
+  border-radius: 8px;
+  background: #1d2431;
+}
+
 tbody tr {
   cursor: pointer;
 }
@@ -1535,7 +1556,7 @@ td.pick {
 }
 
 .detail {
-  width: 330px;
+  width: 380px;
   flex: none;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -1572,9 +1593,10 @@ td.pick {
 }
 
 .detail .value {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 详情是"看全"的地方, 长标题/长简介允许折行, 不要再截断 */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
 }
 
 .detail .pin {
