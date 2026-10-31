@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import type { Metadata } from "../domain/types";
@@ -153,19 +153,30 @@ export function findSidecarImages(videoPath: string): { poster: string | null; t
   const directory = dirname(videoPath);
   const base = basename(videoPath, extname(videoPath));
 
-  const pick = (names: string[]): string | null => {
-    for (const name of names) {
+  // 先列目录再按小写比对: 用户那边可能是 POSTER.JPG / Fanart.PNG,
+  // 靠文件系统的大小写不敏感只在一个平台上能用。
+  let names: Map<string, string>;
+  try {
+    names = new Map(readdirSync(directory).map((entry) => [entry.toLowerCase(), entry]));
+  } catch {
+    return { poster: null, thumb: null };
+  }
+
+  const pick = (candidates: string[]): string | null => {
+    for (const name of candidates) {
       for (const extension of SIDECAR_EXTENSIONS) {
-        const candidate = join(directory, `${name}${extension}`);
-        if (existsSync(candidate)) return candidate;
+        const hit = names.get(`${name}${extension}`.toLowerCase());
+        if (hit) return join(directory, hit);
       }
     }
     return null;
   };
 
   return {
+    // 越具体越优先: <视频名>-poster 比目录级的 poster 更可能是这一部的
     poster: pick([`${base}-poster`, `${base}-cover`, base, "poster", "folder", "cover"]),
-    thumb: pick([`${base}-thumb`, `${base}-fanart`, "fanart", "backdrop", "thumb"]),
+    // thumb.jpg 名字最贴切, 其次 fanart / backdrop (都是横版)
+    thumb: pick([`${base}-thumb`, `${base}-fanart`, "thumb", "fanart", "backdrop"]),
   };
 }
 

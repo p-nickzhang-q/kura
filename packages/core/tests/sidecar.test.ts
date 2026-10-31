@@ -35,6 +35,28 @@ describe("findSidecarImages", () => {
     expect(findSidecarImages(join(root, "XYZ-001.mp4")).poster).toBe(join(root, "poster.jpg"));
   });
 
+  test("同一目录下的 poster.jpg / fanart.jpg / thumb.jpg 三张都能用", async () => {
+    await writeFile(join(root, "ABC-123.mkv"), "v");
+    await writeFile(join(root, "poster.jpg"), "p");
+    await writeFile(join(root, "fanart.jpg"), "f");
+    await writeFile(join(root, "thumb.jpg"), "t");
+
+    const found = findSidecarImages(join(root, "ABC-123.mkv"));
+    expect(found.poster).toBe(join(root, "poster.jpg"));
+    // thumb.jpg 名字最贴切, 优先于 fanart
+    expect(found.thumb).toBe(join(root, "thumb.jpg"));
+  });
+
+  test("大小写不敏感: POSTER.JPG / Fanart.PNG 也认", async () => {
+    await writeFile(join(root, "ABC-123.mkv"), "v");
+    await writeFile(join(root, "POSTER.JPG"), "p");
+    await writeFile(join(root, "Fanart.PNG"), "f");
+
+    const found = findSidecarImages(join(root, "ABC-123.mkv"));
+    expect(found.poster).toBe(join(root, "POSTER.JPG"));
+    expect(found.thumb).toBe(join(root, "Fanart.PNG"));
+  });
+
   test("没有图就返回 null, 不猜别的目录", async () => {
     await writeFile(join(root, "ABC-123.mkv"), "v");
     await writeFile(join(root, "sub", "ABC-123-poster.jpg"), "p");
