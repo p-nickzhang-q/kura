@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from "electron";
+import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -44,6 +45,7 @@ import {
   retryTask,
   listLibraries,
   openRuntime,
+  resolvePaths,
   organize,
   pendingKeys,
   scan,
@@ -572,6 +574,18 @@ if (!app.requestSingleInstanceLock()) {
       runtime = await openRuntime();
       settings = runtime.settings;
     } catch (err) {
+      // 启动失败要落盘: 弹窗会被手快关掉, 但日志不会
+      const message = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
+      try {
+        const { logDir, dataDir } = resolvePaths();
+        await mkdir(logDir, { recursive: true });
+        await writeFile(join(logDir, "startup.log"), `[${new Date().toISOString()}] dataDir=${dataDir}\n${message}\n\n`, {
+          flag: "a",
+          encoding: "utf8",
+        });
+      } catch {
+        // 写日志再失败就只能靠弹窗了
+      }
       dialog.showErrorBox("无法初始化数据库", err instanceof Error ? err.message : String(err));
       app.exit(EXIT.INTERNAL);
       return;

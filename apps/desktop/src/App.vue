@@ -35,6 +35,8 @@ const selectedId = ref<number | null>(null);
 const items = ref<KuraItem[]>([]);
 const tab = ref<"items" | "unparsed" | "plan" | "tasks" | "settings">("items");
 const busy = ref(false);
+/** 启动/刷新过程中的错误, 直接显示在界面顶部 —— 白屏最不该让人去猜。 */
+const errors = ref<string[]>([]);
 const error = ref<string | null>(null);
 const note = ref<string | null>(null);
 const plan = ref<KuraPlan | null>(null);
@@ -98,6 +100,12 @@ let unsubscribeProgress: (() => void) | null = null;
 const selected = computed(() => libraries.value.find((library) => library.id === selectedId.value) ?? null);
 
 onMounted(async () => {
+  // 渲染进程里的未捕获异常也显示出来 (以前只在 DevTools 里能看到)
+  window.addEventListener("error", (event) => errors.value.push(`界面错误: ${event.message}`));
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason;
+    errors.value.push(`请求失败: ${reason instanceof Error ? reason.message : String(reason)}`);
+  });
   unsubscribe = window.kura.onScanEvent((event) => {
     events.value = [event, ...events.value].slice(0, 200);
   });
@@ -118,15 +126,31 @@ onUnmounted(() => {
   unsubscribeTranslate?.();
 });
 
+/**
+ * 一次刷新全部面板。
+ *
+ * 每个接口单独 try: 以前任意一个失败 (比如多了个新字段让后端算错) 会中断整条链,
+ * 表现成"升级后数据全没了" —— 实际只是界面没渲染出来。
+ */
 async function refreshAll(): Promise<void> {
-  info.value = await window.kura.info();
-  config.value = await window.kura.configGet();
+  const step = async <T>(label: string, run: () => Promise<T>): Promise<T | null> => {
+    try {
+      return await run();
+    } catch (err) {
+      errors.value.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
+  };
+
+  errors.value = [];
+  info.value = (await step("读取状态", () => window.kura.info())) ?? info.value;
+  config.value = (await step("读取配置", () => window.kura.configGet())) ?? config.value;
   translateOn.value = config.value?.settings.translate ?? false;
-  libraries.value = await window.kura.libraries();
+  libraries.value = (await step("读取媒体库", () => window.kura.libraries())) ?? libraries.value;
   if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
-  await refreshItems();
-  await refreshUnparsed();
-  tasks.value = await window.kura.tasks(20);
+  await step("读取条目", () => refreshItems());
+  await step("读取未识别文件", () => refreshUnparsed());
+  tasks.value = (await step("读取任务", () => window.kura.tasks(20))) ?? tasks.value;
   // 把当前模板反查成维度, 让下拉框显示"现在是什么"
   const current = libraries.value.find((library) => library.id === selectedId.value);
   const matched = info.value?.dimensions.find((item) => item.template === current?.template);
@@ -605,6 +629,12 @@ async function testDmm(): Promise<void> {
         </nav>
 
         <p v-if="error" class="error">{{ error }}</p>
+        <div v-if="errors.length" class="banner error">
+          <strong>出错了</strong>
+          <ul>
+            <li v-for="(message, index) in errors" :key="index">{{ message }}</li>
+          </ul>
+        </div>
         <p v-else-if="note" class="note">{{ note }}</p>
 
         <!-- 条目 -->
