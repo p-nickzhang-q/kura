@@ -789,9 +789,6 @@ async function testDmm(): Promise<void> {
                 <strong class="mono">{{ detail.number }}</strong>
                 <button class="ghost" type="button" @click="detail = null">×</button>
               </header>
-              <div v-if="detail.coverUrl" class="detail-cover">
-                <img :src="detail.coverUrl" :alt="detail.number" />
-              </div>
               <ul>
                 <li
                   v-for="field in FIELDS"
@@ -836,6 +833,10 @@ async function testDmm(): Promise<void> {
                 <span v-else class="muted">—</span>
               </div>
               <p class="muted hint">锁定后重新刮削不会覆盖该字段。点片商/厂牌/系列/演员/导演/标签可以筛出同类条目。</p>
+              <!-- 图放最后: 字段通常占不满整栏, 让图吃掉剩下的空白, 也就能显示得更大 -->
+              <div v-if="detail.coverUrl" class="detail-cover">
+                <img :src="detail.coverUrl" :alt="detail.number" />
+              </div>
             </aside>
           </div>
         </div>
@@ -1526,13 +1527,19 @@ td.wrap-2 {
 }
 
 .detail-cover {
-  margin: 8px 0 10px;
-  text-align: center;
+  margin-top: 10px;
+  /* 吃掉字段下方剩下的高度; min-height: 0 让内部 img 能真正收缩 */
+  flex: 1 1 auto;
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .detail-cover img {
   max-width: 100%;
-  max-height: 260px;
+  max-height: 100%;
+  object-fit: contain;
   border-radius: 8px;
   background: #1d2431;
 }
@@ -1563,6 +1570,8 @@ td.pick {
   background: var(--panel);
   padding: 12px;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .detail header {
