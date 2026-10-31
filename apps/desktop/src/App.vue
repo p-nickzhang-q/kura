@@ -995,6 +995,9 @@ async function testDmm(): Promise<void> {
             <button type="button" @click="openDataDir">打开数据目录</button>
             <span class="muted">
               当前 {{ info?.libraries ?? 0 }} 个媒体库 · {{ info?.items ?? 0 }} 个条目 · schema v{{ info?.schemaVersion }}
+              <template v-if="info?.translation">
+                · 已翻译 {{ info.translation.translated }} 条 · 待翻译 {{ info.translation.pending }} 条
+              </template>
             </span>
           </div>
 

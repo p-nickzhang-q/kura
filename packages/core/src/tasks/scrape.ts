@@ -139,6 +139,18 @@ async function scrapeOnce(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRepor
     fieldSources: merged.fieldSources,
   };
 
+  // 译文不是来源字段, 重新刮削不能把它冲掉。
+  // 有 *_original 就说明 title/plot 是译文 —— 保留译文与原文, 让 translateMetadata
+  // 从原文重新翻 (否则已翻过的条目会被打回"待翻译", 目录名也会跟着漂)。
+  if (existing?.titleOriginal) {
+    metadata.title = existing.title;
+    metadata.titleOriginal = existing.titleOriginal;
+  }
+  if (existing?.plotOriginal) {
+    metadata.plot = existing.plot;
+    metadata.plotOriginal = existing.plotOriginal;
+  }
+
   const errorsBefore = opts.translator?.errors.length ?? 0;
   if (opts.translator) await translateMetadata(metadata, opts.translator);
   const translateErrors = opts.translator?.errors.slice(errorsBefore) ?? [];
@@ -164,14 +176,22 @@ async function scrapeOnce(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRepor
   };
 }
 
-/** 覆盖显示值, 原文进 *_original; 任一字段失败只影响该字段。 */
+/**
+ * 覆盖显示值, 原文进 *_original; 任一字段失败只影响该字段。
+ *
+ * 翻译的输入永远是**原文**: 已经有了 *_original 就从它翻, 不是拿上次的译文再翻一遍
+ * (那样会二次污染, 而且重复刮削时译文会越翻越偏)。
+ */
 async function translateMetadata(metadata: Metadata, translator: Translator): Promise<void> {
-  const title = metadata.title && needsTranslation(metadata.title) ? await translator.translate("title", metadata.title) : null;
-  const plot = metadata.plot && needsTranslation(metadata.plot) ? await translator.translate("plot", metadata.plot) : null;
+  const titleSource = metadata.titleOriginal ?? metadata.title;
+  const plotSource = metadata.plotOriginal ?? metadata.plot;
+
+  const title = titleSource && needsTranslation(titleSource) ? await translator.translate("title", titleSource) : null;
+  const plot = plotSource && needsTranslation(plotSource) ? await translator.translate("plot", plotSource) : null;
   if (!title && !plot) return;
 
-  metadata.titleOriginal = metadata.title;
-  metadata.plotOriginal = metadata.plot;
+  metadata.titleOriginal = titleSource;
+  metadata.plotOriginal = plotSource;
   if (title) metadata.title = title;
   if (plot) metadata.plot = plot;
 }

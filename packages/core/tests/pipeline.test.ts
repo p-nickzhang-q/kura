@@ -7,6 +7,7 @@ import { openRuntime } from "../src/runtime";
 import { createRegistry, defaultSources, fixtureSource } from "../src/sources";
 import { listFiles } from "../src/tasks/scan";
 import { countItems, countExhausted, countPending, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys } from "../src/tasks/scrape";
+import { countPendingTranslation, translatePending } from "../src/tasks/translate";
 import { scan } from "../src/tasks/scan";
 import { scrape } from "../src/tasks/scrape";
 import { organize } from "../src/tasks/organize";
@@ -213,6 +214,63 @@ describe("scan → scrape → organize", () => {
       );
       expect(row?.number).toBe("ABC-123");
       expect(getItem(rt, "ABC-123")).not.toBeNull();
+    } finally {
+      rt.close();
+    }
+  });
+
+  test("重新刮削不会把已翻译的条目打回待翻译", async () => {
+    const rt = await openRuntime({ dataDir });
+    try {
+      const key = { value: "ABC-123", number: "ABC-123", contentType: "censored" as const };
+      const base = { key, registry: defaultSources({ env: {} }), fixturesDir, sources: ["fixture"] };
+
+      await scrape(rt, base);
+      const translator = { errors: [] as string[], translate: async (_f: string, t: string) => `译:${t.slice(0, 4)}` };
+      await translatePending(rt, { translator: translator as never });
+
+      const before = rt.db.get<{ title: string; title_original: string }>(
+        "select title, title_original from items where number = 'ABC-123'",
+      );
+      expect(countPendingTranslation(rt)).toBe(0);
+
+      // 关键回归: 再刮一次 (同一来源)。以前这里会把 title 换回日文、title_original 清空,
+      // 于是已翻译的条目重新出现在待翻译队列里。
+      await scrape(rt, base);
+
+      const after = rt.db.get<{ title: string; title_original: string }>(
+        "select title, title_original from items where number = 'ABC-123'",
+      );
+      expect(after?.title).toBe(before?.title);
+      expect(after?.title_original).toBe(before?.title_original);
+      expect(countPendingTranslation(rt)).toBe(0);
+    } finally {
+      rt.close();
+    }
+  });
+
+  test("重新刮削时翻译用的是原文, 不是上次的译文", async () => {
+    const rt = await openRuntime({ dataDir });
+    try {
+      const key = { value: "ABC-123", number: "ABC-123", contentType: "censored" as const };
+      const base = { key, registry: defaultSources({ env: {} }), fixturesDir, sources: ["fixture"] };
+
+      await scrape(rt, base);
+      const seen: string[] = [];
+      const translator = {
+        errors: [] as string[],
+        translate: async (_f: string, text: string) => {
+          seen.push(text);
+          return `译:${text.slice(0, 4)}`;
+        },
+      };
+
+      await scrape(rt, { ...base, translator: translator as never });
+      await scrape(rt, { ...base, translator: translator as never });
+
+      // 第二次带翻译的刮削必须拿日文原文去翻, 不能把"译:..." 再翻一遍
+      expect(seen.every((text) => !text.startsWith("译:"))).toBe(true);
+      expect(seen).toContain("离线样本标题");
     } finally {
       rt.close();
     }

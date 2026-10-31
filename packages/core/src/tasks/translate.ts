@@ -76,6 +76,17 @@ export function countPendingTranslation(rt: Runtime): number {
   return pendingTranslationKeys(rt).length;
 }
 
+/**
+ * 翻译进度一览。分开统计"已翻译"是因为界面上要能回答
+ * "我翻了半天, 到底落了没有" —— 只看待翻译数说不清。
+ */
+export function translationStats(rt: Runtime): { translated: number; pending: number } {
+  const row = rt.db.get<{ c: number }>(
+    "select count(*) c from items where title_original is not null and title_original <> ''",
+  );
+  return { translated: row?.c ?? 0, pending: countPendingTranslation(rt) };
+}
+
 export interface TranslateProgress {
   index: number;
   total: number;

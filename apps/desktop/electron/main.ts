@@ -38,6 +38,7 @@ import {
   countPending,
   countExhausted,
   countPendingTranslation,
+  translationStats,
   translatePending,
   listFiles,
   countFiles,
@@ -261,6 +262,7 @@ function registerIpc(): void {
       llmConfigured: Boolean(resolveLlm(settings)),
       translate: translateEnabled(settings),
       pendingTranslation: translateEnabled(settings) ? countPendingTranslation(rt) : 0,
+      translation: translateEnabled(settings) ? translationStats(rt) : null,
       dimensions: DIMENSIONS,
       sources: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) })
         .list()
@@ -538,6 +540,7 @@ function registerIpc(): void {
       llmConfigured: Boolean(resolveLlm(settings)),
       translate: translateEnabled(settings),
       pendingTranslation: translateEnabled(settings) ? countPendingTranslation(rt) : 0,
+      translation: translateEnabled(settings) ? translationStats(rt) : null,
       dimensions: DIMENSIONS,
     };
   });

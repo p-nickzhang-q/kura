@@ -27,6 +27,8 @@ interface KuraAppInfo {
   translate: boolean;
   /** 开了翻译时, 还有多少条可以翻 (按钮上的数字)。 */
   pendingTranslation: number;
+  /** 已翻译 / 待翻译; 没开翻译时为 null。 */
+  translation: { translated: number; pending: number } | null;
   dimensions: { id: string; label: string; template: string; note?: string }[];
   sources: KuraSourceInfo[];
 }
