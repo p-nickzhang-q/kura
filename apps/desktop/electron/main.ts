@@ -358,15 +358,21 @@ function registerIpc(): void {
 
       const keys = Array.isArray(input?.keys) ? input.keys.filter((key): key is string => typeof key === "string") : [];
       const reports = [];
+      let translated = 0;
+      let failed = 0;
+      let skipped = 0;
       for (const key of keys) {
         try {
           const report = await translateItem(rt, key, translator);
+          if (report.translated.length > 0) translated++;
+          else skipped++;
           reports.push({ ...report, key });
         } catch (err) {
+          failed++;
           reports.push({ key, translated: [], error: err instanceof Error ? err.message : String(err) });
         }
       }
-      return { count: reports.length, cancelled: false, reports };
+      return { count: reports.length, cancelled: false, reports, translated, failed, skipped };
     }),
   );
 

@@ -71,7 +71,7 @@ const searchDraft = ref("");
 /** 刷新请求的序号, 用来丢弃乱序返回的旧结果。 */
 let refreshSeq = 0;
 const llmTest = ref<{ ok: boolean; model: string; endpoint: string; sample: string } | null>(null);
-const translateProgress = ref<{ index: number; total: number; key: string } | null>(null);
+const translateProgress = ref<{ index: number; total: number; key: string; error?: string } | null>(null);
 const pendingTotal = ref(0);
 const exhaustedTotal = ref(0);
 const pageCount = computed(() => Math.max(1, Math.ceil(itemTotal.value / pageSize)));
@@ -111,7 +111,7 @@ onMounted(async () => {
     events.value = [event, ...events.value].slice(0, 200);
   });
   unsubscribeTranslate = window.kura.onTranslateProgress((update) => {
-    translateProgress.value = { index: update.index, total: update.total, key: update.key };
+    translateProgress.value = { index: update.index, total: update.total, key: update.key, error: update.error };
   });
   unsubscribeProgress = window.kura.onScrapeProgress((update) => {
     progress.value = update;
@@ -345,10 +345,21 @@ async function translateAll(): Promise<void> {
   translateProgress.value = null;
   if (result) {
     await refreshAll();
-    note.value = result.cancelled
-      ? `翻译已取消: 完成 ${result.count} 条`
-      : `翻译完成 ${result.count} 条`;
+    note.value = describeTranslate(result);
   }
+}
+
+/** 别再拿"处理了多少条"当"翻译成功多少条" —— 全部失败时两者长得一样。 */
+function describeTranslate(result: { count: number; cancelled: boolean; translated?: number; failed?: number; skipped?: number }): string {
+  const translated = result.translated ?? 0;
+  const failed = result.failed ?? 0;
+  const skipped = result.skipped ?? 0;
+  const parts = [`成功 ${translated} 条`];
+  if (failed > 0) parts.push(`失败 ${failed} 条`);
+  if (skipped > 0) parts.push(`无变化 ${skipped} 条`);
+  const head = result.cancelled ? `翻译已取消 (处理 ${result.count} 条)` : `翻译处理 ${result.count} 条`;
+  const tail = translated === 0 && failed > 0 ? " —— 全都是失败, 先点「测试 LLM」看模型为什么不通" : "";
+  return `${head}: ${parts.join(" · ")}${tail}`;
 }
 
 async function translateSelected(): Promise<void> {
@@ -360,7 +371,7 @@ async function translateSelected(): Promise<void> {
   const result = await run("翻译选中", () => window.kura.translateItems(keys));
   translateProgress.value = null;
   if (result) {
-    note.value = `翻译 ${result.count} 条`;
+    note.value = describeTranslate(result);
     await refreshAll();
   }
 }
@@ -634,8 +645,9 @@ async function testDmm(): Promise<void> {
             {{ progress.index }}/{{ progress.total || "?" }} · {{ progress.key }}
           </span>
           <button v-if="progress" type="button" class="danger" @click="cancelScrape">停止</button>
-          <span v-else-if="translateProgress" class="muted">
+          <span v-else-if="translateProgress" class="muted" :class="{ fail: translateProgress.error }">
             翻译 {{ translateProgress.index }}/{{ translateProgress.total }} · {{ translateProgress.key }}
+            <template v-if="translateProgress.error"> ✗ {{ translateProgress.error }}</template>
           </span>
           <span v-else-if="busy" class="muted">进行中…</span>
         </nav>

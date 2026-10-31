@@ -147,8 +147,20 @@ interface KuraBridge {
   }>;
   cancelScrape(): Promise<{ cancelled: boolean }>;
   onScrapeProgress(callback: (progress: { index: number; total: number; key: string; ok: boolean; filled: number; error?: string }) => void): () => void;
-  translatePending(limit?: number): Promise<{ count: number; cancelled: boolean }>;
-  translateItems(keys: string[]): Promise<{ count: number; cancelled: boolean }>;
+  translatePending(limit?: number): Promise<{
+    count: number;
+    cancelled: boolean;
+    translated: number;
+    failed: number;
+    skipped: number;
+  }>;
+  translateItems(keys: string[]): Promise<{
+    count: number;
+    cancelled: boolean;
+    translated: number;
+    failed: number;
+    skipped: number;
+  }>;
   cancelTranslate(): Promise<{ cancelled: boolean }>;
   onTranslateProgress(callback: (progress: { index: number; total: number; key: string; translated: string[]; error?: string }) => void): () => void;
   items(params?: {

@@ -95,23 +95,40 @@ export interface TranslateBatchOptions {
  * 批量翻译。与 scrape 分开是因为失败原因不同: 模型限流/超时不影响已翻好的条目,
  * 所以逐条 catch, 一条失败不中断整批。
  */
+export interface TranslateBatchResult {
+  count: number;
+  cancelled: boolean;
+  reports: TranslateProgress[];
+  /** 真的写进库的条数。界面必须显示这个 —— 只报 count 会把"全部失败"显示成"翻译完成"。 */
+  translated: number;
+  failed: number;
+  /** 有日文可翻但模型返回空 (或被判定不用翻) 的条数。 */
+  skipped: number;
+}
+
 export async function translatePending(
   rt: Runtime,
   options: TranslateBatchOptions,
-): Promise<{ count: number; cancelled: boolean; reports: TranslateProgress[] }> {
+): Promise<TranslateBatchResult> {
   const keys = pendingTranslationKeys(rt, options.limit ?? 1000);
   const reports: TranslateProgress[] = [];
+  let translated = 0;
+  let failed = 0;
+  let skipped = 0;
 
   for (const [index, key] of keys.entries()) {
     if (options.signal?.aborted) {
-      return { count: reports.length, cancelled: true, reports };
+      return { count: reports.length, cancelled: true, reports, translated, failed, skipped };
     }
     try {
       const report = await translateItem(rt, key, options.translator);
+      if (report.translated.length > 0) translated++;
+      else skipped++;
       const progress = { index: index + 1, total: keys.length, key, translated: report.translated };
       reports.push(progress);
       options.onProgress?.(progress);
     } catch (err) {
+      failed++;
       const progress = {
         index: index + 1,
         total: keys.length,
@@ -124,5 +141,5 @@ export async function translatePending(
     }
   }
 
-  return { count: reports.length, cancelled: false, reports };
+  return { count: reports.length, cancelled: false, reports, translated, failed, skipped };
 }
