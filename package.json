@@ -10,7 +10,7 @@
     "build:cli:win": "bun build packages/cli/src/main.ts --compile --minify --target=bun-windows-x64 --outfile dist/kura.exe",
     "dev": "node scripts/dev.mjs",
     "build": "pnpm --filter @kura/desktop build && bun run build:cli",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @kura/desktop run typecheck",
     "test": "bun test"
   },
   "devDependencies": {

@@ -96,6 +96,7 @@ const dmmTest = ref<KuraDmmTest | null>(null);
 
 let unsubscribe: (() => void) | null = null;
 let unsubscribeProgress: (() => void) | null = null;
+let unsubscribeTranslate: (() => void) | null = null;
 
 const selected = computed(() => libraries.value.find((library) => library.id === selectedId.value) ?? null);
 
@@ -493,7 +494,15 @@ async function apply(): Promise<void> {
 /* ---------- 设置 ---------- */
 
 async function saveConfig(): Promise<void> {
-  const patch: { apiId?: string; affiliateId?: string; proxy?: string } = {};
+  const patch: {
+    apiId?: string;
+    affiliateId?: string;
+    proxy?: string;
+    llmBaseUrl?: string;
+    llmApiKey?: string;
+    llmModel?: string;
+    translate?: boolean;
+  } = {};
   if (apiIdInput.value.trim()) patch.apiId = apiIdInput.value.trim();
   if (affiliateInput.value.trim()) patch.affiliateId = affiliateInput.value.trim();
   patch.proxy = proxyInput.value.trim();
@@ -758,7 +767,7 @@ async function testDmm(): Promise<void> {
                           type="button"
                           class="actor"
                           :title="`只看 ${name}`"
-                          @click="filterByActor(name)"
+                          @click="applyFilter('actor', name)"
                         >
                           {{ name }}
                         </button>

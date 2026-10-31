@@ -25,6 +25,8 @@ interface KuraAppInfo {
   dmmConfigured: boolean;
   llmConfigured: boolean;
   translate: boolean;
+  /** 开了翻译时, 还有多少条可以翻 (按钮上的数字)。 */
+  pendingTranslation: number;
   dimensions: { id: string; label: string; template: string; note?: string }[];
   sources: KuraSourceInfo[];
 }
@@ -85,7 +87,7 @@ interface KuraPlan {
   libraryId: number;
   libraryRoot: string;
   entries: KuraPlanEntry[];
-  summary: { move: number; writeNfo: number; skip: number };
+  summary: { move: number; writeNfo: number; copyImage: number; skip: number };
 }
 
 interface KuraOrganizeReport {
@@ -178,7 +180,11 @@ interface KuraBridge {
   retryTask(id: number): Promise<KuraTask>;
   updateItem(input: { key: string; pin?: string[]; unpin?: string[] }): Promise<KuraItem>;
   scrapeKeys(keys: string[]): Promise<{ count: number; results: { key: string; ok: boolean; filled: number; error?: string }[] }>;
-  fetchPoster(key: string): Promise<{ key: string; path: string; size: number }>;
+  fetchPoster(key: string): Promise<{
+    key: string;
+    poster: { path: string; size: number } | null;
+    thumb: { path: string; size: number } | null;
+  }>;
   organizePreview(libraryId: number): Promise<KuraOrganizeReport>;
   organizeApply(libraryId: number): Promise<KuraOrganizeReport>;
   configGet(): Promise<KuraConfig>;
@@ -196,8 +202,8 @@ interface KuraBridge {
   onScanEvent(callback: (event: KuraScanEvent) => void): () => void;
 }
 
-declare global {
-  interface Window {
-    kura: KuraBridge;
-  }
+// 这个文件不是模块 (没有 import/export), 所以直接用顶层 interface 合并即可;
+// 用 declare global 需要文件本身是模块, 否则整个声明会被静默忽略。
+interface Window {
+  kura: KuraBridge;
 }

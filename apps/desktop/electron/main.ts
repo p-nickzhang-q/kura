@@ -479,10 +479,12 @@ function registerIpc(): void {
       const item = getItem(rt, input.key);
       if (!item) throw new AppError(`条目不存在: ${input.key}`, EXIT.NOT_FOUND);
       const result = await downloadPoster(rt, createHttp(), item);
-      if (!result.poster) {
-        throw new AppError(result.tried.length === 0 ? "该条目没有图片 URL" : "海报下载失败", EXIT.RETRYABLE);
+      if (!result.poster && !result.thumb) {
+        throw new AppError(result.tried.length === 0 ? "该条目没有图片 URL" : "图片下载失败", EXIT.RETRYABLE);
       }
-      return { key: input.key, path: result.poster.path, size: result.poster.size };
+      const file = (resource: { path: string; size: number } | null) =>
+        resource ? { path: resource.path, size: resource.size } : null;
+      return { key: input.key, poster: file(result.poster), thumb: file(result.thumb) };
     }),
   );
 

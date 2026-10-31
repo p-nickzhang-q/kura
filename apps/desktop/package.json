@@ -13,14 +13,16 @@
     "package:win": "electron-builder --win portable",
     "package:dir": "electron-builder --win dir",
     "package:installer": "electron-builder --win nsis",
-    "package:all": "electron-builder --win nsis portable"
+    "package:all": "electron-builder --win nsis portable",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.0",
     "electron": "^38.0.0",
+    "electron-builder": "^26.0.0",
     "vite": "^7.0.0",
     "vue": "^3.5.0",
-    "electron-builder": "^26.0.0"
+    "vue-tsc": "^3.3.14"
   },
   "description": "Kura — 番号制本地影片库管理器",
   "author": "Kura"
