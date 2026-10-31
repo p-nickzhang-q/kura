@@ -1,6 +1,7 @@
 import type { ContentType, FieldKey, FileInfo, Metadata } from "../domain/types";
 import type { Library } from "../domain/materialize";
 import type { Db } from "./driver";
+import { AppError, EXIT } from "../exit";
 
 export interface ItemRow {
   number: string;
@@ -141,19 +142,45 @@ export function findLibrary(db: Db, ref: string): Library | undefined {
   return found ? rowToLibrary(found) : undefined;
 }
 
+/**
+ * 库名撞名时自动加序号: `Download` → `Download (2)`。
+ *
+ * 界面里的库名来自目录名 (basename), 而 `D:\Download\a\Download` 与 `E:\Download`
+ * 必然撞名 —— 这是常态, 不该让用户看到 SQLite 的错误原文。
+ */
+function uniqueLibraryName(db: Db, base: string): string {
+  const taken = new Set(db.all<{ name: string }>("select name from libraries").map((row) => row.name));
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base} (${n})`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
 export function createLibrary(
   db: Db,
   input: { name: string; root: string; template?: string; organizeEnabled?: boolean },
 ): Library {
+  // 同一个目录建两个库毫无意义, 而且会让同一批文件被索引两遍。
+  const existing = db.get<{ name: string }>("select name from libraries where root = ?", [input.root]);
+  if (existing) {
+    throw new AppError(`这个目录已经是媒体库「${existing.name}」了`, EXIT.USAGE, {
+      root: input.root,
+      library: existing.name,
+    });
+  }
+
+  const name = uniqueLibraryName(db, input.name);
+
   db.run("insert into libraries (name, root, template, organize_enabled) values (?, ?, ?, ?)", [
-    input.name,
+    name,
     input.root,
     input.template ?? "{content_type}/{studio}/{number}",
     input.organizeEnabled === false ? 0 : 1,
   ]);
   const row = db.get<LibraryRow>(
     "select id, name, root, template, organize_enabled from libraries where name = ?",
-    [input.name],
+    [name],
   )!;
   return rowToLibrary(row);
 }
