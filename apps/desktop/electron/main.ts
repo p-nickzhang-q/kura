@@ -350,14 +350,15 @@ function registerIpc(): void {
     }),
   );
 
-  ipcMain.handle("translate:items", (_event, input: { keys: string[] }) =>
+  ipcMain.handle("translate:items", (_event, input: { keys?: unknown }) =>
     exclusive("翻译", async () => {
       const rt = mustRuntime();
       const translator = await buildTranslator();
       if (!translator) throw new AppError("未配置 LLM 或未开启翻译", EXIT.NEEDS_INPUT);
 
+      const keys = Array.isArray(input?.keys) ? input.keys.filter((key): key is string => typeof key === "string") : [];
       const reports = [];
-      for (const key of input.keys) {
+      for (const key of keys) {
         try {
           const report = await translateItem(rt, key, translator);
           reports.push({ ...report, key });

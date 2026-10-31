@@ -354,7 +354,10 @@ async function translateAll(): Promise<void> {
 async function translateSelected(): Promise<void> {
   if (picked.value.length === 0) return;
   translateProgress.value = { index: 0, total: picked.value.length, key: "准备中" };
-  const result = await run("翻译选中", () => window.kura.translateItems(picked.value));
+  // 必须传普通数组: picked 是 Vue 的响应式代理, IPC 的结构化克隆克隆不了它
+  // (报错是 "An object could not be cloned")。
+  const keys = [...picked.value];
+  const result = await run("翻译选中", () => window.kura.translateItems(keys));
   translateProgress.value = null;
   if (result) {
     note.value = `翻译 ${result.count} 条`;
