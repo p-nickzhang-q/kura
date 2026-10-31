@@ -256,6 +256,10 @@ describe("scan → scrape → organize", () => {
       const base = { key, registry: defaultSources({ env: {} }), fixturesDir, sources: ["fixture"] };
 
       await scrape(rt, base);
+      // fixture 的标题是中文, 不会触发翻译; 换成含假名的标题才有意义
+      // 手动改成日文标题并锁定, 否则下一次刮削会被源数据覆盖
+      updateItem(rt, { key: "ABC-123", patch: { title: "これは日本語のタイトル" }, pin: ["title"] });
+
       const seen: string[] = [];
       const translator = {
         errors: [] as string[],
@@ -269,8 +273,9 @@ describe("scan → scrape → organize", () => {
       await scrape(rt, { ...base, translator: translator as never });
 
       // 第二次带翻译的刮削必须拿日文原文去翻, 不能把"译:..." 再翻一遍
+      expect(seen.length).toBeGreaterThan(0);
       expect(seen.every((text) => !text.startsWith("译:"))).toBe(true);
-      expect(seen).toContain("离线样本标题");
+      expect(seen).toContain("これは日本語のタイトル");
     } finally {
       rt.close();
     }
