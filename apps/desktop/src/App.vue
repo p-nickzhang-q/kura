@@ -1089,6 +1089,20 @@ async function testDmm(): Promise<void> {
   --accent: #5b8cff;
   --ok: #4ec9a5;
   --warn: #e5b567;
+  --danger: #ff7b72;
+  --danger-line: #b3403a;
+  /* ---- 设计令牌: 圆角/间距/字号成体系, 不再散落 magic number ---- */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif;
 }
 
@@ -1109,7 +1123,7 @@ body {
   display: flex;
   align-items: baseline;
   gap: 12px;
-  padding: 14px 20px;
+  padding: 16px 20px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -1132,8 +1146,8 @@ h1 {
 
 .pencil {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: 8px;
+  right: 8px;
   opacity: 0;
   color: var(--muted);
   font-size: 12px;
@@ -1146,9 +1160,9 @@ h1 {
 .rename input {
   width: 100%;
   box-sizing: border-box;
-  padding: 6px 8px;
+  padding: 8px;
   border: 1px solid var(--accent);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--panel);
   color: var(--text);
   font: inherit;
@@ -1159,9 +1173,9 @@ h1 {
   width: 46px;
   height: 64px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   display: block;
-  background: #1d2431;
+  background: var(--panel-2);
 }
 
 .cover.placeholder {
@@ -1169,14 +1183,14 @@ h1 {
   align-items: center;
   justify-content: center;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .search {
   width: 220px;
   padding: 4px 8px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--panel);
   color: var(--text);
   font: inherit;
@@ -1186,8 +1200,8 @@ h1 {
 .filter-bar {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 6px 10px;
+  gap: 8px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -1209,7 +1223,7 @@ h1 {
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
+  padding: 8px 12px;
   border-top: 1px solid var(--line);
 }
 
@@ -1222,9 +1236,9 @@ h1 {
 /* 页码输入框: 和翻页按钮同高, 窄到只放几位数字 */
 .page-input {
   width: 46px;
-  padding: 2px 4px;
+  padding: 4px 8px;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--panel);
   color: var(--text);
   font: inherit;
@@ -1236,7 +1250,7 @@ h1 {
 .actor {
   background: none;
   border: none;
-  padding: 0 2px;
+  padding: 0 4px;
   color: var(--accent);
   font: inherit;
   font-size: 12px;
@@ -1251,7 +1265,7 @@ h1 {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
+  padding: 4px 12px;
   border: 1px solid var(--accent);
   border-radius: 999px;
   background: none;
@@ -1263,16 +1277,16 @@ h1 {
 .banner {
   margin: 0 20px;
   padding: 8px 12px;
-  border: 1px solid #6b5a2a;
+  border: 1px solid var(--line-strong);
   border-radius: 8px;
-  background: #2a2318;
+  background: var(--panel);
   color: var(--warn);
   font-size: 12px;
 }
 
 .banner code {
   font-family: ui-monospace, monospace;
-  color: #f0d49a;
+  color: var(--warn);
 }
 
 .body {
@@ -1314,8 +1328,8 @@ h1 {
   text-align: left;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 8px 10px;
+  gap: 4px;
+  padding: 8px 12px;
   border-radius: 8px;
   border: 1px solid transparent;
   background: transparent;
@@ -1324,14 +1338,14 @@ h1 {
 }
 
 .libs li.active button {
-  background: #1d2431;
-  border-color: #2f3b52;
+  background: var(--panel-2);
+  border-color: var(--line-strong);
 }
 
 .libs small {
   color: var(--muted);
   font-family: ui-monospace, monospace;
-  font-size: 11px;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1340,23 +1354,23 @@ h1 {
 .actions {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .sources {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   line-height: 1.8;
 }
 
 .sources .ready {
   color: var(--ok);
-  margin-right: 6px;
+  margin-right: 8px;
 }
 
 .sources .todo {
-  color: #6b7285;
-  margin-right: 6px;
+  color: var(--muted);
+  margin-right: 8px;
   text-decoration: line-through;
 }
 
@@ -1373,18 +1387,18 @@ button {
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #06101f;
+  color: var(--panel-2);
   font-weight: 600;
 }
 
 button.danger {
-  background: #b3403a;
-  border-color: #b3403a;
-  color: #fff;
+  background: var(--danger-line);
+  border-color: var(--danger-line);
+  color: var(--text);
 }
 
 button.ghost {
-  padding: 2px 8px;
+  padding: 4px 12px;
 }
 
 button:disabled {
@@ -1398,7 +1412,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   padding: 12px 20px;
-  gap: 10px;
+  gap: 12px;
 }
 
 .tabs {
@@ -1433,7 +1447,7 @@ button:disabled {
 }
 .st-interrupted,
 .st-failed {
-  color: #ff7b72;
+  color: var(--danger);
 }
 
 .progress {
@@ -1461,18 +1475,18 @@ button:disabled {
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   font-size: 13px;
 }
 
 .row-actions {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   justify-content: flex-end;
 }
 
 .row-actions button {
-  padding: 3px 8px;
+  padding: 4px 8px;
   font-size: 12px;
 }
 
@@ -1500,15 +1514,52 @@ th {
   color: var(--muted);
   font-weight: 500;
   font-size: 12px;
-  padding: 6px 8px;
+  padding: 8px;
   border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
   background: var(--bg);
 }
 
+
+/* ---- 交互状态: 之前 hover/disabled/focus 一个都没有 ---- */
+button:hover:not(:disabled) {
+  border-color: #3a455c;
+  background: #232935;
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+tbody tr {
+  cursor: pointer;
+  transition: background 120ms var(--ease);
+}
+
+tbody tr:hover {
+  background: var(--panel);
+}
+
+tbody tr.active {
+  background: var(--panel-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 td {
-  padding: 7px 8px;
+  padding: 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   max-width: 320px;
   overflow: hidden;
@@ -1526,22 +1577,34 @@ td.wrap-2 {
   line-height: 1.35;
 }
 
+/*
+ * 详情底部的图: 做成有边界的"画框", 而不是让图片裸在空白里。
+ * - 画框吃掉字段下方剩余高度 (flex:1), 但最小 160px, 窗口再矮也不会压没
+ * - 图片不设宽高, 只用 max-*: 小图 (比如 147x200 的缩略图) 保持自然尺寸不被放大糊掉
+ * - object-fit: contain 保证任何比例都不裁切
+ */
 .detail-cover {
-  margin-top: 10px;
-  /* 吃掉字段下方剩下的高度; min-height: 0 让内部 img 能真正收缩 */
+  margin-top: 12px;
   flex: 1 1 auto;
-  min-height: 120px;
+  min-height: 160px;
+  padding: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--bg);
 }
 
 .detail-cover img {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
-  border-radius: 8px;
-  background: #1d2431;
+  border-radius: var(--radius-sm);
+  /* 两层克制阴影: 让图从画框里"浮"起来一点, 不是贴纸 */
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
 tbody tr {
@@ -1549,7 +1612,7 @@ tbody tr {
 }
 
 tbody tr.active {
-  background: #1a2130;
+  background: var(--panel-2);
 }
 
 th.pick,
@@ -1560,13 +1623,14 @@ td.pick {
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .detail {
   width: 380px;
   flex: none;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--panel);
   padding: 12px;
   overflow: auto;
@@ -1590,9 +1654,9 @@ td.pick {
 .detail li {
   display: grid;
   grid-template-columns: 74px 1fr 24px 48px;
-  gap: 6px;
+  gap: 8px;
   align-items: baseline;
-  padding: 5px 0;
+  padding: 4px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   font-size: 12px;
 }
@@ -1612,7 +1676,7 @@ td.pick {
   padding: 0;
   border: none;
   background: transparent;
-  font-size: 11px;
+  font-size: 12px;
   opacity: 0.45;
 }
 
@@ -1621,27 +1685,27 @@ td.pick {
 }
 
 .detail .from {
-  color: #5f6a80;
+  color: var(--line-strong);
   font-family: ui-monospace, monospace;
-  font-size: 10px;
+  font-size: 12px;
   text-align: right;
 }
 
 .detail .hint {
-  margin: 10px 0 0;
+  margin: 12px 0 0;
 }
 
 .check {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   color: var(--muted);
   font-size: 13px;
 }
 
 .error {
   margin: 0;
-  color: #ff7b72;
+  color: var(--danger);
   font-size: 13px;
 }
 
@@ -1654,44 +1718,44 @@ td.pick {
 .lib-config {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  gap: 12px;
+  padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--panel);
   margin-bottom: 8px;
   font-size: 13px;
 }
 
 .lib-config select {
-  background: #0d0f14;
+  background: var(--bg);
   color: var(--text);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 6px 8px;
+  padding: 8px;
   font-size: 13px;
   max-width: 320px;
 }
 
 .badge {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--warn);
-  border: 1px solid #6b5a2a;
+  border: 1px solid var(--line-strong);
   border-radius: 999px;
-  padding: 1px 6px;
-  margin-left: 6px;
+  padding: 4px 12px;
+  margin-left: 8px;
   vertical-align: middle;
 }
 
 .lib-config code,
 .note-line code {
-  color: #9fb4d8;
+  color: var(--text);
   font-family: ui-monospace, monospace;
   font-size: 12px;
 }
 
 .note-line {
-  margin: 0 0 10px;
+  margin: 0 0 12px;
 }
 
 .summary {
@@ -1707,9 +1771,9 @@ td.pick {
 
 .plan li {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   align-items: baseline;
-  padding: 5px 0;
+  padding: 4px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
 }
 
@@ -1718,10 +1782,10 @@ td.pick {
   width: 84px;
   text-align: center;
   border-radius: 999px;
-  background: #232833;
+  background: var(--panel-3);
   color: var(--muted);
-  font-size: 11px;
-  padding: 2px 0;
+  font-size: 12px;
+  padding: 4px 0;
 }
 
 .plan li[data-action="move"] .tag {
@@ -1735,8 +1799,8 @@ td.pick {
 .apply {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 14px;
+  gap: 12px;
+  margin-top: 16px;
 }
 
 .warn {
@@ -1746,7 +1810,7 @@ td.pick {
 
 .settings h2 {
   font-size: 14px;
-  margin: 18px 0 8px;
+  margin: 16px 0 8px;
   color: var(--text);
 }
 
@@ -1757,8 +1821,8 @@ td.pick {
 .settings .field {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 
 .settings .field span {
@@ -1770,10 +1834,10 @@ td.pick {
 .settings .field input {
   flex: 1;
   max-width: 420px;
-  background: #0d0f14;
+  background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 8px 12px;
   color: var(--text);
   font-family: ui-monospace, monospace;
   font-size: 13px;
@@ -1782,8 +1846,8 @@ td.pick {
 .settings .row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 4px 0 10px;
+  gap: 12px;
+  margin: 4px 0 12px;
 }
 
 .src-list {
@@ -1795,8 +1859,8 @@ td.pick {
 .src-list li {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 0;
+  gap: 12px;
+  padding: 8px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   font-size: 13px;
 }
@@ -1817,7 +1881,7 @@ td.pick {
   overflow: hidden;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   border-top: 1px solid var(--line);
   padding-top: 8px;
 }
@@ -1826,6 +1890,6 @@ td.pick {
   color: var(--ok);
 }
 .events [data-type="file.removed"] {
-  color: #ff7b72;
+  color: var(--danger);
 }
 </style>
