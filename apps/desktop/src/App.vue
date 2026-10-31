@@ -43,6 +43,8 @@ const confirmApply = ref(false);
 
 const picked = ref<string[]>([]);
 const page = ref(0);
+/** 页码输入框的草稿值: 输入过程中不立即跳页, 回车/失焦才跳。 */
+const pageInput = ref("1");
 const pageSize = 100;
 const itemTotal = ref(0);
 /** 演员过滤: null = 不过滤。实体索引在 core 里, 这里只传名字。 */
@@ -142,8 +144,27 @@ async function refreshItems(): Promise<void> {
   });
   items.value = result.items;
   itemTotal.value = result.total;
+  // 过滤/刮削都会改变当前页, 输入框跟着页码走, 免得显示上一个页面的数字
+  pageInput.value = String(page.value + 1);
   pendingTotal.value = result.pending;
   exhaustedTotal.value = result.exhausted;
+}
+
+async function jumpToPage(): Promise<void> {
+  const target = Number(pageInput.value);
+  if (!Number.isFinite(target)) {
+    pageInput.value = String(page.value + 1);
+    return;
+  }
+  await goPage(Math.round(target) - 1);
+}
+
+async function goFirst(): Promise<void> {
+  await goPage(0);
+}
+
+async function goLast(): Promise<void> {
+  await goPage(pageCount.value - 1);
 }
 
 async function filterByActor(name: string): Promise<void> {
@@ -160,6 +181,7 @@ async function clearActorFilter(): Promise<void> {
 
 async function goPage(next: number): Promise<void> {
   page.value = Math.min(Math.max(next, 0), pageCount.value - 1);
+  pageInput.value = String(page.value + 1);
   await refreshItems();
 }
 
@@ -465,9 +487,20 @@ async function testDmm(): Promise<void> {
               <template v-if="exhaustedTotal > 0"> · 已达上限 {{ exhaustedTotal }}（用 --retry-failed 重试）</template>
             </span>
             <!-- 翻页是只读操作, 不该被长任务锁住: 刮削 200 条要十几分钟, 期间连看下一页都不行毫无道理 -->
-            <button type="button" :disabled="page === 0" @click="goPage(page - 1)">‹</button>
-            <span class="muted">{{ page + 1 }}/{{ pageCount }}</span>
-            <button type="button" :disabled="page >= pageCount - 1" @click="goPage(page + 1)">›</button>
+            <button type="button" title="第一页" :disabled="page === 0" @click="goFirst">«</button>
+            <button type="button" title="上一页" :disabled="page === 0" @click="goPage(page - 1)">‹</button>
+            <input
+              v-model="pageInput"
+              class="page-input"
+              type="text"
+              inputmode="numeric"
+              :title="`跳到第 1–${pageCount} 页`"
+              @keyup.enter="jumpToPage"
+              @blur="jumpToPage"
+            />
+            <span class="muted">/ {{ pageCount }}</span>
+            <button type="button" title="下一页" :disabled="page >= pageCount - 1" @click="goPage(page + 1)">›</button>
+            <button type="button" title="最后一页" :disabled="page >= pageCount - 1" @click="goLast">»</button>
             <button type="button" :disabled="busy || picked.length === 0" @click="scrapePicked">
               刮削选中 ({{ picked.length }})
             </button>
@@ -825,6 +858,19 @@ h1 {
 .muted {
   color: var(--muted);
   font-size: 12px;
+}
+
+/* 页码输入框: 和翻页按钮同高, 窄到只放几位数字 */
+.page-input {
+  width: 46px;
+  padding: 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
 }
 
 /* 演员名是可点的: 点了就把列表过滤到这个人 */
