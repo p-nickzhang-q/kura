@@ -18,9 +18,18 @@ export function normalizeText(input: string): string {
     .trim();
 }
 
-const FC2_RE = /FC2[-_ ]?PPV[-_ ]?(\d{5,8})/;
+// FC2 的 PPV 段经常被省略: 老片子/中转站常写成 "FC2-1122370"。
+const FC2_RE = /FC2[-_ ]?(?:PPV[-_ ]?)?(\d{5,8})/;
 const UNCENSORED_RE = /(?:^|\D)(\d{6})-(\d{3})(?:\D|$)/;
-const CENSORED_RE = /(?:^|\W)([A-Z]{2,10})-?(\d{2,5})(?:\W|$)/;
+/**
+ * 前缀里带数字的番号 (T28-642、FC2-...)。**必须**有连字符, 否则 "MOVIE2019" 这种会被误认。
+ */
+const ALNUM_NUM_RE = /(?:^|[^A-Z])([A-Z][A-Z0-9]{1,11})-(\d{2,7})(?:\W|$)/;
+/**
+ * 纯字母前缀。前面的字符只排除大写字母 —— 因为中转站常给番号加数字前缀
+ * (104DANDY-574、261MARA-029、300MIUM-949 里的 104/261/300 是站点编号, 不是番号的一部分)。
+ */
+const CENSORED_RE = /(?:^|[^A-Z])([A-Z]{2,10})-?(\d{2,7})(?:\W|$)/;
 
 /** 从任意文本(通常是文件名)里抽出规范番号; 抽不到返回 null。 */
 export function extractNumber(text: string): string | null {
@@ -31,6 +40,9 @@ export function extractNumber(text: string): string | null {
 
   const uncensored = UNCENSORED_RE.exec(normalized);
   if (uncensored) return `${uncensored[1]}-${uncensored[2]}`;
+
+  const alnum = ALNUM_NUM_RE.exec(normalized);
+  if (alnum) return `${alnum[1]}-${alnum[2]}`;
 
   const censored = CENSORED_RE.exec(normalized);
   if (censored) return `${censored[1]}-${censored[2]}`;
@@ -63,7 +75,7 @@ export function detectContentType(number: string, hintText = ""): ContentType | 
   if (AMATEUR_HINTS.test(text)) return "amateur";
   if (CHINESE_HINTS.test(text)) return "chinese";
   if (WESTERN_HINTS.test(text)) return "western";
-  if (CENSORED_RE.test(normalizeText(number))) return "censored";
+  if (CENSORED_RE.test(normalizeText(number)) || ALNUM_NUM_RE.test(normalizeText(number))) return "censored";
   return null;
 }
 

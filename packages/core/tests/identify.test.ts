@@ -15,6 +15,25 @@ describe("extractNumber", () => {
   test("FC2 单独成格式", () => {
     expect(extractNumber("FC2-PPV-1234567.mp4")).toBe("FC2-PPV-1234567");
     expect(extractNumber("fc2ppv_1234567.mp4")).toBe("FC2-PPV-1234567");
+    // PPV 段经常被省略: 老片子与中转站普遍写成 FC2-xxx
+    expect(extractNumber("[FC2-1122370][完全业余45] Momo.mp4")).toBe("FC2-PPV-1122370");
+    expect(extractNumber("FC2-2752957.mp4")).toBe("FC2-PPV-2752957");
+  });
+
+  test("站点编号前缀不属于番号 (真实文件名)", () => {
+    // 中转站习惯在番号前加站点编号, 104/261/300 这些都不是番号的一部分
+    expect(extractNumber("104DANDY-574.mp4")).toBe("DANDY-574");
+    expect(extractNumber("261MARA-029.mp4")).toBe("MARA-029");
+    expect(extractNumber("200GANA-3003.mp4")).toBe("GANA-3003");
+    expect(extractNumber("300MIUM-949.mp4")).toBe("MIUM-949");
+    expect(extractNumber("413INSTV-325.mp4")).toBe("INSTV-325");
+    expect(extractNumber("[104DANDY-574]「我一个人与我美丽的成熟妻子.mp4")).toBe("DANDY-574");
+  });
+
+  test("前缀里带数字的番号 (T28-) 与 6 位数字 (MYT-)", () => {
+    expect(extractNumber("[T28-642]我父母不在的那天.mp4")).toBe("T28-642");
+    expect(extractNumber("MYT-250004.mp4")).toBe("MYT-250004");
+    expect(detectContentType("T28-642")).toBe("censored");
   });
 
   test("无码: 6 位-3 位", () => {
