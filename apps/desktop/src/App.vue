@@ -498,6 +498,10 @@ async function saveConfig(): Promise<void> {
   }
 }
 
+function openDataDir(): void {
+  void window.kura.openDataDir();
+}
+
 async function testLlm(): Promise<void> {
   llmTest.value = await run("测试 LLM", () => window.kura.testLlm());
 }
@@ -925,6 +929,21 @@ async function testDmm(): Promise<void> {
 
         <!-- 设置 -->
         <div v-else class="pane settings">
+          <h2>数据目录</h2>
+          <p class="muted">
+            条目、媒体库、配置都在这里。换机器/换用户后看到"没有数据", 通常是这份文件不在预期位置。
+          </p>
+          <label class="field">
+            <span>路径</span>
+            <input :value="info?.dataDir ?? ''" readonly class="mono" />
+          </label>
+          <div class="row">
+            <button type="button" @click="openDataDir">打开数据目录</button>
+            <span class="muted">
+              当前 {{ info?.libraries ?? 0 }} 个媒体库 · {{ info?.items ?? 0 }} 个条目 · schema v{{ info?.schemaVersion }}
+            </span>
+          </div>
+
           <h2>数据源</h2>
           <p class="muted">DMM 走官方 API, 需要 affiliate 凭据。配置保存在本地文件, 环境变量优先。</p>
 

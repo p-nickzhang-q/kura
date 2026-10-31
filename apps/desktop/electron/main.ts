@@ -417,6 +417,13 @@ function registerIpc(): void {
     },
   );
 
+  ipcMain.handle("data:open", async () => {
+    const dir = mustRuntime().paths.dataDir;
+    const error = await shell.openPath(dir);
+    if (error) throw new AppError(`打不开数据目录: ${error}`, EXIT.RETRYABLE, { dir });
+    return { dir };
+  });
+
   ipcMain.handle("files:reveal", (_event, path: string) => {
     shell.showItemInFolder(path);
     return true;

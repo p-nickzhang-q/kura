@@ -173,6 +173,7 @@ interface KuraBridge {
     total: number;
   }>;
   revealFile(path: string): Promise<boolean>;
+  openDataDir(): Promise<{ dir: string }>;
   tasks(limit?: number): Promise<KuraTask[]>;
   retryTask(id: number): Promise<KuraTask>;
   updateItem(input: { key: string; pin?: string[]; unpin?: string[] }): Promise<KuraItem>;

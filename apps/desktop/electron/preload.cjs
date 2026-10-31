@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld("kura", {
   item: (number) => ipcRenderer.invoke("item:get", number),
   unparsedFiles: (params) => ipcRenderer.invoke("files:unparsed", params ?? {}),
   revealFile: (path) => ipcRenderer.invoke("files:reveal", path),
+  openDataDir: () => ipcRenderer.invoke("data:open"),
   tasks: (limit) => ipcRenderer.invoke("tasks:list", { limit }),
   retryTask: (id) => ipcRenderer.invoke("tasks:retry", { id }),
   updateItem: (input) => ipcRenderer.invoke("item:update", input),
