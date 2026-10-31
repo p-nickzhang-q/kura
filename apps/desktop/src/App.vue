@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 
 const TYPE_LABEL: Record<string, string> = {
   censored: "有码",
@@ -43,6 +43,10 @@ const confirmApply = ref(false);
 
 const picked = ref<string[]>([]);
 const page = ref(0);
+/** 正在改名的库 id 与草稿 (Electron 的渲染进程没有 window.prompt, 只能自己做行内输入)。 */
+const renamingId = ref<number | null>(null);
+const renameDraft = ref("");
+const renameInput = ref<HTMLInputElement | null>(null);
 /** 页码输入框的草稿值: 输入过程中不立即跳页, 回车/失焦才跳。 */
 const pageInput = ref("1");
 const pageSize = 100;
@@ -196,6 +200,31 @@ async function run<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
     return null;
   } finally {
     busy.value = false;
+  }
+}
+
+function startRename(library: KuraLibrary): void {
+  renamingId.value = library.id;
+  renameDraft.value = library.name;
+  void nextTick(() => renameInput.value?.select());
+}
+
+function cancelRename(): void {
+  renamingId.value = null;
+  renameDraft.value = "";
+}
+
+async function commitRename(library: KuraLibrary): Promise<void> {
+  // 回车和失焦会连发, 第二次进来时 renamingId 已经清空, 直接忽略
+  if (renamingId.value !== library.id) return;
+  const name = renameDraft.value.trim();
+  renamingId.value = null;
+  if (!name || name === library.name) return;
+
+  const updated = await run("改名", () => window.kura.renameLibrary(library.id, name));
+  if (updated) {
+    await refreshAll();
+    note.value = `已改名为 ${updated.name}`;
   }
 }
 
@@ -414,12 +443,23 @@ async function testDmm(): Promise<void> {
         </div>
         <ul class="libs">
           <li v-for="library in libraries" :key="library.id" :class="{ active: library.id === selectedId }">
-            <button type="button" @click="selectedId = library.id">
+            <div v-if="renamingId === library.id" class="rename">
+              <input
+                ref="renameInput"
+                v-model="renameDraft"
+                type="text"
+                @keyup.enter="commitRename(library)"
+                @keyup.esc="cancelRename"
+                @blur="commitRename(library)"
+              />
+            </div>
+            <button v-else type="button" class="lib" @click="selectedId = library.id">
               <strong>
                 {{ library.name }}
                 <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
               </strong>
               <small :title="library.root">{{ library.root }}</small>
+              <span class="pencil" title="改名" @click.stop="startRename(library)">✎</span>
             </button>
           </li>
           <li v-if="libraries.length === 0" class="muted">还没有媒体库</li>
@@ -858,6 +898,35 @@ h1 {
 .muted {
   color: var(--muted);
   font-size: 12px;
+}
+
+/* 侧边栏库列表: 名字旁边一个铅笔, 点了就地改名 */
+.lib {
+  position: relative;
+}
+
+.pencil {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.lib:hover .pencil {
+  opacity: 1;
+}
+
+.rename input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
 }
 
 /* 页码输入框: 和翻页按钮同高, 窄到只放几位数字 */

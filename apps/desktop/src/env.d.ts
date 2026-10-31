@@ -133,6 +133,7 @@ interface KuraBridge {
   libraries(): Promise<KuraLibrary[]>;
   addLibrary(): Promise<KuraLibrary | null>;
   scan(libraryId: number): Promise<KuraScanReport>;
+  renameLibrary(libraryId: number, name: string): Promise<KuraLibrary>;
   setLibraryTemplate(libraryId: number, dimension: string): Promise<KuraLibrary>;
   setLibraryOrganize(libraryId: number, enabled: boolean): Promise<KuraLibrary>;
   scrapePending(limit?: number): Promise<{

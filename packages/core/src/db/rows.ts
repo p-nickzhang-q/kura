@@ -185,6 +185,24 @@ export function createLibrary(
   return rowToLibrary(row);
 }
 
+/** 改名: 显式给的名字撞名时报错, 不自动加序号 —— 人已经明确指定了, 静默改名字更奇怪。 */
+export function renameLibrary(db: Db, libraryId: number, name: string): Library {
+  const trimmed = name.trim();
+  if (!trimmed) throw new AppError("库名不能为空", EXIT.USAGE);
+
+  const clash = db.get<{ name: string }>("select name from libraries where name = ? and id <> ?", [trimmed, libraryId]);
+  if (clash) {
+    throw new AppError(`已经有叫「${trimmed}」的库了, 换个名字`, EXIT.USAGE, { name: trimmed });
+  }
+
+  db.run("update libraries set name = ? where id = ?", [trimmed, libraryId]);
+  const row = db.get<LibraryRow>(
+    "select id, name, root, template, organize_enabled from libraries where id = ?",
+    [libraryId],
+  )!;
+  return rowToLibrary(row);
+}
+
 export function updateLibraryOrganize(db: Db, libraryId: number, enabled: boolean): void {
   db.run("update libraries set organize_enabled = ? where id = ?", [enabled ? 1 : 0, libraryId]);
 }

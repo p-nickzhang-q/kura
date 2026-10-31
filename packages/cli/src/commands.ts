@@ -4,6 +4,7 @@ import {
   CONTENT_TYPES,
   EXIT,
   createLibrary,
+  renameLibrary,
   defaultSources,
   detectContentType,
   findLibrary,
@@ -107,15 +108,16 @@ function parseContentType(value: unknown): ContentType | null {
 export const COMMANDS: Command[] = [
   {
     name: "library",
-    summary: "媒体库: list | add <名称> <根目录> [--no-organize] | set-template | set-organize",
+    summary: "媒体库: list | add <名称> <根目录> [--no-organize] | rename <库> --to <新名> | set-template | set-organize",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "list | add | set-template", positional: true, required: true },
+      { name: "action", type: "string", description: "list | add | rename | set-template | set-organize", positional: true, required: true },
       { name: "name", type: "string", description: "库名 (add: 新库名; set-template: 目标库)", positional: true },
       { name: "root", type: "string", description: "库根目录 (add)", positional: true },
       { name: "template", type: "string", description: "自定义整理模板, 相对库根" },
       { name: "dimension", type: "string", description: `整理维度: ${DIMENSIONS.map((d) => d.id).join(" | ")}` },
       { name: "organize", type: "boolean", description: "允许整理 (--no-organize 表示只索引的旧成品库)", default: true },
+      { name: "to", type: "string", description: "rename: 新库名" },
     ],
     async run(ctx, args) {
       const action = args.positionals.action;
@@ -153,6 +155,15 @@ export const COMMANDS: Command[] = [
         const template = args.options.dimension || args.options.template ? resolveTemplate() : undefined;
         const organizeEnabled = args.options.organize !== false;
         return { library: createLibrary(ctx.rt!.db, { name, root, template, organizeEnabled }) };
+      }
+
+      if (action === "rename") {
+        const ref = args.positionals.name;
+        const to = typeof args.options.to === "string" ? args.options.to : "";
+        if (!ref) throw new AppError("用法: library rename <库> --to <新名>", EXIT.USAGE);
+        if (!to) throw new AppError("缺少 --to <新名>", EXIT.USAGE);
+        const library = requireLibrary(ctx, ref);
+        return { library: renameLibrary(ctx.rt!.db, library.id, to) };
       }
 
       if (action === "set-organize") {

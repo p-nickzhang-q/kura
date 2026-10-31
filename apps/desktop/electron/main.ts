@@ -4,6 +4,7 @@ import {
   AppError,
   EXIT,
   createLibrary,
+  renameLibrary,
   createDmmSource,
   defaultSources,
   downloadPoster,
@@ -192,6 +193,11 @@ function registerIpc(): void {
     if (result.canceled || !result.filePaths[0]) return null;
     const root = result.filePaths[0];
     return createLibrary(mustRuntime().db, { name: basename(root), root });
+  });
+
+  ipcMain.handle("library:rename", (_event, input: { libraryId: number; name: string }) => {
+    mustLibrary(input.libraryId);
+    return renameLibrary(mustRuntime().db, input.libraryId, input.name);
   });
 
   ipcMain.handle("library:set-organize", (_event, input: { libraryId: number; enabled: boolean }) => {
