@@ -55,6 +55,10 @@ export async function translateItem(
   return { key, translated };
 }
 
+/** 假名的 Unicode 区间, 与 `hasKana()` 保持一致 (含 ー ヽ ヾ 等)。 */
+const KANA_GLOB = "(title glob '*[ぁ-ゟ]*' or title glob '*[゠-ヿ]*' or title glob '*[ｦ-ﾟ]*')";
+const PENDING_WHERE = `title is not null and trim(title) <> '' and (title_original is null or title_original = '') and ${KANA_GLOB}`;
+
 /**
  * 待翻译 = 标题里还有假名, 且 `title_original` 为空 (从没翻过)。
  *
@@ -62,29 +66,42 @@ export async function translateItem(
  * 这样"翻过没有"是一个确定的布尔值, 不用去比较两个字符串。
  */
 export function pendingTranslationKeys(rt: Runtime, limit = 1000): string[] {
-  const rows = rt.db.all<{ number: string; title: string | null; title_original: string | null }>(
-    "select number, title, title_original from items where title is not null and (title_original is null or title_original = '') order by updated_at desc limit ?",
+  const rows = rt.db.all<{ number: string }>(
+    // 最近失败过的排后面: 否则一条一直失败的条目会永远卡在队首,
+    // 表现就是"每次点翻译都从同一条开始"。
+    `select number from items where ${PENDING_WHERE}
+     order by (last_error is null) desc, updated_at desc limit ?`,
     [limit],
   );
-  return rows
-    .filter((row) => needsTranslation(row.title ?? undefined))
-    .map((row) => row.number);
+  return rows.map((row) => row.number);
 }
 
-/** 界面上显示"还有 N 条可翻译"。 */
+/**
+ * 界面上显示"还有 N 条可翻译"。
+ *
+ * 必须是**全表计数**, 不能拿 pendingTranslationKeys 的长度凑数 ——
+ * 那个函数带 limit, 大库会少报 (实测 3198 条只报出 956)。
+ */
 export function countPendingTranslation(rt: Runtime): number {
-  return pendingTranslationKeys(rt).length;
+  const row = rt.db.get<{ c: number }>(`select count(*) c from items where ${PENDING_WHERE}`);
+  return row?.c ?? 0;
 }
 
 /**
  * 翻译进度一览。分开统计"已翻译"是因为界面上要能回答
  * "我翻了半天, 到底落了没有" —— 只看待翻译数说不清。
  */
-export function translationStats(rt: Runtime): { translated: number; pending: number } {
-  const row = rt.db.get<{ c: number }>(
-    "select count(*) c from items where title_original is not null and title_original <> ''",
+export function translationStats(rt: Runtime): { total: number; translated: number; pending: number } {
+  const row = rt.db.get<{ total: number; translated: number }>(
+    `select count(*) total,
+            sum(case when title_original is not null and title_original <> '' then 1 else 0 end) translated
+     from items`,
   );
-  return { translated: row?.c ?? 0, pending: countPendingTranslation(rt) };
+  return {
+    total: row?.total ?? 0,
+    translated: row?.translated ?? 0,
+    pending: countPendingTranslation(rt),
+  };
 }
 
 export interface RepairReport {
@@ -112,8 +129,7 @@ export function repairTranslations(
     title_original: string | null;
     plot_original: string | null;
   }>(
-    `select number, title, plot, title_original, plot_original from items
-     where (title_original is null or title_original = '') and title is not null`,
+    `select number, title, plot, title_original, plot_original from items where ${PENDING_WHERE}`,
   );
 
   const reports: RepairReport[] = [];

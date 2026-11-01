@@ -85,7 +85,7 @@ describe("批量翻译: 走真实 HTTP 链路 (模拟 OpenAI 兼容端点)", () 
     expect(result.translated).toBe(20);
     expect(result.failed).toBe(0);
     expect(countPendingTranslation(rt)).toBe(0);
-    expect(translationStats(rt)).toEqual({ translated: 20, pending: 0 });
+    expect(translationStats(rt)).toEqual({ total: 20, translated: 20, pending: 0 });
 
     // 请求形态: 打到 /v1/chat/completions, 带 Bearer, 带 model
     expect(requests.every((r) => r.path === "/v1/chat/completions")).toBe(true);
