@@ -155,6 +155,7 @@ interface KuraBridge {
     translated: number;
     failed: number;
     skipped: number;
+    reports: { key: string; translated: string[]; error?: string }[];
   }>;
   translateItems(keys: string[]): Promise<{
     count: number;
@@ -162,6 +163,7 @@ interface KuraBridge {
     translated: number;
     failed: number;
     skipped: number;
+    reports: { key: string; translated: string[]; error?: string }[];
   }>;
   cancelTranslate(): Promise<{ cancelled: boolean }>;
   onTranslateProgress(callback: (progress: { index: number; total: number; key: string; translated: string[]; error?: string }) => void): () => void;

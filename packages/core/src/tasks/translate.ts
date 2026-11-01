@@ -132,10 +132,27 @@ export async function translatePending(
       return { count: reports.length, cancelled: true, reports, translated, failed, skipped };
     }
     try {
+      const errorsBefore = options.translator.errors.length;
       const report = await translateItem(rt, key, options.translator);
-      if (report.translated.length > 0) translated++;
-      else skipped++;
-      const progress = { index: index + 1, total: keys.length, key, translated: report.translated };
+      // 模型报错时 translate 返回 null, translateItem 不抛异常 ——
+      // 所以"失败"要靠 translator.errors 的变化来识别, 否则会把失败算成"无变化"。
+      const newErrors = options.translator.errors.slice(errorsBefore);
+
+      if (report.translated.length > 0) {
+        translated++;
+      } else if (newErrors.length > 0) {
+        failed++;
+      } else {
+        skipped++;
+      }
+
+      const progress = {
+        index: index + 1,
+        total: keys.length,
+        key,
+        translated: report.translated,
+        ...(newErrors.length > 0 && report.translated.length === 0 ? { error: newErrors.at(-1) } : {}),
+      };
       reports.push(progress);
       options.onProgress?.(progress);
     } catch (err) {
