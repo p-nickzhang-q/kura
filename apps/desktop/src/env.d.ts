@@ -155,6 +155,7 @@ interface KuraBridge {
     translated: number;
     failed: number;
     skipped: number;
+    repaired?: number;
     reports: { key: string; translated: string[]; error?: string }[];
   }>;
   translateItems(keys: string[]): Promise<{

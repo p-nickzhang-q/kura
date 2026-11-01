@@ -104,6 +104,12 @@ export interface Translator {
    * 之前一律返回 null 就完事, 结果是"配置错了"表现成"翻译没生效", 完全无法自查。
    */
   errors: string[];
+  /**
+   * 只查本地缓存, 不发请求。
+   * 用途: 早期版本重新刮削时把 title_original 冲掉了, 译文其实还在缓存里 ——
+   * 靠它能零成本把这些条目恢复回来, 不用再烧一遍模型调用。
+   */
+  lookup?: (field: string, text: string) => string | null;
 }
 
 /**
@@ -114,16 +120,26 @@ export function createTranslator(http: HttpClient, config: LlmConfig, cache: Tra
   const inflight = new Map<string, Promise<string | null>>();
   const errors: string[] = [];
 
+  const cacheKey = (field: string, text: string): string => {
+    const targetLang = config.targetLang ?? "简体中文";
+    const prompt = buildSystemPrompt(field, targetLang);
+    return createHash("sha256")
+      .update([sourceHash(text), targetLang, field, sourceHash(prompt)].join("|"))
+      .digest("hex");
+  };
+
   return {
     errors,
+    lookup(field, text) {
+      if (!needsTranslation(text)) return null;
+      return cache.get(cacheKey(field, text));
+    },
     async translate(field, text) {
       if (!needsTranslation(text)) return null;
 
       const targetLang = config.targetLang ?? "简体中文";
       const prompt = buildSystemPrompt(field, targetLang);
-      const key = createHash("sha256")
-        .update([sourceHash(text), targetLang, field, sourceHash(prompt)].join("|"))
-        .digest("hex");
+      const key = cacheKey(field, text);
 
       const cached = cache.get(key);
       if (cached) return cached;

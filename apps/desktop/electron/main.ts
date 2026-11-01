@@ -39,6 +39,7 @@ import {
   countExhausted,
   countPendingTranslation,
   translationStats,
+  repairTranslations,
   translatePending,
   listFiles,
   countFiles,
@@ -343,12 +344,15 @@ function registerIpc(): void {
           hint: "到「设置」填 LLM 地址/Key/模型, 并打开翻译开关",
         });
       }
-      return translatePending(rt, {
+      // 先白嫖一次本地缓存: 早期版本把 title_original 冲掉的条目可以零成本恢复
+      const repaired = repairTranslations(rt, translator);
+      const result = await translatePending(rt, {
         translator,
         limit: input.limit ?? 1000,
         signal,
         onProgress: (progress) => win?.webContents.send("translate:progress", progress),
       });
+      return { ...result, repaired: repaired.repaired };
     }),
   );
 
@@ -611,6 +615,21 @@ if (!app.requestSingleInstanceLock()) {
     registerProtocols();
     registerIpc();
     await createWindow();
+
+    // 仅供开发自查: 截图后退出 (KURA_SCREENSHOT=/path/to.png), 无头环境下也能拿到真实渲染结果
+    if (process.env.KURA_SCREENSHOT) {
+      win!.webContents.once("did-finish-load", async () => {
+        await new Promise((resolve) => setTimeout(resolve, Number(process.env.KURA_SCREENSHOT_DELAY ?? 2500)));
+        try {
+          const image = await win!.webContents.capturePage();
+          await writeFile(process.env.KURA_SCREENSHOT!, image.toPNG());
+          console.log("screenshot:", process.env.KURA_SCREENSHOT);
+        } catch (err) {
+          console.error("screenshot failed:", err);
+        }
+        app.exit(0);
+      });
+    }
   });
 
   app.on("activate", async () => {

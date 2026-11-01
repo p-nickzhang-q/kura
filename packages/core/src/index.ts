@@ -52,7 +52,7 @@ export type { MediaFileView } from "./tasks/scan";
 export type { ScanEvent, ScanOptions, ScanReport } from "./tasks/scan";
 
 export { countExhausted, countItems, countPending, getItem, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys, scrape, scrapePending, scrapePendingTask } from "./tasks/scrape";
-export { countPendingTranslation, pendingTranslationKeys, translationStats, translateItem, translatePending, type TranslateBatchResult, type TranslateProgress } from "./tasks/translate";
+export { countPendingTranslation, pendingTranslationKeys, translationStats, translateItem, repairTranslations, translatePending, type RepairReport, type TranslateBatchResult, type TranslateProgress } from "./tasks/translate";
 export type { TranslateReport } from "./tasks/translate";
 export { buildSystemPrompt, chatEndpoint, createTranslator, hasKana, needsTranslation, openTranslator, probeTranslator, TranslationCache } from "./llm/translate";
 export type { LlmConfig, Translator } from "./llm/translate";

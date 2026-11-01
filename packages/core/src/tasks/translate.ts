@@ -87,6 +87,70 @@ export function translationStats(rt: Runtime): { translated: number; pending: nu
   return { translated: row?.c ?? 0, pending: countPendingTranslation(rt) };
 }
 
+export interface RepairReport {
+  key: string;
+  fields: string[];
+}
+
+/**
+ * 用本地缓存修复"其实早就翻过、但库里没记录"的条目。
+ *
+ * 为什么需要: 4.x 早期版本重新刮削会把 title_original 冲成 null, 条目于是重新变成
+ * "待翻译", 而译文一直躺在 translations.db 里。这个函数不发任何网络请求,
+ * 只是把缓存里的译文搬回条目上, 顺便补回原文。
+ */
+export function repairTranslations(
+  rt: Runtime,
+  translator: Translator,
+): { repaired: number; reports: RepairReport[] } {
+  if (!translator.lookup) return { repaired: 0, reports: [] };
+
+  const rows = rt.db.all<{
+    number: string;
+    title: string | null;
+    plot: string | null;
+    title_original: string | null;
+    plot_original: string | null;
+  }>(
+    `select number, title, plot, title_original, plot_original from items
+     where (title_original is null or title_original = '') and title is not null`,
+  );
+
+  const reports: RepairReport[] = [];
+  for (const row of rows) {
+    const titleHit = row.title ? translator.lookup("title", row.title) : null;
+    if (!titleHit) continue;
+
+    const fields = ["title"];
+    const patch: { title: string; title_original: string; plot?: string; plot_original?: string } = {
+      title: titleHit,
+      title_original: row.title!,
+    };
+
+    // 简介如果也翻过, 一起恢复
+    if (row.plot && (!row.plot_original || row.plot_original === "")) {
+      const plotHit = translator.lookup("plot", row.plot);
+      if (plotHit) {
+        patch.plot = plotHit;
+        patch.plot_original = row.plot;
+        fields.push("plot");
+      }
+    }
+
+    rt.db.run(
+      `update items set title = ?, title_original = ?${
+        patch.plot !== undefined ? ", plot = ?, plot_original = ?" : ""
+      }, updated_at = unixepoch() where number = ?`,
+      patch.plot !== undefined
+        ? [patch.title, patch.title_original, patch.plot, patch.plot_original!, row.number]
+        : [patch.title, patch.title_original, row.number],
+    );
+    reports.push({ key: row.number, fields });
+  }
+
+  return { repaired: reports.length, reports };
+}
+
 export interface TranslateProgress {
   index: number;
   total: number;

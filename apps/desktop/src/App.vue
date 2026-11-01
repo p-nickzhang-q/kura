@@ -350,13 +350,14 @@ async function translateAll(): Promise<void> {
 }
 
 /** 别再拿"处理了多少条"当"翻译成功多少条" —— 全部失败时两者长得一样。 */
-function describeTranslate(result: { count: number; cancelled: boolean; translated?: number; failed?: number; skipped?: number; reports?: { error?: string }[] }): string {
+function describeTranslate(result: { count: number; cancelled: boolean; translated?: number; failed?: number; skipped?: number; repaired?: number; reports?: { error?: string }[] }): string {
   const translated = result.translated ?? 0;
   const failed = result.failed ?? 0;
   const skipped = result.skipped ?? 0;
   const parts = [`成功 ${translated} 条`];
   if (failed > 0) parts.push(`失败 ${failed} 条`);
   if (skipped > 0) parts.push(`无变化 ${skipped} 条`);
+  if (result.repaired) parts.unshift(`缓存恢复 ${result.repaired} 条`);
   const head = result.cancelled ? `翻译已取消 (处理 ${result.count} 条)` : `翻译处理 ${result.count} 条`;
   const firstError = result.reports?.find((report) => report.error)?.error;
   if (failed > 0 && firstError) errors.value = [`翻译失败: ${firstError}`];

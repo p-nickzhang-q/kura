@@ -44,6 +44,7 @@ import {
   translateEnabled,
   translateItem,
   translatePending,
+  repairTranslations,
   probeTranslator,
   updateLibraryTemplate,
   cachedPoster,
@@ -424,6 +425,7 @@ export const COMMANDS: Command[] = [
     args: [
       { name: "number", type: "string", description: "番号", positional: true },
       { name: "pending", type: "boolean", description: "翻译所有含日文且未翻译的条目", default: false },
+      { name: "repair", type: "boolean", description: "只用本地缓存恢复'翻过但没记录'的条目 (不发请求)", default: false },
       { name: "limit", type: "number", description: "--pending 时的批大小", default: 1000 },
     ],
     async run(ctx, args) {
@@ -437,6 +439,11 @@ export const COMMANDS: Command[] = [
       const http = new HttpClient({ proxy: await resolveProxyUrl(ctx.rt!.settings) });
       const translator = await openTranslator(ctx.rt!, http, config);
       if (!translator) throw new AppError("翻译器初始化失败", EXIT.INTERNAL);
+
+      if (args.options.repair) {
+        const repaired = repairTranslations(ctx.rt!, translator);
+        return { repaired: repaired.repaired, reports: repaired.reports };
+      }
 
       if (args.options.pending) {
         const result = await translatePending(ctx.rt!, {
@@ -455,6 +462,14 @@ export const COMMANDS: Command[] = [
       return translateItem(ctx.rt!, number.toUpperCase(), translator);
     },
     render(data: unknown) {
+      if (data && typeof data === "object" && "repaired" in data) {
+        const repair = data as { repaired: number; reports: { key: string; fields: string[] }[] };
+        if (repair.repaired === 0) return "没有可从缓存恢复的条目";
+        return [
+          `从本地缓存恢复 ${repair.repaired} 条 (未调用模型)`,
+          ...repair.reports.map((report) => `  ✓ ${report.key} (${report.fields.join(", ")})`),
+        ].join("\n");
+      }
       if (data && typeof data === "object" && "reports" in data) {
         const batch = data as { count: number; reports: { key: string; translated: string[]; skipped?: string }[] };
         return [
