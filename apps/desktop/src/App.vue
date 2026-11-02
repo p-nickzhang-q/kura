@@ -249,12 +249,24 @@ async function jumpToPage(): Promise<void> {
   await goPage(Math.round(target) - 1);
 }
 
-async function goFirst(): Promise<void> {
-  await goPage(0);
+/**
+ * 列表里的标题: 去掉开头的番号。
+ *
+ * 来源站给的标题常是「MIMK-182 住院期间…」, 但番号在左边那一列已经写了一遍,
+ * 标题列又最缺宽度, 重复的这九个字符不如让给正文。
+ */
+function displayTitle(item: KuraItem): string {
+  if (!item.title) return "未刮削";
+  const escaped = item.number.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const stripped = item.title.replace(new RegExp(`^${escaped}[\\s:：\\-–—|]*`, "i"), "");
+  // 标题如果就是番号本身 (没刮到真标题), 别把它清成空
+  return stripped || item.title;
 }
 
-async function goLast(): Promise<void> {
-  await goPage(pageCount.value - 1);
+/** 侧栏库名与路径重复时不显示路径 (库里叫"#整理完成", 路径尾巴也是它)。 */
+function showRoot(library: KuraLibrary): boolean {
+  const tail = library.root.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+  return tail.toLowerCase() !== library.name.toLowerCase();
 }
 
 /** 筛选条上的值展示: state 存的是英文枚举, 展示要给人看。 */
@@ -270,6 +282,16 @@ async function applyFilter(key: FilterKey, value: string): Promise<void> {
   else filters.value[key] = value;
   page.value = 0;
   await refreshItems();
+}
+
+/** 输入即搜, 但压到 300ms 一次 —— 边打字边查库会让列表一直闪。 */
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+function onSearchInput(): void {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchTimer = null;
+    void applySearch();
+  }, 300);
 }
 
 async function applySearch(): Promise<void> {
@@ -634,10 +656,8 @@ async function testDmm(): Promise<void> {
   <main class="shell">
     <header class="top">
       <h1>Kura</h1>
-      <span v-if="info" class="meta">
-        v{{ info.version }} · {{ info.dbRuntime }} · schema v{{ info.schemaVersion }} · 条目 {{ info.items }} · 文件
-        {{ info.mediaFiles }}
-      </span>
+      <!-- 版本/引擎/schema 是排障信息, 不是用户每天要看的东西 —— 它们挪到设置页 -->
+      <span v-if="info" class="meta">条目 {{ info.items.toLocaleString() }} · 文件 {{ info.mediaFiles.toLocaleString() }}</span>
     </header>
 
     <div v-if="info?.fixturesDir" class="banner">
@@ -669,7 +689,7 @@ async function testDmm(): Promise<void> {
                 {{ library.name }}
                 <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
               </strong>
-              <small :title="library.root">{{ library.root }}</small>
+              <small v-if="showRoot(library)" :title="library.root">{{ library.root }}</small>
               <span class="pencil" role="button" tabindex="0" title="改名" aria-label="重命名媒体库" @click.stop="startRename(library)" @keyup.enter.stop="startRename(library)">✎</span>
             </button>
           </li>
@@ -781,7 +801,6 @@ async function testDmm(): Promise<void> {
 
             <div class="toolbar-row">
               <!-- 翻页是只读操作, 不该被长任务锁住: 刮削 200 条要十几分钟, 期间连看下一页都不行毫无道理 -->
-              <button type="button" title="第一页" aria-label="第一页" :disabled="page === 0" @click="goFirst">«</button>
               <button type="button" title="上一页" aria-label="上一页" :disabled="page === 0" @click="goPage(page - 1)">‹</button>
               <input
                 v-model="pageInput"
@@ -794,7 +813,6 @@ async function testDmm(): Promise<void> {
               />
               <span class="muted nowrap">/ {{ pageCount }}</span>
               <button type="button" title="下一页" aria-label="下一页" :disabled="page >= pageCount - 1" @click="goPage(page + 1)">›</button>
-              <button type="button" title="最后一页" aria-label="最后一页" :disabled="page >= pageCount - 1" @click="goLast">»</button>
               <span class="muted nowrap">
                 共 {{ itemTotal }} 条 · 待刮削 {{ pendingTotal }}
                 <template v-if="exhaustedTotal > 0">
@@ -839,7 +857,6 @@ async function testDmm(): Promise<void> {
                   <tr>
                     <th class="pick" />
                     <th>番号</th>
-                    <th>类型</th>
                     <th>标题</th>
                     <th>片商</th>
                     <th>演员</th>
@@ -859,13 +876,13 @@ async function testDmm(): Promise<void> {
                         @change="toggle(item.key)"
                       />
                     </td>
-                    <td class="mono">
-                      {{ item.number }}
-                      <span v-if="item.pinned.length" title="有锁定字段">🔒</span>
+                    <td class="num-cell">
+                      <span class="mono">{{ item.number }}</span>
+                      <span class="type-badge">{{ TYPE_LABEL[item.contentType] ?? item.contentType }}</span>
+                      <span v-if="item.pinned.length" title="有锁定字段" aria-label="有锁定字段">🔒</span>
                     </td>
-                    <td>{{ TYPE_LABEL[item.contentType] ?? item.contentType }}</td>
                     <td class="title-cell" :title="item.title ?? ''">
-                      <span>{{ item.title ?? "未刮削" }}</span>
+                      <span>{{ displayTitle(item) }}</span>
                     </td>
                     <td>
                       <button v-if="item.studio" type="button" class="actor" :title="`只看 ${item.studio}`" @click="applyFilter('studio', item.studio!)">
@@ -968,7 +985,9 @@ async function testDmm(): Promise<void> {
                   >
                     {{ detail.pinned.includes(field) ? "🔒" : "🔓" }}
                   </button>
-                  <span class="from" :title="'字段来源'">{{ detail.fieldSources?.[field] ?? "" }}</span>
+                  <span class="from" :title="`字段来源: ${detail.fieldSources?.[field] ?? '未知'}`">
+                    {{ detail.fieldSources?.[field] ?? "" }}
+                  </span>
                 </li>
               </ul>
               <div v-for="field in ['actors', 'directors', 'tags'] as const" :key="field" class="detail-chips">
@@ -1139,7 +1158,8 @@ async function testDmm(): Promise<void> {
           <div class="row">
             <button type="button" @click="openDataDir">打开数据目录</button>
             <span class="muted">
-              当前 {{ info?.libraries ?? 0 }} 个媒体库 · {{ info?.items ?? 0 }} 个条目 · schema v{{ info?.schemaVersion }}
+              当前 {{ info?.libraries ?? 0 }} 个媒体库 · {{ info?.items ?? 0 }} 个条目 · schema v{{ info?.schemaVersion }} ·
+              v{{ info?.version }} ({{ info?.dbRuntime }})
               <template v-if="info?.translation">
                 · 已翻译 {{ info.translation.translated }} 条 · 待翻译 {{ info.translation.pending }} 条
               </template>
@@ -1831,7 +1851,7 @@ button:disabled {
 table {
   width: 100%;
   /* 打开详情面板后表格区只剩一半宽度: 给它一条底线, 让它横向滚动, 而不是把列压到两三个字宽 */
-  min-width: 680px;
+  min-width: 620px;
   border-collapse: collapse;
   font-size: var(--fs-body);
 }
@@ -1896,7 +1916,23 @@ td {
 }
 
 /* 标题这类长文本: 允许折两行, 鼠标悬停看完整内容 */
+/* 番号格: 番号 + 类型小徽标, 省掉一整个「类型」列 */
+td.num-cell {
+  white-space: nowrap;
+}
+
+.num-cell .type-badge {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  font-size: var(--fs-label);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
 td.title-cell {
+  min-width: 240px;
   max-width: 380px;
   white-space: normal;
 }
@@ -1960,7 +1996,7 @@ td.pick {
 }
 
 .detail {
-  width: 340px;
+  width: 320px;
   flex: none;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
@@ -1986,7 +2022,7 @@ td.pick {
 
 .detail li {
   display: grid;
-  grid-template-columns: 74px 1fr 24px 48px;
+  grid-template-columns: 76px 1fr 20px 42px;
   gap: 8px;
   align-items: baseline;
   padding: 4px 0;
@@ -2005,15 +2041,34 @@ td.pick {
   line-height: 1.45;
 }
 
+/* 未锁的字段常态不显示锁图标: 每行一个 🔓 是纯噪音 */
 .detail .pin {
   padding: 0;
   border: none;
   background: transparent;
   font-size: var(--fs-label);
-  opacity: 0.45;
+  opacity: 0;
+  transition: opacity 150ms var(--ease);
 }
 
+.detail li:hover .pin,
+.detail li:focus-within .pin {
+  opacity: 0.6;
+}
+
+/* 锁住的必须一直看得见 —— 它解释"为什么这个字段重刮也不变" */
 .detail .pin.on {
+  opacity: 1;
+}
+
+/* 来源在每行都重复同一个值, 常态显示只是噪音: 悬停该行才亮出来 */
+.detail li .from {
+  opacity: 0;
+  transition: opacity 150ms var(--ease);
+}
+
+.detail li:hover .from,
+.detail li:focus-within .from {
   opacity: 1;
 }
 
