@@ -217,12 +217,14 @@ export const COMMANDS: Command[] = [
     args: [
       { name: "library", type: "string", description: "库名或 id", positional: true, required: true },
       { name: "dry-run", type: "boolean", description: "只报告, 不写库", default: false },
+      { name: "force", type: "boolean", description: "允许一次移除超过 30% 的已登记文件 (盘没挂全时别加)", default: false },
     ],
     async run(ctx, args) {
       const library = requireLibrary(ctx, args.positionals.library!);
       const report = await scan(ctx.rt!, {
         library,
         dryRun: Boolean(args.options["dry-run"]),
+        force: Boolean(args.options.force),
         onEvent: (event) => ctx.out.event({ ...event, event: "file" }),
       });
       return report;

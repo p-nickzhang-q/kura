@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLibrary, renameLibrary } from "../src/db/rows";
 import { openRuntime, type Runtime } from "../src/runtime";
+import { scan } from "../src/tasks/scan";
+import { countItems } from "../src/tasks/scrape";
+import { AppError, EXIT } from "../src/exit";
 
 let root: string;
 let rt: Runtime;
@@ -72,5 +75,49 @@ describe("添加媒体库", () => {
     expect(() => createLibrary(rt.db, { name: "又一个", root: join(root, "a") })).toThrow(
       /已经是媒体库「Download」/,
     );
+  });
+});
+
+
+function fileCount(rt: Runtime): number {
+  return rt.db.get<{ c: number }>("select count(*) c from media_files")?.c ?? 0;
+}
+
+describe("扫描的删除安全阀", () => {
+  test("已知文件大批消失时中止, 不清空索引", async () => {
+    const media = join(root, "guard");
+    await mkdir(media, { recursive: true });
+    for (let i = 0; i < 40; i++) await writeFile(join(media, `TEST-${String(i).padStart(3, "0")}.mkv`), "x");
+
+    const library = createLibrary(rt.db, { name: "库", root: media });
+    await scan(rt, { library });
+    expect(fileCount(rt)).toBe(40);
+
+    // 模拟"盘只挂了一半": 30/40 的文件不见了
+    for (let i = 0; i < 30; i++) await rm(join(media, `TEST-${String(i).padStart(3, "0")}.mkv`));
+    const error = (await scan(rt, { library }).catch((err: unknown) => err)) as AppError;
+    expect(error).toBeInstanceOf(AppError);
+    expect(error.exitCode).toBe(EXIT.NEEDS_INPUT);
+    expect(error.message).toContain("已中止");
+    // 索引与条目都还在 —— 这才是关键: 下次能自己"恢复"
+    expect(fileCount(rt)).toBe(40);
+    expect(countItems(rt, {})).toBe(40);
+
+    // 显式 force 才真的删
+    await scan(rt, { library, force: true });
+    expect(fileCount(rt)).toBe(10);
+  });
+
+  test("只删少量文件时不拦", async () => {
+    const media = join(root, "guard2");
+    await mkdir(media, { recursive: true });
+    for (let i = 0; i < 40; i++) await writeFile(join(media, `TEST-${String(i).padStart(3, "0")}.mkv`), "x");
+    const library = createLibrary(rt.db, { name: "库2", root: media });
+    await scan(rt, { library });
+
+    await rm(join(media, "TEST-000.mkv"));
+    const report = await scan(rt, { library });
+    expect(report.counts.removed).toBe(1);
+    expect(fileCount(rt)).toBe(39);
   });
 });

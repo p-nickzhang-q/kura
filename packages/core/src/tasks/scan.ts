@@ -1,4 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
+import { AppError, EXIT } from "../exit";
 import { extname, join } from "node:path";
 import { detectContentType, extractNumber, parseFileInfo } from "../domain/identify";
 import { nfoToMetadata, readNfo } from "../domain/nfo";
@@ -46,6 +47,14 @@ export interface ScanOptions {
   library: Library;
   dryRun?: boolean;
   onEvent?: (event: ScanEvent) => void;
+  /**
+   * 跳过"一次要移除太多"的安全阀。
+   *
+   * 默认不跳过: 盘没挂上、库根目录指错、网络盘只挂了一半时, 直接把索引里
+   * 没看到的文件全删掉, 后果是**按库筛选的条目列表突然空了** (条目还在库里,
+   * 但它的文件没了), 下次扫描再登记文件又"恢复"。这种"自己好了"的现象最坑人。
+   */
+  force?: boolean;
 }
 
 interface Found {
@@ -109,7 +118,7 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
       if (number && !dryRun && !retyped.has(number)) {
         retyped.add(number);
         const detected = detectContentType(number, file.path) ?? "censored";
-        if (previous?.number === number && retypeUntouched(rt, number, detected)) counts.retyped++;
+        if (retypeUntouched(rt, number, detected)) counts.retyped++;
       }
 
       const untouched = previous && previous.size === file.size && previous.mtime_ms === file.mtimeMs;
@@ -143,6 +152,26 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
         );
       }
       emit({ type, path: file.path, number });
+    }
+
+    const toRemove = [...known.keys()].filter((path) => !seen.has(path));
+    const pruneGuard = !opts.force && known.size >= 20 && toRemove.length / known.size > 0.3;
+    if (pruneGuard) {
+      // 不在这里 rollback: 外层 catch 统一回滚, 这里再回滚一次会报
+      // "cannot rollback - no transaction is active"
+      const percent = Math.round((toRemove.length / known.size) * 100);
+      throw new AppError(
+        `这次扫描要移除 ${toRemove.length} 个已登记文件 (占 ${percent}%), 库根可能没挂载完整, 已中止`,
+        EXIT.NEEDS_INPUT,
+        {
+          libraryId: library.id,
+          root: library.root,
+          known: known.size,
+          wouldRemove: toRemove.length,
+          sample: toRemove.slice(0, 3),
+          hint: `确认目录完整后重试; 确实要删就加 --force`,
+        },
+      );
     }
 
     for (const path of known.keys()) {

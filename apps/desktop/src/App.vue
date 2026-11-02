@@ -403,16 +403,31 @@ async function addLibrary(): Promise<void> {
   }
 }
 
-async function doScan(): Promise<void> {
+/** 扫描。`force` 用于"确实删了很多文件"的场景 —— 平时走安全阀保护。 */
+async function scanLibrary(force: boolean): Promise<void> {
   if (selectedId.value === null) return;
   events.value = [];
-  const report = await run("扫描", () => window.kura.scan(selectedId.value!));
+  const report = await run("扫描", () => window.kura.scan(selectedId.value!, { force }));
   if (report) {
     const { counts } = report;
     note.value = `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}${counts.nfoImported ? ` · 从 NFO 读回 ${counts.nfoImported} 条` : ""}${counts.retyped ? ` · 修正内容类型 ${counts.retyped} 条` : ""}`;
     page.value = 0;
     await refreshAll();
+    return;
   }
+  // 安全阀拦下来时把话说清楚: 这不是 bug, 是"库根可能没挂载完整"
+  const message = errors.value.at(-1) ?? "";
+  if (message.includes("已中止")) {
+    note.value = `${message} —— 确认目录完整后重试; 若确实删了这么多, 到「更多操作」里点「强制扫描」`;
+  }
+}
+
+async function doScan(): Promise<void> {
+  await scanLibrary(false);
+}
+
+async function forceScan(): Promise<void> {
+  await scanLibrary(true);
 }
 
 async function doScrape(): Promise<void> {
@@ -747,6 +762,14 @@ async function testDmm(): Promise<void> {
             <summary>更多操作</summary>
             <div class="more-list">
               <button type="button" :disabled="busy || !selected" @click="doScan">扫描</button>
+              <button
+                type="button"
+                :disabled="busy || !selected"
+                title="跳过「一次移除过多文件」的安全阀。盘没挂全时别用"
+                @click="forceScan"
+              >
+                强制扫描
+              </button>
               <button type="button" :disabled="busy" @click="doScrape">刮削待处理</button>
               <button
                 type="button"

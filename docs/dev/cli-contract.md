@@ -89,6 +89,11 @@ kura source test dmm --json
 kura doctor --json
 ```
 
+`scan` 有一道**删除安全阀**: 一次扫描要移除的已登记文件超过 30%(且已知文件 ≥20 个)时中止,
+退出码 `4`, `details` 里给 `known` / `wouldRemove` / `sample`。这是为了防止"盘只挂了一半就扫"
+把索引清空 —— 那种情况下按库筛选的条目列表会突然变空, 下次扫描又"自己恢复", 最难排查。
+确认目录完整后重试; 确实要删这么多就加 `--force`。
+
 `item list` 的筛选与排序(都可组合):
 `--q` 关键词(番号/标题/原名/片商/厂牌/系列/演员/标签/导演)、`--type`、
 `--actor` `--studio` `--label` `--series` `--director` `--tag` `--library`、

@@ -372,10 +372,11 @@ function registerIpc(): void {
     return { ...library, template };
   });
 
-  ipcMain.handle("scan:start", (_event, input: { libraryId: number }) =>
+  ipcMain.handle("scan:start", (_event, input: { libraryId: number; force?: boolean }) =>
     exclusive("扫描", async () => {
       return scan(mustRuntime(), {
         library: mustLibrary(input.libraryId),
+        force: input.force === true,
         onEvent: (event: ScanEvent) => win?.webContents.send("scan:event", event),
       });
     }),

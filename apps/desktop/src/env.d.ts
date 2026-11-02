@@ -146,7 +146,7 @@ interface KuraBridge {
   info(): Promise<KuraAppInfo>;
   libraries(): Promise<KuraLibrary[]>;
   addLibrary(): Promise<KuraLibrary | null>;
-  scan(libraryId: number): Promise<KuraScanReport>;
+  scan(libraryId: number, options?: { force?: boolean }): Promise<KuraScanReport>;
   renameLibrary(libraryId: number, name: string): Promise<KuraLibrary>;
   setLibraryTemplate(libraryId: number, dimension: string): Promise<KuraLibrary>;
   setLibraryOrganize(libraryId: number, enabled: boolean): Promise<KuraLibrary>;
