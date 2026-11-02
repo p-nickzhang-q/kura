@@ -61,7 +61,17 @@ export type { ItemView, ScrapeOptions, ScrapePendingOptions, ScrapePendingResult
 export { parseFieldList, parseListValue, updateItem } from "./tasks/item";
 export type { UpdateItemOptions } from "./tasks/item";
 
-export { cachedPoster, cachedThumb, downloadPoster, downloadResource, findResource, findSidecarImages, refererFor, resourceDir } from "./tasks/resources";
+export {
+  cachedPoster,
+  cachedThumb,
+  downloadPoster,
+  downloadResource,
+  findResource,
+  findSidecarImages,
+  placeImagesBesideVideo,
+  refererFor,
+  resourceDir,
+} from "./tasks/resources";
 export type { LocalResource, PosterDownloadResult } from "./tasks/resources";
 
 export { cancelTask, createTask, finishTask, getTask, listTasks, markRunning, recoverInterrupted, retryTask, runTask, updateProgress } from "./tasks/queue";

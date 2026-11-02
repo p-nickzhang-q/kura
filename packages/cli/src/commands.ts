@@ -32,6 +32,7 @@ import {
   updateLibraryOrganize,
   openTranslator,
   pendingTranslationKeys,
+  placeImagesBesideVideo,
   scrapePendingTask,
   createTask,
   runTask,
@@ -230,6 +231,7 @@ export const COMMANDS: Command[] = [
       return [
         `扫描完成: ${data.root}${data.dryRun ? " (dry-run)" : ""}`,
         `  新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 移除 ${counts.removed} · 未识别 ${counts.unparsed}`,
+        ...(counts.nfoImported ? [`  从 NFO 读回 ${counts.nfoImported} 条的元数据 (未联网)`] : []),
         `  耗时 ${data.durationMs}ms`,
       ].join("\n");
     },
@@ -505,6 +507,11 @@ export const COMMANDS: Command[] = [
 
       const http = new HttpClient({ proxy: await resolveProxyUrl(ctx.rt!.settings) });
       const result = await downloadPoster(ctx.rt!, http, item);
+      // 只在设置没关掉时做; 只读盘上的失败不影响缓存。
+      const placed =
+        ctx.rt!.settings.saveImages !== false
+          ? await placeImagesBesideVideo(ctx.rt!, item, { poster: result.poster, thumb: result.thumb })
+          : { saved: [], skipped: [], errors: [] };
       if (!result.poster) {
         throw new AppError(
           result.tried.length === 0 ? "该条目没有图片 URL, 先刮削一次" : "所有海报地址都下载失败",
@@ -517,27 +524,53 @@ export const COMMANDS: Command[] = [
         poster: result.poster ? { path: result.poster.path, size: result.poster.size } : null,
         thumb: result.thumb ? { path: result.thumb.path, size: result.thumb.size } : null,
         failures: result.failures,
+        saved: placed.saved,
+        saveErrors: placed.errors,
       };
     },
-    render(data: { key: string; poster: { path: string; size: number } | null; thumb: { path: string; size: number } | null }) {
+    render(data: {
+      key: string;
+      poster: { path: string; size: number } | null;
+      thumb: { path: string; size: number } | null;
+      saved?: string[];
+      saveErrors?: string[];
+    }) {
       const line = (label: string, file: { path: string; size: number } | null): string =>
         file ? `  ${label} ${file.path} (${Math.round(file.size / 1024)} KB)` : `  ${label} (无)`;
-      return `${data.key} 图片已缓存\n${line("海报", data.poster)}\n${line("缩略图", data.thumb)}`;
+      const placed = data.saved?.length
+        ? data.saved.map((path) => `  → ${path}`).join("\n")
+        : "  (没有需要复制到视频旁边的图)";
+      const errors = data.saveErrors?.length ? `\n写盘失败:\n${data.saveErrors.map((e) => `  ! ${e}`).join("\n")}` : "";
+      return `${data.key} 图片已缓存\n${line("海报", data.poster)}\n${line("缩略图", data.thumb)}\n复制到视频旁:\n${placed}${errors}`;
     },
   },
 
   {
     name: "file",
-    summary: "文件: list [--library 库] [--unparsed] [--limit N] —— 看索引里的文件(含未识别)",
+    summary: "文件: list [--library 库] [--unparsed] [--limit N] | reveal <番号> —— 看索引里的文件, 或查某部片在磁盘上的路径",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "目前只有 list", positional: true, default: "list" },
+      { name: "action", type: "string", description: "list | reveal", positional: true, default: "list" },
+      { name: "number", type: "string", description: "reveal: 番号", positional: true },
       { name: "library", type: "string", description: "只看某个库" },
       { name: "unparsed", type: "boolean", description: "只看认不出番号的文件", default: false },
       { name: "limit", type: "number", description: "条数", default: 200 },
     ],
     async run(ctx, args) {
       const action = args.positionals.action ?? "list";
+
+      if (action === "reveal") {
+        const number = args.positionals.number;
+        if (!number) throw new AppError("用法: file reveal <番号>", EXIT.USAGE);
+        const key = number.toUpperCase();
+        const files = ctx.rt!.db.all<{ path: string; size: number }>(
+          "select path, size from media_files where number = ? order by path",
+          [key],
+        );
+        if (files.length === 0) throw new AppError(`条目 ${key} 没有登记到任何文件`, EXIT.NOT_FOUND, { number: key });
+        return { number: key, files };
+      }
+
       if (action !== "list") throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
 
       const libraryRef = typeof args.options.library === "string" ? args.options.library : null;
@@ -549,7 +582,10 @@ export const COMMANDS: Command[] = [
       });
       return { count: files.length, files };
     },
-    render(data: { count: number; files: { path: string; number: string | null }[] }) {
+    render(data: { count?: number; number?: string; files: { path: string; number?: string | null }[] }) {
+      if (data.number) {
+        return data.files.map((file) => file.path).join("\n");
+      }
       if (data.count === 0) return "没有匹配的文件。";
       return data.files
         .map((file) => `${(file.number ?? "(未识别)").padEnd(14)} ${file.path}`)
@@ -574,6 +610,7 @@ export const COMMANDS: Command[] = [
       { name: "director", type: "string", description: "按导演筛选 (list)" },
       { name: "tag", type: "string", description: "按标签筛选 (list)" },
       { name: "library", type: "string", description: "只看某个媒体库 (list)" },
+      { name: "state", type: "string", description: "list: unscraped (还没标题) | scraped | exhausted (刮削失败到上限)" },
       { name: "limit", type: "number", description: "条数 (list)", default: 20 },
       { name: "offset", type: "number", description: "跳过条数 (list)", default: 0 },
       { name: "title", type: "string", description: "set: 标题" },
@@ -613,6 +650,7 @@ export const COMMANDS: Command[] = [
           director: text("director"),
           tag: text("tag"),
           libraryId: library?.id,
+          state: text("state") as "unscraped" | "scraped" | "exhausted" | undefined,
         };
         const items = listItems(ctx.rt!, {
           ...filters,
@@ -877,6 +915,8 @@ export const COMMANDS: Command[] = [
       { name: "llm-model", type: "string", description: "set: 模型名, 如 deepseek-chat" },
       { name: "translate", type: "boolean", description: "set: 刮削后自动翻译" },
       { name: "no-translate", type: "boolean", description: "set: 关闭翻译开关", default: false },
+      { name: "no-save-images", type: "boolean", description: "set: 图片只存缓存, 不复制到视频旁边", default: false },
+      { name: "save-images", type: "boolean", description: "set: 图片同时复制一份到视频旁边 (默认开)", default: false },
     ],
     async run(ctx, args) {
       const action = args.positionals.action ?? "get";
@@ -924,6 +964,7 @@ export const COMMANDS: Command[] = [
           proxy?: string;
           llm: { baseUrl?: string; apiKey?: string; model?: string };
           translate?: boolean;
+          saveImages?: boolean;
         } = { dmm: {}, llm: {} };
         if (typeof args.options["dmm-api-id"] === "string") patch.dmm.apiId = args.options["dmm-api-id"];
         if (typeof args.options["dmm-affiliate-id"] === "string") patch.dmm.affiliateId = args.options["dmm-affiliate-id"];
@@ -933,6 +974,8 @@ export const COMMANDS: Command[] = [
         if (typeof args.options["llm-model"] === "string") patch.llm.model = args.options["llm-model"];
         if (typeof args.options.translate === "boolean") patch.translate = args.options.translate;
         if (args.options["no-translate"] === true) patch.translate = false;
+        if (args.options["no-save-images"] === true) patch.saveImages = false;
+        if (args.options["save-images"] === true) patch.saveImages = true;
 
         const touched =
           Object.keys(patch.dmm).length > 0 ||

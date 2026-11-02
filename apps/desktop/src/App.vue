@@ -54,7 +54,7 @@ const pageInput = ref("1");
 const pageSize = 100;
 const itemTotal = ref(0);
 /** 当前生效的筛选条件。空对象 = 不过滤。键名与 core 的 listItems 选项一致。 */
-type FilterKey = "q" | "actor" | "studio" | "label" | "series" | "director" | "tag";
+type FilterKey = "q" | "actor" | "studio" | "label" | "series" | "director" | "tag" | "state";
 const FILTERABLE_SINGLE: string[] = ["studio", "label", "series"];
 const LIST_FIELDS: string[] = ["actors", "directors", "tags"];
 const FILTER_LABEL: Record<FilterKey, string> = {
@@ -65,6 +65,7 @@ const FILTER_LABEL: Record<FilterKey, string> = {
   series: "系列",
   director: "导演",
   tag: "标签",
+  state: "状态",
 };
 const filters = ref<Partial<Record<FilterKey, string>>>({});
 const searchDraft = ref("");
@@ -186,6 +187,18 @@ async function reveal(path: string): Promise<void> {
   await window.kura.revealFile(path);
 }
 
+/** 详情里打开"这一部在磁盘上的位置"。库里没登记文件时给个明确的说法。 */
+async function revealItem(): Promise<void> {
+  const key = detail.value?.key;
+  if (!key) return;
+  const files = await window.kura.itemFiles(key);
+  if (files.length === 0) {
+    note.value = `${key} 还没有登记到任何文件`;
+    return;
+  }
+  await reveal(files[0]!.path);
+}
+
 async function refreshItems(): Promise<void> {
   // 每次请求带一个序号: 刮削时进度会频繁触发刷新, 早发出的请求可能晚回来,
   // 用旧数据覆盖新数据 (页码突然只剩一页就是这么来的)。
@@ -227,6 +240,12 @@ async function goFirst(): Promise<void> {
 
 async function goLast(): Promise<void> {
   await goPage(pageCount.value - 1);
+}
+
+/** 筛选条上的值展示: state 存的是英文枚举, 展示要给人看。 */
+function filterText(key: FilterKey, value: string): string {
+  if (key !== "state") return value;
+  return { unscraped: "未刮削", scraped: "已刮削", exhausted: "已达上限" }[value] ?? value;
 }
 
 /** 点同一个值第二次就取消该条件。 */
@@ -315,7 +334,7 @@ async function doScan(): Promise<void> {
   const report = await run("扫描", () => window.kura.scan(selectedId.value!));
   if (report) {
     const { counts } = report;
-    note.value = `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}`;
+    note.value = `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}${counts.nfoImported ? ` · 从 NFO 读回 ${counts.nfoImported} 条` : ""}`;
     page.value = 0;
     await refreshAll();
   }
@@ -677,6 +696,15 @@ async function testDmm(): Promise<void> {
             </label>
             <span class="muted">已选 {{ picked.length }}</span>
             <span class="spacer" />
+            <button
+              type="button"
+              class="chip"
+              :class="{ on: filters.state === 'unscraped' }"
+              :title="`只看还没有元数据的条目 (共 ${pendingTotal} 条)`"
+              @click="applyFilter('state', 'unscraped')"
+            >
+              未刮削 {{ pendingTotal }}
+            </button>
             <input
               v-model="searchDraft"
               class="search"
@@ -730,7 +758,7 @@ async function testDmm(): Promise<void> {
               :title="`点一下取消这个条件`"
               @click="applyFilter(key as FilterKey, value as string)"
             >
-              {{ FILTER_LABEL[key as FilterKey] }}: {{ value }} ✕
+              {{ FILTER_LABEL[key as FilterKey] }}: {{ filterText(key as FilterKey, value as string) }} ✕
             </span>
           </div>
 
@@ -802,6 +830,9 @@ async function testDmm(): Promise<void> {
             <aside v-if="detail" class="detail">
               <header>
                 <strong class="mono">{{ detail.number }}</strong>
+                <button type="button" class="chip" title="在资源管理器里打开这个文件" @click="revealItem">
+                  打开位置
+                </button>
                 <button class="ghost" type="button" @click="detail = null">×</button>
               </header>
               <ul>
@@ -1290,6 +1321,16 @@ h1 {
   color: var(--accent);
   font-size: 12px;
   cursor: pointer;
+}
+
+.chip:hover {
+  background: var(--panel-3);
+}
+
+/* 进行中的筛选: 反色, 一眼看出列表被条件限住了 */
+.chip.on {
+  background: var(--accent);
+  color: var(--bg);
 }
 
 .banner {

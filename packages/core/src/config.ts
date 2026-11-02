@@ -29,6 +29,11 @@ export interface Settings {
   };
   /** 刮削后自动翻译。默认关: 翻译要花 token, 且不是所有人都要中文。 */
   translate: boolean;
+  /**
+   * 下载的图片是否同时存一份到视频旁边 (`片名-poster.jpg` / `片名-thumb.jpg`)。
+   * 默认开: 图只躺在进程的数据目录里, 换个播放器就看不见了。
+   */
+  saveImages: boolean;
 }
 
 export const EMPTY_SETTINGS: Settings = {
@@ -36,6 +41,7 @@ export const EMPTY_SETTINGS: Settings = {
   proxy: "",
   llm: { baseUrl: "", apiKey: "", model: "" },
   translate: false,
+  saveImages: true,
 };
 
 export function settingsPath(paths: Paths): string {
@@ -59,6 +65,8 @@ export function loadSettings(paths: Paths): Settings {
         model: String(raw.llm?.model ?? ""),
       },
       translate: Boolean(raw.translate),
+      // 旧配置文件里没有这个字段, 默认开。
+      saveImages: raw.saveImages === undefined ? true : Boolean(raw.saveImages),
     };
   } catch {
     // 坏配置不能挡住启动: 退回空设置, 让调用方按"未配置"处理。
@@ -68,7 +76,13 @@ export function loadSettings(paths: Paths): Settings {
 
 export function saveSettings(
   paths: Paths,
-  patch: { dmm?: Partial<Settings["dmm"]>; proxy?: string; llm?: Partial<Settings["llm"]>; translate?: boolean },
+  patch: {
+    dmm?: Partial<Settings["dmm"]>;
+    proxy?: string;
+    llm?: Partial<Settings["llm"]>;
+    translate?: boolean;
+    saveImages?: boolean;
+  },
 ): Settings {
   const current = loadSettings(paths);
   const next: Settings = {
@@ -76,6 +90,7 @@ export function saveSettings(
     proxy: patch.proxy !== undefined ? patch.proxy : current.proxy,
     llm: { ...current.llm, ...(patch.llm ?? {}) },
     translate: patch.translate !== undefined ? patch.translate : current.translate,
+    saveImages: patch.saveImages !== undefined ? patch.saveImages : (current.saveImages ?? true),
   };
 
   mkdirSync(paths.dataDir, { recursive: true });
@@ -114,6 +129,7 @@ export function maskSettings(settings: Settings): Settings {
       model: settings.llm?.model ?? "",
     },
     translate: Boolean(settings.translate),
+    saveImages: settings.saveImages ?? true,
     // 代理地址不含密钥, 原样展示便于排障。
     proxy: settings.proxy,
   };

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import type { Metadata } from "../domain/types";
 import type { HttpClient } from "../net/http";
@@ -212,4 +212,54 @@ function pickExtension(contentType: string, url: string): string {
     // URL 不合法就退回默认扩展名
   }
   return ".jpg";
+}
+
+
+/**
+ * 把已缓存的图复制到视频旁边, 命名与 `findSidecarImages` 认的一致。
+ *
+ * 为什么要有: 图只存在进程的数据目录里, 换台电脑/换个播放器就什么都看不到;
+ * 存一份到片子旁边, Emby/Kodi 直接用, 整个库搬走也不用重新下载。
+ * 目标已存在且大小相同就跳过 (重复点"下载图片"不该反复写盘)。
+ */
+export async function placeImagesBesideVideo(
+  rt: Runtime,
+  metadata: Metadata,
+  images: { poster?: LocalResource | null; thumb?: LocalResource | null },
+): Promise<{ saved: string[]; skipped: string[]; errors: string[] }> {
+  const saved: string[] = [];
+  const skipped: string[] = [];
+  const errors: string[] = [];
+
+  const videos = rt.db.all<{ path: string }>("select path from media_files where number = ? order by path", [
+    metadata.number ?? metadata.key,
+  ]);
+  if (videos.length === 0) return { saved, skipped, errors };
+
+  for (const video of videos) {
+    if (!existsSync(video.path)) continue;
+    const base = video.path.slice(0, video.path.length - extname(video.path).length);
+
+    for (const [suffix, image] of [
+      ["-poster", images.poster],
+      ["-thumb", images.thumb],
+    ] as const) {
+      if (!image) continue;
+      const target = `${base}${suffix}${extname(image.path) || ".jpg"}`;
+      try {
+        const existing = statSync(target, { throwIfNoEntry: false });
+        if (existing && existing.size === image.size) {
+          skipped.push(target);
+          continue;
+        }
+        await copyFile(image.path, target);
+        saved.push(target);
+      } catch (err) {
+        // 只读盘/权限不足不该让"下载图片"整个失败 —— 缓存里已经有了, 界面还能显示。
+        errors.push(`${target}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  return { saved, skipped, errors };
 }

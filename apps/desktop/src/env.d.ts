@@ -52,7 +52,14 @@ interface KuraScanReport {
   libraryId: number;
   root: string;
   dryRun: boolean;
-  counts: { added: number; updated: number; unchanged: number; removed: number; unparsed: number };
+  counts: {
+    added: number;
+    updated: number;
+    unchanged: number;
+    removed: number;
+    unparsed: number;
+    nfoImported: number;
+  };
   durationMs: number;
 }
 
@@ -192,6 +199,7 @@ interface KuraBridge {
     total: number;
   }>;
   revealFile(path: string): Promise<boolean>;
+  itemFiles(key: string): Promise<{ path: string; size: number }[]>;
   openDataDir(): Promise<{ dir: string }>;
   tasks(limit?: number): Promise<KuraTask[]>;
   retryTask(id: number): Promise<KuraTask>;

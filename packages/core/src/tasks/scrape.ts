@@ -366,6 +366,11 @@ export interface ListItemOptions {
   libraryId?: number;
   /** 关键词: 番号/标题/原名/片商/系列/演员/标签 都算命中。 */
   q?: string;
+  /**
+   * 刮削状态。`unscraped` 就是"有番号但还没标题" —— 界面上最常用的一个筛选,
+   * 因为刮削失败、排队、抓不到源的条目都堆在这一堆里。
+   */
+  state?: "unscraped" | "scraped" | "exhausted";
   studio?: string;
   label?: string;
   series?: string;
@@ -421,6 +426,14 @@ function itemFilters(options: Omit<ListItemOptions, "limit" | "offset">): { wher
       where.push(`exists (select 1 from json_each(items.${column}) where value = ? collate nocase)`);
       params.push(value);
     }
+  }
+
+  if (options.state === "unscraped") {
+    where.push("(items.title is null or items.title = '')");
+  } else if (options.state === "scraped") {
+    where.push("(items.title is not null and items.title <> '')");
+  } else if (options.state === "exhausted") {
+    where.push(`items.scrape_attempts >= ${MAX_SCRAPE_ATTEMPTS}`);
   }
 
   if (options.q) {

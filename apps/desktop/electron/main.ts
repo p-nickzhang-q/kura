@@ -10,6 +10,7 @@ import {
   createDmmSource,
   defaultSources,
   downloadPoster,
+  placeImagesBesideVideo,
   updateItem,
   translateItem,
   DIMENSIONS,
@@ -79,7 +80,7 @@ protocol.registerSchemesAsPrivileged([
   { scheme: "kura-file", privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
 
-let settings: Settings = { dmm: { apiId: "", affiliateId: "" }, proxy: "", llm: { baseUrl: "", apiKey: "", model: "" }, translate: false };
+let settings: Settings = { dmm: { apiId: "", affiliateId: "" }, proxy: "", llm: { baseUrl: "", apiKey: "", model: "" }, translate: false, saveImages: true };
 
 /** Electron 主进程的 fetch: 跟随系统代理(Clash 开了系统代理/TUN 就直接生效)。 */
 function browserFetch(url: string, init: FetchInit): Promise<Response> {
@@ -439,6 +440,14 @@ function registerIpc(): void {
     return { dir };
   });
 
+  // 详情面板"打开位置"要用: 这个番号在磁盘上的文件。
+  ipcMain.handle("item:files", (_event, key: string) => {
+    const rt = mustRuntime();
+    return rt.db
+      .all<{ path: string; size: number }>("select path, size from media_files where number = ? order by path", [key])
+      .map((row) => ({ path: row.path, size: row.size }));
+  });
+
   ipcMain.handle("files:reveal", (_event, path: string) => {
     shell.showItemInFolder(path);
     return true;
@@ -502,7 +511,18 @@ function registerIpc(): void {
       }
       const file = (resource: { path: string; size: number } | null) =>
         resource ? { path: resource.path, size: resource.size } : null;
-      return { key: input.key, poster: file(result.poster), thumb: file(result.thumb) };
+      // 顺手把图放到视频旁边: 只在设置里没关掉时做, 只读盘上失败也不影响缓存。
+      const placed =
+        settings.saveImages !== false
+          ? await placeImagesBesideVideo(rt, item, { poster: result.poster, thumb: result.thumb })
+          : { saved: [], skipped: [], errors: [] };
+      return {
+        key: input.key,
+        poster: file(result.poster),
+        thumb: file(result.thumb),
+        saved: placed.saved.length,
+        saveErrors: placed.errors,
+      };
     }),
   );
 

@@ -1,8 +1,9 @@
 import { readdir, stat } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { detectContentType, extractNumber, parseFileInfo } from "../domain/identify";
+import { nfoToMetadata, readNfo } from "../domain/nfo";
 import type { Library } from "../domain/materialize";
-import { parsePhase, stringify, type MediaFileRow } from "../db/rows";
+import { metadataColumns, parsePhase, stringify, type MediaFileRow } from "../db/rows";
 import type { FileInfo } from "../domain/types";
 import type { Runtime } from "../runtime";
 
@@ -20,7 +21,15 @@ export interface ScanReport {
   libraryId: number;
   root: string;
   dryRun: boolean;
-  counts: { added: number; updated: number; unchanged: number; removed: number; unparsed: number };
+  counts: {
+    added: number;
+    updated: number;
+    unchanged: number;
+    removed: number;
+    unparsed: number;
+    /** 从视频旁边的 .nfo 捞回元数据的条目数 (换电脑/换硬盘场景)。 */
+    nfoImported: number;
+  };
   durationMs: number;
 }
 
@@ -62,8 +71,10 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
     known.set(row.path, row);
   }
 
-  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0 };
+  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, nfoImported: 0 };
   const seen = new Set<string>();
+  // 同一个番号可能对应多个文件, nfo 只读一次。
+  const nfoChecked = new Set<string>();
 
   rt.db.exec("begin");
   try {
@@ -76,6 +87,12 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
       const number = extractNumber(file.path);
       const phase = parseFileInfo(file.path);
       if (!number) counts.unparsed++;
+
+      // 空条目的元数据可以从旁边的 nfo 捞回来 —— 换电脑时数据库是空的, 这一步能省掉全部刮削。
+      if (number && !dryRun && !nfoChecked.has(number)) {
+        nfoChecked.add(number);
+        if (importNfo(rt, number, file.path)) counts.nfoImported++;
+      }
 
       const untouched = previous && previous.size === file.size && previous.mtime_ms === file.mtimeMs;
       if (untouched && previous.number === number) {
@@ -186,6 +203,32 @@ export function countFiles(
 export function filePhase(rt: Runtime, path: string) {
   const row = rt.db.get<MediaFileRow>("select * from media_files where path = ?", [path]);
   return row ? parsePhase(row.phase) : null;
+}
+
+/**
+ * 条目还空着的时候, 用视频旁边的同名 nfo 补上元数据。
+ *
+ * 只在 `title` 为空时动手: 库里已经有刮削结果的条目, 不该被一个旧 nfo 覆盖回去。
+ */
+function importNfo(rt: Runtime, number: string, videoPath: string): boolean {
+  const row = rt.db.get<{ title: string | null }>("select title from items where number = ?", [number]);
+  if (row?.title) return false;
+
+  const fields = readNfo(videoPath);
+  if (!fields) return false;
+
+  const metadata = nfoToMetadata(fields, number);
+  const columns = metadataColumns(metadata);
+  const names = Object.keys(columns);
+  rt.db.run(
+    `insert into items (${names.join(", ")}, updated_at) values (${names.map(() => "?").join(", ")}, unixepoch())
+     on conflict(number) do update set ${names
+       .filter((name) => name !== "number")
+       .map((name) => `${name} = excluded.${name}`)
+       .join(", ")}, updated_at = unixepoch()`,
+    names.map((name) => columns[name]),
+  );
+  return true;
 }
 
 async function walk(dir: string, out: Found[]): Promise<void> {
