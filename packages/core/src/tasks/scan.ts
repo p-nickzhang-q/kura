@@ -29,6 +29,15 @@ export interface ScanReport {
     unparsed: number;
     /** 从视频旁边的 .nfo 捞回元数据的条目数 (换电脑/换硬盘场景)。 */
     nfoImported: number;
+    /**
+     * 修正了内容类型的条数。
+     *
+     * 内容类型按理只在建条目时落定, 但它同时决定刮削路由 —— 解析器有 bug 时
+     * (把 SNIS-191 判成国产) 修完必须让旧库自愈, 否则那些条目永远只路由到
+     * 一个源。只动"还没刮到任何标题"的条目: 有元数据的类型已经参与过路由,
+     * 改它等于换一条来源线, 应该由人来决定。
+     */
+    retyped: number;
   };
   durationMs: number;
 }
@@ -71,10 +80,12 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
     known.set(row.path, row);
   }
 
-  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, nfoImported: 0 };
+  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, nfoImported: 0, retyped: 0 };
   const seen = new Set<string>();
   // 同一个番号可能对应多个文件, nfo 只读一次。
   const nfoChecked = new Set<string>();
+  /** 每次扫描内同一条目只判一次类型。 */
+  const retyped = new Set<string>();
 
   rt.db.exec("begin");
   try {
@@ -92,6 +103,13 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
       if (number && !dryRun && !nfoChecked.has(number)) {
         nfoChecked.add(number);
         if (importNfo(rt, number, file.path)) counts.nfoImported++;
+      }
+
+      // 类型自愈必须在 unchanged 短路之前: 文件没变, 但解析器修好了。
+      if (number && !dryRun && !retyped.has(number)) {
+        retyped.add(number);
+        const detected = detectContentType(number, file.path) ?? "censored";
+        if (previous?.number === number && retypeUntouched(rt, number, detected)) counts.retyped++;
       }
 
       const untouched = previous && previous.size === file.size && previous.mtime_ms === file.mtimeMs;
@@ -210,6 +228,22 @@ export function filePhase(rt: Runtime, path: string) {
  *
  * 只在 `title` 为空时动手: 库里已经有刮削结果的条目, 不该被一个旧 nfo 覆盖回去。
  */
+/**
+ * 空白条目按当前解析器重新判定内容类型。
+ *
+ * 只在 `title` 为空时动手: 没刮到东西的条目"改类型"没有损失, 而已经刮到字段的
+ * 条目换类型等于换来源线, 该由人来决定。
+ */
+function retypeUntouched(rt: Runtime, number: string, detected: string): boolean {
+  const row = rt.db.get<{ content_type: string; title: string | null }>(
+    "select content_type, title from items where number = ?",
+    [number],
+  );
+  if (!row || row.title || row.content_type === detected) return false;
+  rt.db.run("update items set content_type = ?, updated_at = unixepoch() where number = ?", [detected, number]);
+  return true;
+}
+
 function importNfo(rt: Runtime, number: string, videoPath: string): boolean {
   const row = rt.db.get<{ title: string | null }>("select title from items where number = ?", [number]);
   if (row?.title) return false;

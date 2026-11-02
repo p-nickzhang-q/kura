@@ -60,7 +60,16 @@ export function isSiteKey(value: string): boolean {
 }
 
 const AMATEUR_HINTS = /\b(SIRO|LUXU|GACHI|PACOPACOMAMA|10MUSUME|HEYZO|TOKYO-HOT)\b/;
-const CHINESE_HINTS = /(国产|国产精品|麻豆|MD|91|天美|果冻|SWAG|CHINESE)/;
+/**
+ * 国产/中文厂牌线索。
+ *
+ * 这里**只能放不会被番号撞上的写法**: 早期版本写的是裸 `MD` 与 `91`, 于是
+ * `SNIS-191`、`IPX-191`、`MDON-027` 全被判成国产, 而国产只路由到 javdb ——
+ * javdb 一被 Cloudflare 拦, 这些条目就一条源都拿不到, 报错还只提 javdb,
+ * 看起来像"站点挂了", 实际是类型判错了、压根没试 javbus。
+ */
+const CHINESE_HINTS =
+  /(国产|国产精品|麻豆|天美|果冻传媒|星空传媒|麻豆传媒|SWAG|CHINESE|91CM|91KZ|91PORN|\bMD[XLT]?-\d|\bMDX\d)/i;
 const WESTERN_HINTS = /\b(XXX|PORN|BRAZZERS|BLACKED|VIXEN|PASSION)\b/;
 
 /**

@@ -59,6 +59,7 @@ interface KuraScanReport {
     removed: number;
     unparsed: number;
     nfoImported: number;
+    retyped: number;
   };
   durationMs: number;
 }

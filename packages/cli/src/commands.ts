@@ -233,6 +233,7 @@ export const COMMANDS: Command[] = [
         `扫描完成: ${data.root}${data.dryRun ? " (dry-run)" : ""}`,
         `  新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 移除 ${counts.removed} · 未识别 ${counts.unparsed}`,
         ...(counts.nfoImported ? [`  从 NFO 读回 ${counts.nfoImported} 条的元数据 (未联网)`] : []),
+        ...(counts.retyped ? [`  修正内容类型 ${counts.retyped} 条 (解析器升级, 只动还没刮到标题的条目)`] : []),
         `  耗时 ${data.durationMs}ms`,
       ].join("\n");
     },

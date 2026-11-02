@@ -100,3 +100,23 @@ describe("parseFileInfo", () => {
     expect(parseFileInfo("ABC-123-1080p.mp4").definition).toBe("1080p");
   });
 });
+
+describe("国产线索不能撞上番号", () => {
+  // 这条是被真事故逼出来的: 裸 MD / 91 会把 SNIS-191、MDON-027 判成国产,
+  // 而国产只路由到 javdb —— javdb 一被 Cloudflare 拦, 这些条目一条源都拿不到。
+  test("番号里带 191 / 091 的仍是日本有码", () => {
+    for (const file of ["SNIS-191.mkv", "IPX-191.mp4", "ABP-091.mkv"]) {
+      expect(detectContentType(extractNumber(file) ?? "", file)).toBe("censored");
+    }
+  });
+
+  test("以 MD 开头的日本番号不被当成麻豆", () => {
+    expect(detectContentType(extractNumber("MDON-027.mkv") ?? "", "MDON-027.mkv")).toBe("censored");
+  });
+
+  test("真正的国产写法照样认得出来", () => {
+    for (const file of ["MD-0123.mp4", "MDX-0123.mp4", "91CM-123.mp4", "91KZ-666.mp4", "国产-某某.mp4"]) {
+      expect(detectContentType(extractNumber(file) ?? "", file)).toBe("chinese");
+    }
+  });
+});

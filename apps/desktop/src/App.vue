@@ -409,7 +409,7 @@ async function doScan(): Promise<void> {
   const report = await run("扫描", () => window.kura.scan(selectedId.value!));
   if (report) {
     const { counts } = report;
-    note.value = `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}${counts.nfoImported ? ` · 从 NFO 读回 ${counts.nfoImported} 条` : ""}`;
+    note.value = `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}${counts.nfoImported ? ` · 从 NFO 读回 ${counts.nfoImported} 条` : ""}${counts.retyped ? ` · 修正内容类型 ${counts.retyped} 条` : ""}`;
     page.value = 0;
     await refreshAll();
   }
