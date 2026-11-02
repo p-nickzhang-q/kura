@@ -303,7 +303,7 @@ function displayTitle(item: KuraItem): string {
   return stripped || item.title;
 }
 
-/** 侧栏库名与路径重复时不显示路径 (库里叫"#整理完成", 路径尾巴也是它)。 */
+/** 侧栏库名与路径重复时不显示路径 (库里叫"电影库", 路径尾巴也是它)。 */
 function showRoot(library: KuraLibrary): boolean {
   const tail = library.root.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
   return tail.toLowerCase() !== library.name.toLowerCase();
@@ -1930,9 +1930,18 @@ button:disabled {
 
 .toolbar {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
   font-size: var(--fs-body);
+}
+
+/* 条目页的工具栏是"两行", 其它页仍是一行 —— 写在 .toolbar 上会把未识别页
+   的上一页/下一页拉成两条横贯整屏的大按钮。 */
+.pane.items > .toolbar {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
 }
 
 .toolbar-row {
@@ -1952,6 +1961,13 @@ button:disabled {
 .toolbar-row .spacer {
   flex: 1 1 0;
   min-width: 8px;
+}
+
+/* 未识别页: 路径列吃掉剩余宽度, 但给大小和按钮留位置 */
+.pane:not(.items) table td.mono:first-child {
+  max-width: 60vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .row-actions {
