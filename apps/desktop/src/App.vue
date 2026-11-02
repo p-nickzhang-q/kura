@@ -558,6 +558,39 @@ async function postersPicked(): Promise<void> {
   }
 }
 
+/** 单条改类型: 只影响这条的刮削路由, 不动已有字段。 */
+async function retypeOne(key: string, contentType: string): Promise<void> {
+  const result = await run("改类型", () => window.kura.retypeItem(key, contentType));
+  if (!result) return;
+  if (result.item) detail.value = result.item;
+  note.value = result.from === result.to ? `${key} 类型本来就是 ${TYPE_LABEL[result.to] ?? result.to}` : `${key} 类型改为 ${TYPE_LABEL[result.to] ?? result.to}`;
+  await refreshItems();
+}
+
+/** 批量修正: 先只查(不动数据), 报出条数, 人确认后才写。 */
+async function retypeDetect(): Promise<void> {
+  const preview = await run("检查内容类型", () => window.kura.retypeDetect(false));
+  if (!preview) return;
+  if (preview.changes.length === 0) {
+    note.value = "没有内容类型判错的条目。";
+    return;
+  }
+  const samples = preview.changes.slice(0, 5).map((c) => `${c.number} ${c.from}→${c.to}`).join(", ");
+  const ok = window.confirm(
+    `发现 ${preview.changes.length} 条类型判错 (例如 ${samples}${preview.changes.length > 5 ? " …" : ""})。\n\n` +
+      "修正只改刮削路由; 已有字段不动, 但若库开着整理且用 {content_type} 目录, 下次整理会按新类型归档。\n\n确定修正吗?",
+  );
+  if (!ok) {
+    note.value = `已取消, 未改动 (${preview.changes.length} 条待修)`;
+    return;
+  }
+  const applied = await run("修正内容类型", () => window.kura.retypeDetect(true));
+  if (applied) {
+    note.value = `已修正 ${applied.changes.length} 条内容类型`;
+    await refreshAll();
+  }
+}
+
 async function togglePin(field: string): Promise<void> {
   if (!detail.value) return;
   const pinned = detail.value.pinned.includes(field);
@@ -769,6 +802,14 @@ async function testDmm(): Promise<void> {
                 @click="forceScan"
               >
                 强制扫描
+              </button>
+              <button
+                type="button"
+                :disabled="busy"
+                title="按当前解析器重新判定内容类型 (会先列出清单让你确认)"
+                @click="retypeDetect"
+              >
+                修正内容类型
               </button>
               <button type="button" :disabled="busy" @click="doScrape">刮削待处理</button>
               <button
@@ -1019,6 +1060,19 @@ async function testDmm(): Promise<void> {
                 </button>
                 <button class="ghost" type="button" aria-label="关闭详情" title="关闭详情" @click="detail = null">×</button>
               </header>
+              <!-- 类型决定刮削路由与整理目录, 所以做成显式可改: 判错时人得能修 -->
+              <div class="detail-type">
+                <span class="muted">类型</span>
+                <select
+                  :value="detail.contentType"
+                  aria-label="内容类型"
+                  @change="retypeOne(detail!.key, ($event.target as HTMLSelectElement).value)"
+                >
+                  <option v-for="(label, value) in TYPE_LABEL" :key="value" :value="value">{{ label }}</option>
+                </select>
+                <span class="muted hint">改了会换刮削来源</span>
+              </div>
+
               <ul>
                 <li
                   v-for="field in FIELDS"
@@ -2207,6 +2261,28 @@ td.pick {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+.detail-type {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-label);
+}
+
+.detail-type select {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.detail-type .hint {
+  font-size: var(--fs-label);
 }
 
 .detail li {

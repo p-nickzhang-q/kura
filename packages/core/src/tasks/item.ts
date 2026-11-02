@@ -1,5 +1,6 @@
 import { AppError, EXIT } from "../exit";
-import { FIELD_KEYS, type FieldKey } from "../domain/types";
+import { CONTENT_TYPES, FIELD_KEYS, type FieldKey } from "../domain/types";
+import { detectContentType } from "../domain/identify";
 import { metadataColumns, parseJson, rowToMetadata, stringify, type ItemRow } from "../db/rows";
 import { pruneActors, syncItemActors } from "../db/actors";
 import type { Runtime } from "../runtime";
@@ -77,4 +78,65 @@ export function parseListValue(value: string): string[] {
     .split(",")
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
+}
+
+/**
+ * 手动改内容类型。
+ *
+ * 类型按设计是"建条目时落定、之后不可改"(它决定刮削路由与 `{content_type}`
+ * 目录模板), 所以这个入口只给**人**用, 上面不挂任何自动流程 ——
+ * 自动改类型只在 `scan` 里对"从没刮过网络"的条目做。
+ */
+export function retypeItem(rt: Runtime, number: string, contentType: string): { from: string; to: string } {
+  if (!CONTENT_TYPES.includes(contentType as (typeof CONTENT_TYPES)[number])) {
+    throw new AppError(`未知内容类型: ${contentType}`, EXIT.USAGE, { contentType, allowed: CONTENT_TYPES });
+  }
+  const row = rt.db.get<{ content_type: string }>("select content_type from items where number = ?", [number]);
+  if (!row) throw new AppError(`没有这个条目: ${number}`, EXIT.NOT_FOUND, { number });
+  if (row.content_type !== contentType) {
+    rt.db.run("update items set content_type = ?, updated_at = unixepoch() where number = ?", [contentType, number]);
+  }
+  return { from: row.content_type, to: contentType };
+}
+
+export interface RetypeCandidate {
+  number: string;
+  from: string;
+  to: string;
+  /** 有标题 = 已经刮到过东西, 改类型会换来源线, 必须人确认。 */
+  hasTitle: boolean;
+}
+
+/**
+ * 按当前解析器重新判定所有条目的内容类型。
+ *
+ * 用途: 解析器修好了 bug (比如把 SSIS-915 判成国产), 但那些条目早已落库、
+ * 类型不可自动改。默认只**列清单**, `apply` 才真的改 —— 因为类型还决定
+ * `{content_type}` 目录模板, 改了之后下次整理会把文件挪到别的目录。
+ */
+export function detectRetypes(rt: Runtime, options: { apply?: boolean } = {}): RetypeCandidate[] {
+  const rows = rt.db.all<{ number: string; content_type: string; title: string | null; path: string | null }>(
+    `select i.number, i.content_type, i.title, (select path from media_files m where m.number = i.number limit 1) path
+     from items i`,
+  );
+  const out: RetypeCandidate[] = [];
+  for (const row of rows) {
+    // 有文件路径就用路径当线索 (国产/素人线索常在目录名里), 没有就只看番号。
+    const detected = detectContentType(row.number, row.path ?? "");
+    if (!detected || detected === row.content_type) continue;
+    out.push({ number: row.number, from: row.content_type, to: detected, hasTitle: Boolean(row.title) });
+  }
+  if (options.apply) {
+    rt.db.exec("begin");
+    try {
+      for (const change of out) {
+        rt.db.run("update items set content_type = ?, updated_at = unixepoch() where number = ?", [change.to, change.number]);
+      }
+      rt.db.exec("commit");
+    } catch (err) {
+      rt.db.exec("rollback");
+      throw err;
+    }
+  }
+  return out;
 }

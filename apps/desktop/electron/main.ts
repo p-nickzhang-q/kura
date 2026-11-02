@@ -14,6 +14,8 @@ import {
   downloadPoster,
   placeImagesBesideVideo,
   updateItem,
+  retypeItem,
+  detectRetypes,
   translateItem,
   DIMENSIONS,
   dimensionTemplate,
@@ -522,6 +524,22 @@ function registerIpc(): void {
     return rt.db
       .all<{ path: string; size: number }>("select path, size from media_files where number = ? order by path", [key])
       .map((row) => ({ path: row.path, size: row.size }));
+  });
+
+  /**
+   * 手动改内容类型。类型决定刮削路由与 {content_type} 目录模板, 所以只给
+   * 人在详情面板里显式改; 自动改只发生在 scan 对"从没刮过网络"的条目。
+   */
+  /** 批量: 按当前解析器找出判错的条目; apply 才真的改。 */
+  ipcMain.handle("item:retype-detect", (_event, input: { apply?: boolean } = {}) => {
+    const changes = detectRetypes(mustRuntime(), { apply: input.apply === true });
+    return { applied: input.apply === true, changes };
+  });
+
+  ipcMain.handle("item:retype", (_event, input: { key: string; contentType: string }) => {
+    const rt = mustRuntime();
+    const result = retypeItem(rt, input.key, input.contentType);
+    return { ...result, item: getItem(rt, input.key) };
   });
 
   ipcMain.handle("files:reveal", (_event, path: string) => {

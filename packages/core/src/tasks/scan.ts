@@ -258,17 +258,23 @@ export function filePhase(rt: Runtime, path: string) {
  * 只在 `title` 为空时动手: 库里已经有刮削结果的条目, 不该被一个旧 nfo 覆盖回去。
  */
 /**
- * 空白条目按当前解析器重新判定内容类型。
+ * 没刮过网络的条目, 按当前解析器重新判定内容类型。
  *
- * 只在 `title` 为空时动手: 没刮到东西的条目"改类型"没有损失, 而已经刮到字段的
- * 条目换类型等于换来源线, 该由人来决定。
+ * 判据是"从来没被任何来源填过字段" —— `field_sources` 为空说明它身上的数据
+ * 不是刮来的 (可能只是从旁边的 nfo 读回来的标题)。这类条目改类型没有损失。
+ *
+ * 已经真刮过字段的条目不在此列: 换类型等于换来源线, 而且 `{content_type}`
+ * 目录模板会跟着变, 该由人来决定 (`kura item retype`)。
  */
 function retypeUntouched(rt: Runtime, number: string, detected: string): boolean {
-  const row = rt.db.get<{ content_type: string; title: string | null }>(
-    "select content_type, title from items where number = ?",
+  const row = rt.db.get<{ content_type: string; title: string | null; field_sources: string | null }>(
+    "select content_type, title, field_sources from items where number = ?",
     [number],
   );
-  if (!row || row.title || row.content_type === detected) return false;
+  if (!row || row.content_type === detected) return false;
+  const sources = row.field_sources;
+  const scraped = Boolean(sources && sources !== "{}" && sources !== "null");
+  if (scraped && row.title) return false;
   rt.db.run("update items set content_type = ?, updated_at = unixepoch() where number = ?", [detected, number]);
   return true;
 }

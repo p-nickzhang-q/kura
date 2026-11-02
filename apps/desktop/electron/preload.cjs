@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld("kura", {
   revealFile: (path) => ipcRenderer.invoke("files:reveal", path),
   proxyTest: () => ipcRenderer.invoke("proxy:test"),
   itemFiles: (key) => ipcRenderer.invoke("item:files", key),
+  retypeItem: (key, contentType) => ipcRenderer.invoke("item:retype", { key, contentType }),
+  retypeDetect: (apply = false) => ipcRenderer.invoke("item:retype-detect", { apply }),
   openDataDir: () => ipcRenderer.invoke("data:open"),
   tasks: (limit) => ipcRenderer.invoke("tasks:list", { limit }),
   retryTask: (id) => ipcRenderer.invoke("tasks:retry", { id }),

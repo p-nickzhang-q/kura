@@ -20,6 +20,8 @@ import {
   listLibraries,
   organize,
   parseFieldList,
+  retypeItem,
+  detectRetypes,
   parseListValue,
   pendingKeys,
   scan,
@@ -599,12 +601,12 @@ export const COMMANDS: Command[] = [
 
   {
     name: "item",
-    summary: "条目: get <番号> | list [--type] [--actor] | set <番号> --title ... | lock/unlock <番号> 字段,字段",
+    summary: "条目: get <番号> | list [--type] [--actor] | set <番号> --title ... | lock/unlock <番号> 字段,字段 | retype <番号> <类型>",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "get | list | set | lock | unlock", positional: true, required: true },
+      { name: "action", type: "string", description: "get | list | set | lock | unlock | retype", positional: true, required: true },
       { name: "number", type: "string", description: "番号 (get/set/lock/unlock)", positional: true },
-      { name: "fields", type: "string", description: "lock/unlock 的字段, 逗号分隔", positional: true },
+      { name: "fields", type: "string", description: "lock/unlock 的字段, 逗号分隔; retype 时要写的类型", positional: true },
       { name: "type", type: "string", description: "按类型筛选 (list)" },
       { name: "actor", type: "string", description: "按演员筛选 (list), 空白与全半角差异不影响命中" },
       { name: "q", type: "string", description: "关键词: 番号/标题/原名/片商/系列/演员/标签" },
@@ -617,6 +619,8 @@ export const COMMANDS: Command[] = [
       { name: "state", type: "string", description: "list: unscraped (还没标题) | scraped | exhausted (刮削失败到上限)" },
       { name: "sort", type: "string", description: "list: number | title | release | studio | duration | updated (默认 updated)" },
       { name: "desc", type: "boolean", description: "list: 排序方向改为倒序", default: false },
+      { name: "detect", type: "boolean", description: "retype: 按当前解析器找出所有可能判错的条目", default: false },
+      { name: "apply", type: "boolean", description: "retype --detect: 真的改 (默认只列清单)", default: false },
       { name: "limit", type: "number", description: "条数 (list)", default: 20 },
       { name: "offset", type: "number", description: "跳过条数 (list)", default: 0 },
       { name: "title", type: "string", description: "set: 标题" },
@@ -679,6 +683,26 @@ export const COMMANDS: Command[] = [
         };
       }
 
+      if (action === "retype") {
+        // 两种用法:
+        //   item retype <番号> <类型>     改一条
+        //   item retype --detect [--apply]  按当前解析器找出所有判错的, 默认只列清单
+        if (args.options.detect === true) {
+          const changes = detectRetypes(ctx.rt!, { apply: args.options.apply === true });
+          return { applied: args.options.apply === true, changes };
+        }
+        const number = args.positionals.number;
+        const type = args.positionals.fields ?? (typeof args.options.type === "string" ? args.options.type : "");
+        if (!number || !type) {
+          throw new AppError(
+            "用法: item retype <番号> <类型> | item retype --detect [--apply]",
+            EXIT.USAGE,
+          );
+        }
+        const result = retypeItem(ctx.rt!, number.toUpperCase(), type);
+        return { number: number.toUpperCase(), ...result };
+      }
+
       if (action === "set" || action === "lock" || action === "unlock") {
         const number = args.positionals.number;
         if (!number) throw new AppError(`用法: item ${action} <番号> ...`, EXIT.USAGE);
@@ -727,7 +751,27 @@ export const COMMANDS: Command[] = [
 
       throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
     },
-    render(data: { item?: Record<string, unknown>; items?: Record<string, unknown>[] }) {
+    render(data: {
+      item?: Record<string, unknown>;
+      items?: Record<string, unknown>[];
+      from?: string;
+      to?: string;
+      number?: string;
+      applied?: boolean;
+      changes?: { number: string; from: string; to: string; hasTitle: boolean }[];
+    }) {
+      if (data.changes) {
+        const changes = data.changes;
+        if (changes.length === 0) return "没有判错的条目。";
+        const head = data.applied ? `已修正 ${changes.length} 条:` : `发现 ${changes.length} 条判错 (加 --apply 才会改):`;
+        return [
+          head,
+          ...changes.map((c) => `  ${c.number.padEnd(14)} ${c.from} → ${c.to}${c.hasTitle ? "  (已有标题, 改类型会换来源线)" : ""}`),
+        ].join("\n");
+      }
+      if (data.from && data.to != null && data.number) {
+        return data.from === data.to ? `${data.number} 类型本来就是 ${data.to}` : `${data.number} 类型 ${data.from} → ${data.to}`;
+      }
       if (data.item) {
         const pinned = (data.item.pinned as string[] | undefined) ?? [];
         return Object.entries(data.item)

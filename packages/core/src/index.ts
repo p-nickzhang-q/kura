@@ -58,8 +58,8 @@ export { buildSystemPrompt, chatEndpoint, createTranslator, hasKana, needsTransl
 export type { LlmConfig, Translator } from "./llm/translate";
 export type { ItemSort, ItemSortField, ItemView, ScrapeOptions, ScrapePendingOptions, ScrapePendingResult, ScrapeProgress, ScrapeReport, TaskScrapeOptions, TaskScrapeResult } from "./tasks/scrape";
 
-export { parseFieldList, parseListValue, updateItem } from "./tasks/item";
-export type { UpdateItemOptions } from "./tasks/item";
+export { detectRetypes, parseFieldList, parseListValue, retypeItem, updateItem } from "./tasks/item";
+export type { RetypeCandidate, UpdateItemOptions } from "./tasks/item";
 
 export {
   cachedPoster,

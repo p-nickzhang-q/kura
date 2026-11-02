@@ -204,6 +204,13 @@ interface KuraBridge {
   revealFile(path: string): Promise<boolean>;
   proxyTest(): Promise<{ configured: string; effective: string; reachable: string[] }>;
   itemFiles(key: string): Promise<{ path: string; size: number }[]>;
+  retypeItem(
+    key: string,
+    contentType: string,
+  ): Promise<{ from: string; to: string; item: KuraItem | null }>;
+  retypeDetect(
+    apply?: boolean,
+  ): Promise<{ applied: boolean; changes: { number: string; from: string; to: string; hasTitle: boolean }[] }>;
   openDataDir(): Promise<{ dir: string }>;
   tasks(limit?: number): Promise<KuraTask[]>;
   retryTask(id: number): Promise<KuraTask>;

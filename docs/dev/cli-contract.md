@@ -77,6 +77,11 @@ kura organize 主库 --apply --json  # 真的移动
 kura item list --state unscraped --json
 kura item list --sort title --desc --limit 20 --json
 
+# 内容类型判错了(解析器 bug 留下的历史数据): 先看清单, 再决定要不要改
+kura item retype --detect --json            # 只列, 不动数据
+kura item retype --detect --apply --json    # 真的改
+kura item retype SSIS-915 censored --json   # 单条
+
 # 手改字段并锁定: 锁定的字段重新刮削不覆盖
 kura item set ABC-123 --title "我改的标题" --json
 kura item lock ABC-123 title,plot --json

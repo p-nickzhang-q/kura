@@ -2,7 +2,16 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLibrary, getItem, parseFieldList, parseListValue, updateItem } from "../src/index";
+import {
+  createLibrary,
+  detectRetypes,
+  getItem,
+  parseFieldList,
+  parseListValue,
+  retypeItem,
+  updateItem,
+} from "../src/index";
+import { AppError, EXIT } from "../src/exit";
 import { openRuntime } from "../src/runtime";
 import { defaultSources } from "../src/sources";
 import { scrape } from "../src/tasks/scrape";
@@ -90,5 +99,52 @@ describe("参数解析", () => {
 
   test("逗号分隔值去空", () => {
     expect(parseListValue("甲, 乙 ,, 丙")).toEqual(["甲", "乙", "丙"]);
+  });
+});
+
+describe("类型修正", () => {
+  /** 直接落一条指定类型的条目: 类型的自动判定不是这里要测的东西。 */
+  function seed(rt: Awaited<ReturnType<typeof openRuntime>>, number: string, contentType: string): void {
+    rt.db.run("insert into items (number, content_type) values (?, ?)", [number, contentType]);
+  }
+
+  test("retypeItem 改类型, 未知类型报 USAGE", async () => {
+    const rt = await openRuntime({ dataDir });
+    try {
+      seed(rt, "SSIS-915", "chinese");
+
+      expect(retypeItem(rt, "SSIS-915", "censored")).toEqual({ from: "chinese", to: "censored" });
+      expect(getItem(rt, "SSIS-915")?.contentType).toBe("censored");
+
+      const error = (() => {
+        try {
+          retypeItem(rt, "SSIS-915", "瞎写");
+        } catch (err) {
+          return err as AppError;
+        }
+      })();
+      expect(error?.exitCode).toBe(EXIT.USAGE);
+    } finally {
+      rt.close();
+    }
+  });
+
+  test("detectRetypes 默认只列清单, apply 才改", async () => {
+    const rt = await openRuntime({ dataDir });
+    try {
+      // 915 里含 "91": 旧规则把这种判成国产
+      seed(rt, "SSIS-915", "chinese");
+      seed(rt, "SSIS-001", "censored");
+
+      const preview = detectRetypes(rt, {});
+      expect(preview.map((c) => c.number)).toEqual(["SSIS-915"]);
+      expect(preview[0]?.hasTitle).toBe(false);
+      expect(getItem(rt, "SSIS-915")?.contentType).toBe("chinese"); // 清单不动数据
+
+      expect(detectRetypes(rt, { apply: true }).length).toBe(1);
+      expect(getItem(rt, "SSIS-915")?.contentType).toBe("censored");
+    } finally {
+      rt.close();
+    }
   });
 });
