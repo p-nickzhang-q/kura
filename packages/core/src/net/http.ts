@@ -205,11 +205,12 @@ export class HttpClient {
       }
     }
 
-    const message = lastError instanceof Error ? lastError.message : String(lastError);
-    throw new AppError(`请求失败: ${message}`, EXIT.RETRYABLE, { url });
+    const raw = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new AppError(`请求失败: ${raw}${proxyHint(raw)}`, EXIT.RETRYABLE, { url });
   }
 
   /** 同一个 host 串行 + 最小间隔; 不同 host 之间互不阻塞。 */
+
   private throttle(url: string): Promise<void> {
     const host = hostOf(url);
     const entry = this.queues.get(host) ?? { chain: Promise.resolve(), lastAt: 0 };
@@ -236,4 +237,24 @@ function hostOf(url: string): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 代理类网络错误的中文提示。
+ *
+ * `net::ERR_PROXY_CONNECTION_FAILED` 之类的原文对用户毫无信息量: 它表示
+ * "请求被送去了代理, 而代理端口连不上" —— 通常是代理软件没开、端口改了,
+ * 或者系统代理注册表里留着一条已经失效的记录。
+ */
+export function proxyHint(message: string): string {
+  if (/ERR_PROXY_CONNECTION_FAILED|ERR_TUNNEL_CONNECTION_FAILED|ECONNREFUSED\s+(?:\S+:)?(?:7890|7891|7897|1080|10808)/i.test(message)) {
+    return " (代理连不上: 检查 Clash 等代理软件是否在运行、端口是否一致; 不用代理就在设置里把代理清空)";
+  }
+  if (/ERR_NAME_NOT_RESOLVED|ENOTFOUND/i.test(message)) {
+    return " (域名解析失败: 多半是没走代理或被 DNS 污染)";
+  }
+  if (/ERR_TIMED_OUT|ETIMEDOUT/i.test(message)) {
+    return " (连接超时: 站点慢或被墙, 试试开代理)";
+  }
+  return "";
 }

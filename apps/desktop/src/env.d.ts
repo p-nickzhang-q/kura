@@ -201,6 +201,7 @@ interface KuraBridge {
     total: number;
   }>;
   revealFile(path: string): Promise<boolean>;
+  proxyTest(): Promise<{ configured: string; effective: string; reachable: string[] }>;
   itemFiles(key: string): Promise<{ path: string; size: number }[]>;
   openDataDir(): Promise<{ dir: string }>;
   tasks(limit?: number): Promise<KuraTask[]>;

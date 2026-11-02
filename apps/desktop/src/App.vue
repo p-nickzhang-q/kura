@@ -119,6 +119,7 @@ const lightboxEl = ref<HTMLElement | null>(null);
 watch(zoom, (value) => {
   if (value) void nextTick(() => lightboxEl.value?.focus());
 });
+const proxyTest = ref<{ configured: string; effective: string; reachable: string[] } | null>(null);
 const llmTest = ref<{ ok: boolean; model: string; endpoint: string; sample: string } | null>(null);
 const translateProgress = ref<{ index: number; total: number; key: string; error?: string } | null>(null);
 const pendingTotal = ref(0);
@@ -682,6 +683,10 @@ function runPrimary(): void {
   if (primary.value.id === "scrape") void doScrape();
   else if (primary.value.id === "translate") void translateAll();
   else void doScan();
+}
+
+async function testProxy(): Promise<void> {
+  proxyTest.value = await run("测试代理", () => window.kura.proxyTest());
 }
 
 async function testDmm(): Promise<void> {
@@ -1285,9 +1290,18 @@ async function testDmm(): Promise<void> {
             <input v-model="proxyInput" spellcheck="false" :placeholder="config?.settings.proxy || '留空 = 跟随系统代理'" />
           </label>
           <p class="muted">
-            留空即跟随系统代理(Clash 开系统代理或 TUN 即可)。填 <code>auto</code> 由命令行在运行时探测常见端口;
+            留空即跟随 Windows 系统代理(Clash 开系统代理或 TUN 即可)。填 <code>auto</code> 会在启动时探测常见端口;
             也可直接填 <code>http://127.0.0.1:7890</code>。
           </p>
+          <div class="row">
+            <button type="button" :disabled="busy" @click="testProxy">测试代理</button>
+            <span v-if="proxyTest" class="muted">
+              配置: {{ proxyTest.configured || "(跟随系统)" }} · 实际在用:
+              {{ proxyTest.effective }} ·
+              <template v-if="proxyTest.reachable.length">监听中: {{ proxyTest.reachable.join(", ") }}</template>
+              <span v-else class="warn">没有任何常见代理端口在监听 —— 代理软件没开, 或端口不是 7890/7891/7897/1080/10808</span>
+            </span>
+          </div>
 
           <h2>来源状态</h2>
           <ul class="src-list">

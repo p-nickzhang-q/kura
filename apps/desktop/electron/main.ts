@@ -1,9 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from "electron";
 import { mkdir, writeFile } from "node:fs/promises";
+import { connect } from "node:net";
 import { basename, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   AppError,
+  AUTO_PROXY,
   EXIT,
   createLibrary,
   renameLibrary,
@@ -17,6 +19,8 @@ import {
   dimensionTemplate,
   updateLibraryOrganize,
   openTranslator,
+  proxyCandidates,
+  resolveProxy,
   probeTranslator,
   resolveLlm,
   translateEnabled,
@@ -96,14 +100,64 @@ function browserFetch(url: string, init: FetchInit): Promise<Response> {
  * 把配置里的代理应用到 Electron session。
  * 空值或 auto → 跟随系统代理(Clash 的系统代理/TUN 直接生效)。
  */
-async function applyProxy(): Promise<void> {
-  const proxy = settings.proxy.trim();
-  try {
-    if (proxy && proxy !== "auto") {
-      await session.defaultSession.setProxy({ mode: "fixed_servers", proxyRules: proxy });
-    } else {
-      await session.defaultSession.setProxy({ mode: "system" });
+/**
+ * TCP 探测: 端口有人听就算可用。
+ *
+ * core 里的探测走 Bun 的 fetch(proxy), 在 Electron 里没有这个能力;
+ * 而"代理软件有没有在跑"只取决于端口是否 listen, 所以直接用 net.connect。
+ */
+function probeProxyTarget(target: string, timeoutMs = 1200): Promise<boolean> {
+  return new Promise((done) => {
+    let url: URL;
+    try {
+      url = new URL(target);
+    } catch {
+      done(false);
+      return;
     }
+    const socket = connect({ host: url.hostname, port: Number(url.port || 80) });
+    const finish = (ok: boolean) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      done(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+  });
+}
+
+let effectiveProxy: { mode: "system" | "fixed"; rules?: string } = { mode: "system" };
+
+/**
+ * 应用代理设置。
+ *
+ * `auto` 必须真的探测: GUI 以前把 auto 当成"用系统代理", 而系统代理注册表里
+ * 常常躺着一条已经失效的记录, 结果请求全被送去一个没人听的端口
+ * (net::ERR_PROXY_CONNECTION_FAILED), 界面上却看不出去哪儿改。
+ */
+async function applyProxy(): Promise<void> {
+  const configured = resolveProxy(settings);
+  try {
+    if (configured && configured !== AUTO_PROXY) {
+      effectiveProxy = { mode: "fixed", rules: configured };
+    } else if (configured === AUTO_PROXY) {
+      const reachable: string[] = [];
+      for (const candidate of proxyCandidates(process.platform)) {
+        if (await probeProxyTarget(candidate)) reachable.push(candidate);
+      }
+      effectiveProxy = reachable[0] ? { mode: "fixed", rules: reachable[0] } : { mode: "system" };
+    } else {
+      effectiveProxy = { mode: "system" };
+    }
+    await session.defaultSession.setProxy(
+      effectiveProxy.mode === "fixed"
+        ? { mode: "fixed_servers", proxyRules: effectiveProxy.rules }
+        : { mode: "system" },
+    );
+    // 系统代理注册表可能是陈旧的: 让 Chromium 下次请求重新解析, 别继续用缓存里的死端口
+    await session.defaultSession.closeAllConnections();
   } catch {
     // 代理设置失败不该挡住启动; 后续请求会走到系统代理。
   }
@@ -587,6 +641,25 @@ function registerIpc(): void {
       pendingTranslation: translateEnabled(settings) ? countPendingTranslation(rt) : 0,
       translation: translateEnabled(settings) ? translationStats(rt) : null,
       dimensions: DIMENSIONS,
+    };
+  });
+
+  /**
+   * 代理自查: 报出"配置的是什么"和"实际在用的是什么", 以及端口通不通。
+   * 代理类故障的排查全靠这一步, 否则用户只会看到 net::ERR_PROXY_CONNECTION_FAILED。
+   */
+  ipcMain.handle("proxy:test", async () => {
+    const configured = resolveProxy(settings) ?? "";
+    const targets = await Promise.all(
+      proxyCandidates(process.platform).map(async (candidate) => ({
+        candidate,
+        reachable: await probeProxyTarget(candidate, 700),
+      })),
+    );
+    return {
+      configured,
+      effective: effectiveProxy.mode === "fixed" ? effectiveProxy.rules : "(Windows 系统代理 / 直连)",
+      reachable: targets.filter((entry) => entry.reachable).map((entry) => entry.candidate),
     };
   });
 

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { AppError, EXIT } from "../src/exit";
-import { HttpClient } from "../src/net/http";
+import { HttpClient, proxyHint } from "../src/net/http";
 
 let attempts = 0;
 
@@ -74,5 +74,22 @@ describe("HttpClient", () => {
     const started = Date.now();
     await Promise.all([http.getJson(`${base}/a`), http.getJson(`${base}/b`)]);
     expect(Date.now() - started).toBeGreaterThanOrEqual(55);
+  });
+});
+
+describe("代理故障的提示", () => {
+  test("代理连不上时给出可操作的说明, 而不是只丢 net:: 错误码", () => {
+    expect(proxyHint("net::ERR_PROXY_CONNECTION_FAILED")).toContain("代理连不上");
+    expect(proxyHint("net::ERR_PROXY_CONNECTION_FAILED")).toContain("设置里把代理清空");
+    expect(proxyHint("connect ECONNREFUSED 127.0.0.1:7890")).toContain("代理连不上");
+  });
+
+  test("解析失败与超时各有各的说法", () => {
+    expect(proxyHint("net::ERR_NAME_NOT_RESOLVED")).toContain("解析失败");
+    expect(proxyHint("net::ERR_TIMED_OUT")).toContain("超时");
+  });
+
+  test("普通错误不加废话", () => {
+    expect(proxyHint("404 Not Found")).toBe("");
   });
 });
