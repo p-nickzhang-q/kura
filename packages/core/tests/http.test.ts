@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { AppError, EXIT } from "../src/exit";
-import { HttpClient, proxyHint } from "../src/net/http";
+import { HttpClient, proxyHint, forbiddenHint } from "../src/net/http";
 
 let attempts = 0;
 
@@ -12,6 +12,9 @@ const server = Bun.serve({
       attempts++;
       if (attempts < 3) return new Response("boom", { status: 503 });
       return Response.json({ ok: true, attempts });
+    }
+    if (url.pathname === "/blocked") {
+      return new Response("This content is prohibited in the country", { status: 403 });
     }
     if (url.pathname === "/missing") {
       attempts++;
@@ -77,6 +80,17 @@ describe("HttpClient", () => {
   });
 });
 
+describe("403 走 NEEDS_INPUT 而不是 NOT_FOUND", () => {
+  test("站点拒绝访问时退出码是 4, 信息里带可操作建议", async () => {
+    const http = new HttpClient({ retries: 2, minIntervalMs: 0 });
+    const error = (await http.getText(`${base}/blocked`).catch((err: unknown) => err)) as AppError;
+    expect(error).toBeInstanceOf(AppError);
+    expect(error.exitCode).toBe(EXIT.NEEDS_INPUT);
+    expect(error.message).toContain("站点拒绝访问");
+    expect(error.message).toContain("地区");
+  });
+});
+
 describe("代理故障的提示", () => {
   test("代理连不上时给出可操作的说明, 而不是只丢 net:: 错误码", () => {
     expect(proxyHint("net::ERR_PROXY_CONNECTION_FAILED")).toContain("代理连不上");
@@ -91,5 +105,23 @@ describe("代理故障的提示", () => {
 
   test("普通错误不加废话", () => {
     expect(proxyHint("404 Not Found")).toBe("");
+  });
+});
+
+describe("403/451 的处理", () => {
+  test("地区封锁页给换节点的建议", () => {
+    expect(forbiddenHint("This content is prohibited in the country")).toContain("地区");
+  });
+
+  test("Cloudflare 拦截给节点质量的说法", () => {
+    expect(forbiddenHint("<title>Just a moment...</title>")).toContain("Cloudflare");
+  });
+
+  test("要登录的站点提示补凭据", () => {
+    expect(forbiddenHint("<form>Please sign in</form>")).toContain("登录");
+  });
+
+  test("认不出来的页面也给下一步动作, 不留白", () => {
+    expect(forbiddenHint("")).toContain("换节点");
   });
 });

@@ -141,7 +141,24 @@ export function resolveProxy(
   env: Record<string, string | undefined> = process.env,
 ): string | undefined {
   const value = env.KURA_PROXY?.trim() || settings.proxy.trim();
-  return value.length > 0 ? value : undefined;
+  if (value.length === 0) return undefined;
+  if (value === AUTO_PROXY) return value;
+  return normalizeProxyUrl(value);
+}
+
+/**
+ * 把各种手写代理地址收成 fetch 认的形式。
+ *
+ * 人写代理最常见的是 `127.0.0.1:7890` —— 没有 scheme。原样丢给 `fetch({proxy})`
+ * 会直接报 URL 非法, 丢给 Chromium 的 proxyRules 则会被当成别的语法;
+ * 而 `socks` 这种简写各处的支持又不一样, 统一成 socks5://。
+ */
+export function normalizeProxyUrl(value: string): string {
+  const trimmed = value.trim();
+  if (/^socks5h?:\/\//i.test(trimmed)) return trimmed.replace(/^socks5h?:/i, "socks5:");
+  if (/^socks:\/\//i.test(trimmed)) return trimmed.replace(/^socks:/i, "socks5:");
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
+  return `http://${trimmed}`;
 }
 
 export const AUTO_PROXY = "auto";

@@ -16,6 +16,7 @@ import {
   resolveProxy,
   saveSettings,
   settingsPath,
+  normalizeProxyUrl,
 } from "../src/config";
 import { openRuntime } from "../src/runtime";
 import type { Paths } from "../src/paths";
@@ -148,5 +149,28 @@ describe("settings", () => {
     } finally {
       rt.close();
     }
+  });
+});
+
+describe("代理地址规范化", () => {
+  test("手写的 host:port 自动补 http://", () => {
+    expect(normalizeProxyUrl("127.0.0.1:7890")).toBe("http://127.0.0.1:7890");
+    expect(normalizeProxyUrl(" 127.0.0.1:7890 ")).toBe("http://127.0.0.1:7890");
+  });
+
+  test("已带 scheme 的原样保留", () => {
+    expect(normalizeProxyUrl("http://127.0.0.1:7890")).toBe("http://127.0.0.1:7890");
+    expect(normalizeProxyUrl("https://proxy.local:8443")).toBe("https://proxy.local:8443");
+  });
+
+  test("socks 统一成 socks5://", () => {
+    expect(normalizeProxyUrl("socks://127.0.0.1:1080")).toBe("socks5://127.0.0.1:1080");
+    expect(normalizeProxyUrl("socks5h://127.0.0.1:1080")).toBe("socks5://127.0.0.1:1080");
+  });
+
+  test("auto 不被当成地址", () => {
+    const settings = { ...EMPTY_SETTINGS, proxy: "auto" };
+    expect(resolveProxy(settings, {})).toBe(AUTO_PROXY);
+    expect(resolveProxy({ ...EMPTY_SETTINGS, proxy: "127.0.0.1:7890" }, {})).toBe("http://127.0.0.1:7890");
   });
 });

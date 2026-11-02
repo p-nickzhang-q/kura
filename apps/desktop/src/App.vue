@@ -1287,11 +1287,16 @@ async function testDmm(): Promise<void> {
           <h2>代理</h2>
           <label class="field">
             <span>代理地址</span>
-            <input v-model="proxyInput" spellcheck="false" :placeholder="config?.settings.proxy || '留空 = 跟随系统代理'" />
+            <input
+              v-model="proxyInput"
+              spellcheck="false"
+              aria-label="代理地址"
+              :placeholder="config?.settings.proxy || '留空 = 跟随系统代理, 或填 127.0.0.1:7890'"
+            />
           </label>
           <p class="muted">
             留空即跟随 Windows 系统代理(Clash 开系统代理或 TUN 即可)。填 <code>auto</code> 会在启动时探测常见端口;
-            也可直接填 <code>http://127.0.0.1:7890</code>。
+            也可直接填 <code>127.0.0.1:7890</code>(没写 http:// 会自动补上)。
           </p>
           <div class="row">
             <button type="button" :disabled="busy" @click="testProxy">测试代理</button>

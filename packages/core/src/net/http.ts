@@ -183,8 +183,18 @@ export class HttpClient {
           await sleep(300 * (attempt + 1));
           continue;
         }
+        if (response.status === 403 || response.status === 451) {
+          // 403 不是"没有这条", 而是"站点不让你看": 出口 IP 的地区限制、风控、
+          // 或者要登录。重试没有意义, 得人去换节点/补凭据, 所以给 NEEDS_INPUT。
+          const body = await response.text().catch(() => "");
+          throw new AppError(`HTTP ${response.status} (站点拒绝访问)${forbiddenHint(body)}`, EXIT.NEEDS_INPUT, {
+            url,
+            status: response.status,
+            body: body.slice(0, 400),
+          });
+        }
         if (!response.ok) {
-          // 4xx 不重试: 参数或权限问题, 重试只会更慢地失败。
+          // 其它 4xx 不重试: 参数或权限问题, 重试只会更慢地失败。
           const body = await response.text().catch(() => "");
           throw new AppError(`HTTP ${response.status}`, EXIT.NOT_FOUND, {
             url,
@@ -246,6 +256,23 @@ function sleep(ms: number): Promise<void> {
  * "请求被送去了代理, 而代理端口连不上" —— 通常是代理软件没开、端口改了,
  * 或者系统代理注册表里留着一条已经失效的记录。
  */
+/**
+ * 403/451 的具体成因。站点返回的封禁页文案各不相同, 能认出来就直说,
+ * 认不出来给通用建议 —— 总之别让用户对着 "HTTP 403" 猜。
+ */
+export function forbiddenHint(body: string): string {
+  if (/prohibited in the country|禁止了你的網路|禁止了你的网络|版權限制|版权限制|not available in your (country|region)/i.test(body)) {
+    return ": 当前出口地区被限制, 换一个可访问地区的节点再试";
+  }
+  if (/just a moment|cf-browser-verification|challenge-platform|attention required/i.test(body)) {
+    return ": 被 Cloudflare 拦下了 (多半是节点 IP 不干净), 换个节点再试";
+  }
+  if (/login|sign in|登入|登录/i.test(body)) {
+    return ": 这个页面要登录, 在设置里补凭据后再试";
+  }
+  return ": 出口 IP 被拒或触发风控, 换节点/稍后重试; 若站点要登录则先补凭据";
+}
+
 export function proxyHint(message: string): string {
   if (/ERR_PROXY_CONNECTION_FAILED|ERR_TUNNEL_CONNECTION_FAILED|ECONNREFUSED\s+(?:\S+:)?(?:7890|7891|7897|1080|10808)/i.test(message)) {
     return " (代理连不上: 检查 Clash 等代理软件是否在运行、端口是否一致; 不用代理就在设置里把代理清空)";
