@@ -71,6 +71,17 @@ const FILTER_LABEL: Record<FilterKey, string> = {
 };
 const filters = ref<Partial<Record<FilterKey, string>>>({});
 const hasFilters = computed(() => Object.keys(filters.value).length > 0);
+/** 首次读库还没回来 —— 和"库里确实空"是两件事, 不能混成一个空状态。 */
+const firstLoad = ref(true);
+/** 长任务进度: 刮削与翻译共用一个进度条位置。 */
+const taskProgress = computed(() => {
+  const active = progress.value ?? translateProgress.value;
+  if (!active || !active.total) return null;
+  return { index: active.index, total: active.total };
+});
+const taskPercent = computed(() =>
+  taskProgress.value ? Math.min(100, Math.round((taskProgress.value.index / taskProgress.value.total) * 100)) : 0,
+);
 const searchDraft = ref("");
 /** 刷新请求的序号, 用来丢弃乱序返回的旧结果。 */
 let refreshSeq = 0;
@@ -213,6 +224,7 @@ async function refreshItems(): Promise<void> {
   });
   if (seq !== refreshSeq) return;
 
+  firstLoad.value = false;
   items.value = result.items;
   itemTotal.value = result.total;
   pendingTotal.value = result.pending;
@@ -636,7 +648,9 @@ async function testDmm(): Promise<void> {
       <aside class="side">
         <div class="side-head">
           <span>媒体库</span>
-          <button class="ghost" type="button" :disabled="busy" @click="addLibrary">+</button>
+          <button class="ghost" type="button" aria-label="添加媒体库" title="添加媒体库" :disabled="busy" @click="addLibrary">
+            +
+          </button>
         </div>
         <ul class="libs">
           <li v-for="library in libraries" :key="library.id" :class="{ active: library.id === selectedId }">
@@ -656,7 +670,7 @@ async function testDmm(): Promise<void> {
                 <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
               </strong>
               <small :title="library.root">{{ library.root }}</small>
-              <span class="pencil" title="改名" @click.stop="startRename(library)">✎</span>
+              <span class="pencil" role="button" tabindex="0" title="改名" aria-label="重命名媒体库" @click.stop="startRename(library)" @keyup.enter.stop="startRename(library)">✎</span>
             </button>
           </li>
           <li v-if="libraries.length === 0" class="muted">还没有媒体库</li>
@@ -767,8 +781,8 @@ async function testDmm(): Promise<void> {
 
             <div class="toolbar-row">
               <!-- 翻页是只读操作, 不该被长任务锁住: 刮削 200 条要十几分钟, 期间连看下一页都不行毫无道理 -->
-              <button type="button" title="第一页" :disabled="page === 0" @click="goFirst">«</button>
-              <button type="button" title="上一页" :disabled="page === 0" @click="goPage(page - 1)">‹</button>
+              <button type="button" title="第一页" aria-label="第一页" :disabled="page === 0" @click="goFirst">«</button>
+              <button type="button" title="上一页" aria-label="上一页" :disabled="page === 0" @click="goPage(page - 1)">‹</button>
               <input
                 v-model="pageInput"
                 class="page-input"
@@ -779,8 +793,8 @@ async function testDmm(): Promise<void> {
                 @blur="jumpToPage"
               />
               <span class="muted nowrap">/ {{ pageCount }}</span>
-              <button type="button" title="下一页" :disabled="page >= pageCount - 1" @click="goPage(page + 1)">›</button>
-              <button type="button" title="最后一页" :disabled="page >= pageCount - 1" @click="goLast">»</button>
+              <button type="button" title="下一页" aria-label="下一页" :disabled="page >= pageCount - 1" @click="goPage(page + 1)">›</button>
+              <button type="button" title="最后一页" aria-label="最后一页" :disabled="page >= pageCount - 1" @click="goLast">»</button>
               <span class="muted nowrap">
                 共 {{ itemTotal }} 条 · 待刮削 {{ pendingTotal }}
                 <template v-if="exhaustedTotal > 0">
@@ -799,6 +813,11 @@ async function testDmm(): Promise<void> {
               </button>
               <button v-if="translateProgress" type="button" class="danger" @click="cancelTranslate">停止翻译</button>
             </div>
+          </div>
+
+          <!-- 长任务的可视进度: 只有数字没有条, 用户无法判断"还剩多久" -->
+          <div v-if="taskProgress" class="task-bar" role="progressbar" :aria-valuenow="taskPercent" aria-valuemin="0" aria-valuemax="100">
+            <span class="task-bar-fill" :style="{ width: `${taskPercent}%` }" />
           </div>
 
           <div v-if="hasFilters" class="filter-bar">
@@ -875,6 +894,10 @@ async function testDmm(): Promise<void> {
               </table>
 
               <!-- 空状态要给出"下一步该做什么", 只说"没有条目"等于把问题丢回给用户 -->
+              <div v-if="items.length === 0 && (firstLoad || busy)" class="skeleton" aria-hidden="true">
+                <span v-for="n in 8" :key="n" class="skeleton-row" :style="{ opacity: 1 - n * 0.06 }" />
+                <p class="skeleton-hint">{{ busy ? "正在扫描…" : "正在读取条目…" }}</p>
+              </div>
               <div v-else class="empty">
                 <template v-if="hasFilters">
                   <p>没有符合当前筛选条件的条目。</p>
@@ -899,7 +922,7 @@ async function testDmm(): Promise<void> {
                 <button type="button" class="chip" title="在资源管理器里打开这个文件" @click="revealItem">
                   打开位置
                 </button>
-                <button class="ghost" type="button" @click="detail = null">×</button>
+                <button class="ghost" type="button" aria-label="关闭详情" title="关闭详情" @click="detail = null">×</button>
               </header>
               <ul>
                 <li
@@ -939,6 +962,8 @@ async function testDmm(): Promise<void> {
                     type="button"
                     :class="{ on: detail.pinned.includes(field) }"
                     :title="detail.pinned.includes(field) ? '已锁定: 重新刮削不覆盖' : '点击锁定'"
+                    :aria-label="detail.pinned.includes(field) ? `解锁${FIELD_LABEL[field]}` : `锁定${FIELD_LABEL[field]}`"
+                    :aria-pressed="detail.pinned.includes(field)"
                     @click="togglePin(field)"
                   >
                     {{ detail.pinned.includes(field) ? "🔒" : "🔓" }}
@@ -976,10 +1001,12 @@ async function testDmm(): Promise<void> {
           <div class="toolbar">
             <span class="muted">扫到了但认不出番号的文件: {{ unparsedCount }} 个（不会进入刮削）</span>
             <span class="spacer" />
-            <button type="button" :disabled="unparsedPage === 0" @click="goUnparsedPage(unparsedPage - 1)">‹</button>
+            <button type="button" aria-label="上一页" title="上一页" :disabled="unparsedPage === 0" @click="goUnparsedPage(unparsedPage - 1)">‹</button>
             <span class="muted">{{ unparsedPage + 1 }}/{{ Math.max(1, Math.ceil(unparsedCount / unparsedPageSize)) }}</span>
             <button
               type="button"
+              aria-label="下一页"
+              title="下一页"
               :disabled="unparsedPage >= Math.max(1, Math.ceil(unparsedCount / unparsedPageSize)) - 1"
               @click="goUnparsedPage(unparsedPage + 1)"
             >
@@ -1216,29 +1243,35 @@ async function testDmm(): Promise<void> {
   color-scheme: dark;
   --bg: #0f1115;
   --panel: #171a21;
+  /* 这两档"表面"以前只有引用没有定义: var() 解析失败会静默退回继承,
+     结果选中行没有底色、主按钮文字继承成浅色 (浅字压蓝底 = 2.58:1)。 */
+  --panel-2: #1e232d;
+  --panel-3: #232935;
   --line: #262b35;
   --text: #e6e8ee;
   --muted: #8b93a7;
+  /* 元信息(字段来源/次要标注): 在 panel 上 4.53:1, 刚过 AA 正文线 —— 再暗就是不可见 */
+  --text-faint: #78829b;
   --accent: #5b8cff;
   --ok: #4ec9a5;
   --warn: #e5b567;
   --danger: #ff7b72;
   --danger-line: #b3403a;
+  --line-strong: #3a455c;
+  /* 主色上的文字: 用最暗的背景色, 5.97:1。别再让 color 失继承。 */
+  --on-accent: #0f1115;
   /* ---- 设计令牌: 圆角/间距/字号成体系, 不再散落 magic number ---- */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  /* 圆角按"元件级别"分档: 小控件 < 卡片 < 面板, 不再按数字大小命名 */
+  --radius-xs: 8px; /* 仅限缩略图这类小方块, 12px 会把小图吃掉 */
+  --radius-sm: 12px; /* 按钮 / 输入 / 选择器 */
+  --radius-md: 16px; /* 卡片 / 图片画框 */
+  --radius-lg: 20px; /* 详情、浮层面板 */
   --radius-pill: 999px;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
   --ease: cubic-bezier(0.2, 0, 0, 1);
-  /* ---- 字阶: 四层, 每层至少差 2px 才看得出层级 (18 / 15 / 13 / 12) ---- */
+  /* ---- 字阶: 视觉上只有三层 —— 标题(18/16) / 正文(14) / 标签(12) ---- */
   --fs-display: 18px;
-  --fs-section: 15px;
-  --fs-body: 13px;
+  --fs-section: 16px;
+  --fs-body: 14px;
   --fs-label: 12px;
 
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif;
@@ -1302,7 +1335,7 @@ h1 {
   box-sizing: border-box;
   padding: 8px;
   border: 1px solid var(--accent);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--panel);
   color: var(--text);
   font: inherit;
@@ -1313,7 +1346,7 @@ h1 {
   width: 46px;
   height: 64px;
   object-fit: cover;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   display: block;
   background: var(--panel-2);
 }
@@ -1330,7 +1363,7 @@ h1 {
   width: 220px;
   padding: 4px 8px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--panel);
   color: var(--text);
   font: inherit;
@@ -1421,14 +1454,14 @@ h1 {
 /* 进行中的筛选: 反色, 一眼看出列表被条件限住了 */
 .chip.on {
   background: var(--accent);
-  color: var(--bg);
+  color: var(--on-accent);
 }
 
 .banner {
   margin: 0 20px;
   padding: 8px 12px;
   border: 1px solid var(--line-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--panel);
   color: var(--warn);
   font-size: var(--fs-label);
@@ -1480,7 +1513,7 @@ h1 {
   flex-direction: column;
   gap: 4px;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid transparent;
   background: transparent;
   color: var(--text);
@@ -1565,7 +1598,7 @@ h1 {
 }
 
 button {
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--line);
   background: #1e232d;
   color: var(--text);
@@ -1577,7 +1610,7 @@ button {
 button.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--panel-2);
+  color: var(--on-accent);
   font-weight: 600;
 }
 
@@ -1712,6 +1745,66 @@ button:disabled {
   overflow: auto;
 }
 
+/* 进度条: 2px, 只在前景任务进行时出现, 不抢注意力 */
+.task-bar {
+  height: 2px;
+  margin: 0 20px;
+  border-radius: var(--radius-pill);
+  background: var(--line);
+  overflow: hidden;
+}
+
+.task-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 200ms var(--ease);
+}
+
+/* 骨架屏: 首屏与扫描中代替空列表, 避免"正在扫却显示没有条目" */
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+}
+
+.skeleton-row {
+  display: block;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--panel) 0%, var(--panel-2) 50%, var(--panel) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s var(--ease) infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* 减弱动效偏好: 骨架不闪, 进度条不补间 */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-row {
+    animation: none;
+  }
+  .task-bar-fill,
+  tbody tr {
+    transition: none;
+  }
+}
+
+.skeleton-hint {
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: var(--fs-label);
+  color: var(--muted);
+}
+
 .empty {
   height: 100%;
   min-height: 240px;
@@ -1773,8 +1866,9 @@ button:disabled {
 
 button:focus-visible,
 input:focus-visible,
-select:focus-visible {
-  outline: 2px solid var(--accent);
+select:focus-visible,
+summary:focus-visible {
+  outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -1869,7 +1963,7 @@ td.pick {
   width: 340px;
   flex: none;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
   padding: 12px;
   overflow: auto;
@@ -1924,7 +2018,7 @@ td.pick {
 }
 
 .detail .from {
-  color: var(--line-strong);
+  color: var(--text-faint);
   font-family: ui-monospace, monospace;
   font-size: var(--fs-label);
   text-align: right;
@@ -1960,7 +2054,7 @@ td.pick {
   gap: 12px;
   padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--panel);
   margin-bottom: 8px;
   font-size: var(--fs-body);
@@ -1970,7 +2064,7 @@ td.pick {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 8px;
   font-size: var(--fs-body);
   max-width: 320px;
@@ -2075,7 +2169,7 @@ td.pick {
   max-width: 420px;
   background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 8px 12px;
   color: var(--text);
   font-family: ui-monospace, monospace;
