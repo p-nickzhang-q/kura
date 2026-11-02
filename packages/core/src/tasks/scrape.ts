@@ -512,17 +512,34 @@ export function countItems(rt: Runtime, options: Omit<ListItemOptions, "limit" |
   return row?.c ?? 0;
 }
 
-export function countPending(rt: Runtime): number {
+/**
+ * 按库限定条目: 条目的库归属是派生的, 只能反查 media_files。
+ * 界面侧栏选中某个库时, 计数必须与列表口径一致 —— 否则"共 3883 条"会把
+ * 别的库也算进来, 而扫描只扫选中的那个库。
+ */
+function libraryClause(libraryId: number | undefined): { sql: string; params: unknown[] } {
+  if (libraryId === undefined) return { sql: "", params: [] };
+  return {
+    sql: " and exists (select 1 from media_files m where m.number = items.number and m.library_id = ?)",
+    params: [libraryId],
+  };
+}
+
+export function countPending(rt: Runtime, options: { libraryId?: number } = {}): number {
+  const scope = libraryClause(options.libraryId);
   const row = rt.db.get<{ c: number }>(
-    `select count(*) c from items where (title is null or title = '') and scrape_attempts < ${MAX_SCRAPE_ATTEMPTS}`,
+    `select count(*) c from items where (title is null or title = '') and scrape_attempts < ${MAX_SCRAPE_ATTEMPTS}${scope.sql}`,
+    scope.params,
   );
   return row?.c ?? 0;
 }
 
 /** 已到重试上限、不再自动重试的条目数。 */
-export function countExhausted(rt: Runtime): number {
+export function countExhausted(rt: Runtime, options: { libraryId?: number } = {}): number {
+  const scope = libraryClause(options.libraryId);
   const row = rt.db.get<{ c: number }>(
-    `select count(*) c from items where (title is null or title = '') and scrape_attempts >= ${MAX_SCRAPE_ATTEMPTS}`,
+    `select count(*) c from items where (title is null or title = '') and scrape_attempts >= ${MAX_SCRAPE_ATTEMPTS}${scope.sql}`,
+    scope.params,
   );
   return row?.c ?? 0;
 }

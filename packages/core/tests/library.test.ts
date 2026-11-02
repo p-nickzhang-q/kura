@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createLibrary, renameLibrary } from "../src/db/rows";
 import { openRuntime, type Runtime } from "../src/runtime";
 import { scan } from "../src/tasks/scan";
-import { countItems } from "../src/tasks/scrape";
+import { countExhausted, countItems, countPending } from "../src/tasks/scrape";
 import { AppError, EXIT } from "../src/exit";
 
 let root: string;
@@ -119,5 +119,33 @@ describe("扫描的删除安全阀", () => {
     const report = await scan(rt, { library });
     expect(report.counts.removed).toBe(1);
     expect(fileCount(rt)).toBe(39);
+  });
+});
+
+describe("按库计数的口径", () => {
+  test("选中某个库时, 待刮削/已达上限只算这个库", async () => {
+    const a = join(root, "lib-a");
+    const b = join(root, "lib-b");
+    await mkdir(a, { recursive: true });
+    await mkdir(b, { recursive: true });
+    await writeFile(join(a, "AAA-001.mkv"), "x");
+    await writeFile(join(b, "BBB-001.mkv"), "x");
+    await writeFile(join(b, "BBB-002.mkv"), "x");
+
+    const libA = createLibrary(rt.db, { name: "A", root: a });
+    const libB = createLibrary(rt.db, { name: "B", root: b });
+    await scan(rt, { library: libA });
+    await scan(rt, { library: libB });
+
+    // 三个条目都没有标题, 全是"待刮削"
+    expect(countPending(rt)).toBe(3);
+    expect(countPending(rt, { libraryId: libA.id })).toBe(1);
+    expect(countPending(rt, { libraryId: libB.id })).toBe(2);
+
+    // 其中一条刮到上限
+    rt.db.run("update items set scrape_attempts = 99 where number = 'BBB-002'");
+    expect(countPending(rt, { libraryId: libB.id })).toBe(1);
+    expect(countExhausted(rt, { libraryId: libB.id })).toBe(1);
+    expect(countExhausted(rt, { libraryId: libA.id })).toBe(0);
   });
 });

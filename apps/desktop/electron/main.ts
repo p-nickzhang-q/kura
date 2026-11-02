@@ -490,8 +490,9 @@ function registerIpc(): void {
       // 封面是本地缓存的文件, 走自定义协议给渲染进程读 (不给它 file:// 权限)
       items: items.map((item) => ({ ...item, coverUrl: coverUrlFor(rt, item) })),
       total: countItems(rt, filters),
-      pending: countPending(rt),
-      exhausted: countExhausted(rt),
+      // 计数与列表同口径: 选了库就只算这个库, 否则"待刮削 N"会把别的库算进来
+      pending: countPending(rt, { libraryId: input.libraryId }),
+      exhausted: countExhausted(rt, { libraryId: input.libraryId }),
     };
   });
 

@@ -254,6 +254,8 @@ async function refreshItems(): Promise<void> {
   const seq = ++refreshSeq;
   const result = await window.kura.items({
     ...filters.value,
+    // 侧栏选中哪个库, 列表就只看哪个库 —— 否则"共 3883 条"与"扫描只扫一个库"互相矛盾
+    libraryId: selectedId.value ?? undefined,
     // filters 里的值是 string 宽类型, 这里收窄回 IPC 契约上的枚举
     state: filters.value.state as "unscraped" | "scraped" | "exhausted" | undefined,
     sort: sort.value ? { ...sort.value } : undefined,
@@ -403,9 +405,42 @@ async function addLibrary(): Promise<void> {
   }
 }
 
+/** 切换范围: 列表、未识别、计数都跟着变。 */
+function selectLibrary(id: number | null): void {
+  selectedId.value = id;
+  page.value = 0;
+  picked.value = [];
+  detail.value = null;
+  void onScopeChange();
+}
+
+async function onScopeChange(): Promise<void> {
+  page.value = 0;
+  picked.value = [];
+  detail.value = null;
+  await refreshItems();
+  await refreshUnparsed();
+}
+
 /** 扫描。`force` 用于"确实删了很多文件"的场景 —— 平时走安全阀保护。 */
 async function scanLibrary(force: boolean): Promise<void> {
-  if (selectedId.value === null) return;
+  // 选中"全部库"时挨个扫: 用户看到的是"全库", 扫一半就成了另一个 bug
+  if (selectedId.value === null) {
+    const targets = [...libraries.value];
+    if (targets.length === 0) return;
+    const reports: { name: string; counts: KuraScanReport["counts"] }[] = [];
+    for (const library of targets) {
+      const report = await run(`扫描 ${library.name}`, () => window.kura.scan(library.id, { force }));
+      if (!report) break;
+      reports.push({ name: library.name, counts: report.counts });
+    }
+    if (reports.length > 0) {
+      const sum = (field: "added" | "removed" | "retyped") => reports.reduce((acc, r) => acc + r.counts[field], 0);
+      note.value = `扫描 ${reports.length} 个库: 新增 ${sum("added")} · 移除 ${sum("removed")} 条索引${sum("retyped") ? ` · 修正类型 ${sum("retyped")} 条` : ""}`;
+      await refreshAll();
+    }
+    return;
+  }
   events.value = [];
   const report = await run("扫描", () => window.kura.scan(selectedId.value!, { force }));
   if (report) {
@@ -717,14 +752,15 @@ async function testLlm(): Promise<void> {
  * 其次是翻译(元数据齐了才轮到它), 都没有才退回扫描。
  */
 const primary = computed(() => {
+  const scope = selected.value?.name ?? "全部库";
   if (selected.value && pendingTotal.value > 0) {
-    return { id: "scrape" as const, label: `刮削待处理 (${pendingTotal.value})` };
+    return { id: "scrape" as const, label: `刮削 ${scope} (${pendingTotal.value})` };
   }
   const pending = info.value?.pendingTranslation ?? 0;
   if (info.value?.translate && pending > 0) {
     return { id: "translate" as const, label: `翻译待处理 (${pending})` };
   }
-  return { id: "scan" as const, label: "扫描" };
+  return { id: "scan" as const, label: selected.value ? `扫描 «${scope}»` : `扫描全部 ${libraries.value.length} 个库` };
 });
 
 function runPrimary(): void {
@@ -763,6 +799,13 @@ async function testDmm(): Promise<void> {
           </button>
         </div>
         <ul class="libs">
+          <!-- 「全部库」不是真库, 只是把范围放宽: 扫描会挨个跑 -->
+          <li :class="{ active: selectedId === null }">
+            <button type="button" class="lib" @click="selectedId = null; onScopeChange()">
+              <strong>全部库</strong>
+              <small>{{ libraries.length }} 个媒体库 · {{ info?.items ?? 0 }} 条</small>
+            </button>
+          </li>
           <li v-for="library in libraries" :key="library.id" :class="{ active: library.id === selectedId }">
             <div v-if="renamingId === library.id" class="rename">
               <input
@@ -774,7 +817,7 @@ async function testDmm(): Promise<void> {
                 @blur="commitRename(library)"
               />
             </div>
-            <button v-else type="button" class="lib" @click="selectedId = library.id">
+            <button v-else type="button" class="lib" @click="selectLibrary(library.id)">
               <strong>
                 {{ library.name }}
                 <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
@@ -788,7 +831,13 @@ async function testDmm(): Promise<void> {
 
         <div class="actions">
           <!-- 主按钮按当前状态推导: 每屏一个视觉中心, 其余收进"更多" -->
-          <button type="button" class="primary" :disabled="busy || !selected" @click="runPrimary">
+          <button
+            type="button"
+            class="primary"
+            :disabled="busy || libraries.length === 0"
+            :title="selected ? `只作用于「${selected.name}」` : '按顺序扫描全部媒体库'"
+            @click="runPrimary"
+          >
             {{ primary.label }}
           </button>
           <details class="more">
