@@ -1039,10 +1039,11 @@ export const COMMANDS: Command[] = [
           Object.keys(patch.dmm).length > 0 ||
           Object.keys(patch.llm).length > 0 ||
           patch.proxy !== undefined ||
-          patch.translate !== undefined;
+          patch.translate !== undefined ||
+          patch.saveImages !== undefined;
         if (!touched) {
           throw new AppError(
-            "用法: config set --dmm-api-id ... | --proxy auto | --llm-base-url ... --llm-model ... | --translate",
+            "用法: config set --dmm-api-id ... | --proxy auto | --llm-base-url ... --llm-model ... | --translate | --save-images/--no-save-images",
             EXIT.USAGE,
           );
         }
@@ -1054,6 +1055,7 @@ export const COMMANDS: Command[] = [
           proxy: resolveProxy(saved) ?? "",
           llm: resolveLlm(saved) ? "已配置" : "未配置",
           translate: translateEnabled(saved),
+          saveImages: saved.saveImages ?? true,
         };
       }
 

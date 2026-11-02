@@ -10,6 +10,8 @@
 
 ## 下载
 
+最新版: **[Releases](https://github.com/p-nickzhang-q/kura/releases/latest)**
+
 | 产物 | 说明 |
 |---|---|
 | `Kura-x.y.z-setup.exe` | Windows 安装包(选目录、桌面/开始菜单快捷方式、卸载器) |
@@ -29,6 +31,11 @@
 
 三个动作**互不触发**。没有"扫完自动刮""刮完自动整理"。
 
+扫描还有两条不那么显眼但很要紧的行为:
+
+- **读回视频旁的同名 `.nfo`**: 换电脑、换硬盘插上去重扫一遍, 元数据就从 nfo 回来了, 不用重刮。库里已有的字段不会被旧 nfo 覆盖。
+- **删除安全阀**: 一次扫描要移除超过 30% 的已登记文件时**中止**(退出码 4), 防止"网络盘没挂全"把索引清空。确认目录完整后重试, 确实要删就加 `--force`。
+
 ## 快速上手
 
 ```bash
@@ -42,6 +49,9 @@ kura organize 主库 --apply      # 真的移动
 
 kura file list --unparsed       # 扫到了但认不出番号的文件(不会进刮削)
 kura item list --limit 20 --offset 40   # 分页
+kura item list --state unscraped        # 只看还没元数据的
+kura item list --sort title --desc      # 按标题倒序; 空值永远排最后
+kura file reveal ABC-123                # 这个番号在磁盘上的路径
 ```
 
 ## 整理维度
@@ -74,7 +84,7 @@ kura library set-organize 旧片库 --no-organize
 |---|---|---|
 | `dmm` | **可用** | DMM/FANZA 官方 API,需 affiliate 凭据 |
 | `javbus` | **可用** | 网页解析(真实页面验证过) |
-| `javdb` | **可用** | 网页解析;**无码条目需登录**,未登录报 NEEDS_INPUT |
+| `javdb` | **可用** | 网页解析。注意它现在在 **Cloudflare 挑战**后面:机房 IP 大概率 403,换住宅节点可解;**无码条目需登录** |
 | `fixture` | 可用 | 从目录读离线样本,用于开发与测试 |
 
 ```bash
@@ -93,7 +103,8 @@ kura scrape ABC-123 --source javbus,javdb   # 双源逐字段择优
 kura resource fetch ABC-123   # 下载到本地缓存(带防盗链 Referer)
 ```
 
-整理时若有缓存海报,会复制为 `<视频名>-poster.jpg`,并在 NFO 写相对 `<thumb>`。
+下载后**同时复制一份到视频旁边**:`<视频名>-poster.jpg` / `<视频名>-thumb.jpg`,换播放器/换机器都认。
+不想要就 `kura config set --no-save-images`。库里有缓存图时,NFO 的 `<thumb>` 写的是相对文件名。
 
 ## 翻译(日 → 中)
 
@@ -109,12 +120,18 @@ kura translate --pending             # 补历史条目
 
 ## 界面
 
-「条目」「未识别」「整理预览」「任务」「设置」五个页签：
+「条目」「未识别」「整理预览」「任务」「设置」五个页签。**所有内容都跟着侧栏选中的库走** ——
+侧栏有「全部库」,选中它时范围是全库,「扫描」会按顺序逐个扫(按钮上会写清楚 `扫描 «电影库2»` 还是 `扫描全部 3 个库`)。
 
-- **条目**：分页（每页 100），显示总数与待刮削数；多选后可批量刮削/下载海报
+- **条目**：分页；搜索(输入即搜)；「未刮削 N」一键筛出没元数据的；点表头排序(番号/标题/片商,升→降→取消)；多选后可批量刮削/下载海报/翻译
+- **详情面板**：字段来源与锁定(悬停才显示,锁定的一直显示)、内容类型下拉(判错时人可以直接改)、打开文件所在位置、点封面看大图
 - **未识别**：扫到但认不出番号的文件，独立列表面板（可复制路径、在文件夹中定位）
 - **任务**：批量操作的进度/中断记录，可重试
-- **设置**：DMM 凭据、翻译、代理、来源状态
+- **设置**：DMM 凭据、翻译、代理(带「测试代理」自查：配置值 / 实际生效 / 哪些端口在监听)、来源状态
+
+侧栏只有一个主按钮,按当前状态推导: 有待刮削 → `刮削 «库名» (N)`,否则有待翻译 → 翻译,否则 → 扫描。其余动作收在「更多操作」里(含「强制扫描」和「修正内容类型」)。
+
+界面在加载时给骨架屏、长任务给进度条;`prefers-reduced-motion` 下全部退化。
 
 ## 任务与日志
 
@@ -138,11 +155,33 @@ kura item unlock ABC-123 title
 
 锁定的字段重新刮削不会被覆盖。
 
+## 内容类型判错了怎么修
+
+类型决定**刮削路由**(国产只走 javdb,有码走 dmm→javbus→javdb)和整理目录里的 `{content_type}`。
+它按设计"建条目时落定、之后不可改",但解析器有 bug 时历史数据必须能修:
+
+```bash
+kura item retype --detect            # 按当前解析器列出所有判错的条目(不动数据)
+kura item retype --detect --apply    # 确认后真的改
+kura item retype SSIS-915 censored   # 单条
+```
+
+界面里同一个功能有两处:详情面板的「类型」下拉(单条),「更多操作 → 修正内容类型」(批量,会先弹清单让人确认)。
+
+扫描时也会自动修 —— 但**只动从没刮过网络的条目**(`field_sources` 为空)。已经刮到字段的留给人定,
+因为换类型等于换来源线,开着整理时还会按新类型挪目录。
+
 ## 代理
 
-- **GUI**: 跟随系统代理 —— Clash 开系统代理或 TUN 即可,无需配置。
-- **CLI**: `kura config set --proxy auto`(推荐,运行时探测 7890/7897/1080…)或显式 URL。
+- **留空**: 跟随系统代理 —— Clash 开系统代理或 TUN 即可,无需配置。
+- **`auto`**: 启动时 TCP 探测 7890/7891/7897/1080/10808/20171,选第一个有人在听的;都没有才退回系统代理。GUI 与 CLI 都支持。
+- **显式地址**: `http://127.0.0.1:7890`。手写 `127.0.0.1:7890`(不带 scheme)会自动补 `http://`,`socks://` 统一成 `socks5://`。
 - 优先级: `KURA_PROXY` > 配置文件 > 系统代理/直连。
+
+设置页有「**测试代理**」,一次报出三个值:配置的是什么、实际在用的是什么、哪些常见端口在监听。
+
+两类错误要分清:`ERR_PROXY_CONNECTION_FAILED` 是"请求被送去代理但端口没人听"(代理软件没开);
+`HTTP 403` 是"请求到了站点、站点拒绝"(地区限制 / Cloudflare 风控 / 要登录),后者退出码 4 并附具体建议。
 
 WSL 里指向宿主机 Clash 要用网关地址,`auto` 会自动探测。
 
@@ -158,7 +197,7 @@ node scripts/make-demo-data.mjs --numbers "SSIS-001,MIDV-001" --out ./demo-real 
 
 bun run cli --help               # 零 install 跑 CLI
 pnpm install && pnpm dev         # 桌面端
-bun test                         # 111 个用例, 全部离线
+bun test                         # 193 个用例, 全部离线
 bun run build:cli                # -> dist/kura
 bun run build:cli:win            # -> dist/kura.exe
 pnpm --filter @kura/desktop package:installer   # NSIS 安装包 (Linux 上需 wine)
@@ -176,6 +215,7 @@ packages/core      业务逻辑 + SQLite (唯一有状态的一层)
   sources/         来源接口、路由、javbus / javdb / dmm API、fixture
   llm/             翻译客户端与缓存
   tasks/           scan / scrape / organize / translate / resources
+  db/              schema 迁移、行映射、演员索引
 packages/cli       面向 agent 的 CLI (契约见 docs/dev/cli-contract.md)
 apps/desktop       Electron 主进程 + Vue3 界面
 docs/dev           给 agent 的架构与契约

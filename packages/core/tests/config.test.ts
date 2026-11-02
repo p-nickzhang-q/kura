@@ -174,3 +174,18 @@ describe("代理地址规范化", () => {
     expect(resolveProxy({ ...EMPTY_SETTINGS, proxy: "127.0.0.1:7890" }, {})).toBe("http://127.0.0.1:7890");
   });
 });
+
+describe("图片落盘开关", () => {
+  test("saveImages 默认开, 关掉后落盘能读回", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "kura-cfg-"));
+    const paths = { dataDir: dir, dbFile: join(dir, "kura.db"), logDir: join(dir, "logs") };
+    expect(loadSettings(paths).saveImages).toBe(true);
+
+    saveSettings(paths, { saveImages: false });
+    expect(loadSettings(paths).saveImages).toBe(false);
+
+    saveSettings(paths, { saveImages: true });
+    expect(loadSettings(paths).saveImages).toBe(true);
+    await rm(dir, { recursive: true, force: true });
+  });
+});
