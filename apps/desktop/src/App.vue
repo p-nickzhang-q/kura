@@ -28,6 +28,8 @@ const FIELD_LABEL: Record<string, string> = {
 };
 
 const FIELDS = Object.keys(FIELD_LABEL);
+/** 这三个字段存的是原始 URL, 详情里改显示"有没有缓存" */
+const IMAGE_FIELDS = ["poster_urls", "cover_urls", "thumb_urls"];
 
 const info = ref<KuraAppInfo | null>(null);
 const libraries = ref<KuraLibrary[]>([]);
@@ -68,6 +70,7 @@ const FILTER_LABEL: Record<FilterKey, string> = {
   state: "状态",
 };
 const filters = ref<Partial<Record<FilterKey, string>>>({});
+const hasFilters = computed(() => Object.keys(filters.value).length > 0);
 const searchDraft = ref("");
 /** 刷新请求的序号, 用来丢弃乱序返回的旧结果。 */
 let refreshSeq = 0;
@@ -431,6 +434,18 @@ async function openDetail(item: KuraItem): Promise<void> {
   if (fresh) detail.value = fresh;
 }
 
+/** 详情里就地补一张图, 省得为了一个条目去勾选列表。 */
+async function fetchOneImage(key: string): Promise<void> {
+  const result = await run("下载图片", () => window.kura.fetchPoster(key));
+  if (!result) return;
+  detail.value = await window.kura.item(key);
+  const saved = result.saved?.length ?? 0;
+  note.value = result.poster
+    ? `${key} 图片已缓存${saved ? `, 并复制 ${saved} 个文件到视频旁` : ""}`
+    : `${key} 没取到海报`;
+  await refreshItems();
+}
+
 async function scrapePicked(): Promise<void> {
   if (picked.value.length === 0) return;
   // 必须展开成普通数组: Vue 的 ref 背后是 Proxy, 结构化克隆(IPC)会直接抛
@@ -575,6 +590,29 @@ async function testLlm(): Promise<void> {
   llmTest.value = await run("测试 LLM", () => window.kura.testLlm());
 }
 
+/**
+ * 侧栏只该有一个主按钮。
+ *
+ * 顺序即优先级: 有待刮削就推刮削(它是把条目从"没元数据"变"有元数据"的动作),
+ * 其次是翻译(元数据齐了才轮到它), 都没有才退回扫描。
+ */
+const primary = computed(() => {
+  if (selected.value && pendingTotal.value > 0) {
+    return { id: "scrape" as const, label: `刮削待处理 (${pendingTotal.value})` };
+  }
+  const pending = info.value?.pendingTranslation ?? 0;
+  if (info.value?.translate && pending > 0) {
+    return { id: "translate" as const, label: `翻译待处理 (${pending})` };
+  }
+  return { id: "scan" as const, label: "扫描" };
+});
+
+function runPrimary(): void {
+  if (primary.value.id === "scrape") void doScrape();
+  else if (primary.value.id === "translate") void translateAll();
+  else void doScan();
+}
+
 async function testDmm(): Promise<void> {
   dmmTest.value = await run("测试 DMM", () => window.kura.testDmm("SSIS-001"));
 }
@@ -625,24 +663,33 @@ async function testDmm(): Promise<void> {
         </ul>
 
         <div class="actions">
-          <button type="button" :disabled="busy || !selected" @click="doScan">扫描</button>
-          <button type="button" :disabled="busy" @click="doScrape">刮削待处理</button>
-          <button
-            type="button"
-            :disabled="busy || !info?.translate"
-            :title="info?.translate ? '把已有条目里的日文标题/简介翻译成中文' : '先在设置里配置 LLM 并打开翻译开关'"
-            @click="translateAll"
-          >
-            翻译待处理{{ info?.translate && info.pendingTranslation ? ` (${info.pendingTranslation})` : "" }}
+          <!-- 主按钮按当前状态推导: 每屏一个视觉中心, 其余收进"更多" -->
+          <button type="button" class="primary" :disabled="busy || !selected" @click="runPrimary">
+            {{ primary.label }}
           </button>
-          <button
-            type="button"
-            :disabled="busy || !selected || selected.organizeEnabled === false"
-            :title="selected?.organizeEnabled === false ? '该库已设为只索引, 不会整理' : ''"
-            @click="preview"
-          >
-            整理预览
-          </button>
+          <details class="more">
+            <summary>更多操作</summary>
+            <div class="more-list">
+              <button type="button" :disabled="busy || !selected" @click="doScan">扫描</button>
+              <button type="button" :disabled="busy" @click="doScrape">刮削待处理</button>
+              <button
+                type="button"
+                :disabled="busy || !info?.translate"
+                :title="info?.translate ? '把已有条目里的日文标题/简介翻译成中文' : '先在设置里配置 LLM 并打开翻译开关'"
+                @click="translateAll"
+              >
+                翻译待处理{{ info?.translate && info.pendingTranslation ? ` (${info.pendingTranslation})` : "" }}
+              </button>
+              <button
+                type="button"
+                :disabled="busy || !selected || selected.organizeEnabled === false"
+                :title="selected?.organizeEnabled === false ? '该库已设为只索引, 不会整理' : ''"
+                @click="preview"
+              >
+                整理预览
+              </button>
+            </div>
+          </details>
         </div>
 
         <p v-if="info" class="sources">
@@ -685,72 +732,76 @@ async function testDmm(): Promise<void> {
 
         <!-- 条目 -->
         <div v-if="tab === 'items'" class="pane items">
+          <!-- 一条挤不下: 筛选一行, 翻页与批量动作一行, 免得文字被压成竖排 -->
           <div class="toolbar">
-            <label class="check">
+            <div class="toolbar-row">
+              <label class="check">
+                <input
+                  type="checkbox"
+                  :checked="picked.length > 0 && picked.length === items.length"
+                  @change="toggleAll"
+                />
+                全选
+              </label>
+              <span class="muted nowrap">已选 {{ picked.length }}</span>
+              <span class="spacer" />
+              <button
+                type="button"
+                class="chip"
+                :class="{ on: filters.state === 'unscraped' }"
+                :title="`只看还没有元数据的条目 (共 ${pendingTotal} 条)`"
+                @click="applyFilter('state', 'unscraped')"
+              >
+                未刮削 {{ pendingTotal }}
+              </button>
               <input
-                type="checkbox"
-                :checked="picked.length > 0 && picked.length === items.length"
-                @change="toggleAll"
+                v-model="searchDraft"
+                class="search"
+                type="search"
+                placeholder="搜番号 / 标题 / 演员 / 标签…"
+                @keyup.enter="applySearch"
+                @search="applySearch"
               />
-              全选
-            </label>
-            <span class="muted">已选 {{ picked.length }}</span>
-            <span class="spacer" />
-            <button
-              type="button"
-              class="chip"
-              :class="{ on: filters.state === 'unscraped' }"
-              :title="`只看还没有元数据的条目 (共 ${pendingTotal} 条)`"
-              @click="applyFilter('state', 'unscraped')"
-            >
-              未刮削 {{ pendingTotal }}
-            </button>
-            <input
-              v-model="searchDraft"
-              class="search"
-              type="search"
-              placeholder="搜番号 / 标题 / 演员 / 标签…"
-              @keyup.enter="applySearch"
-              @search="applySearch"
-            />
-            <button v-if="Object.keys(filters).length" type="button" class="chip" @click="clearFilters">
-              清空筛选 ✕
-            </button>
-            <span class="spacer" />
-            <span class="muted">
-              共 {{ itemTotal }} 条 · 待刮削 {{ pendingTotal }}
-              <template v-if="exhaustedTotal > 0"> · 已达上限 {{ exhaustedTotal }}（用 --retry-failed 重试）</template>
-            </span>
-            <!-- 翻页是只读操作, 不该被长任务锁住: 刮削 200 条要十几分钟, 期间连看下一页都不行毫无道理 -->
-            <button type="button" title="第一页" :disabled="page === 0" @click="goFirst">«</button>
-            <button type="button" title="上一页" :disabled="page === 0" @click="goPage(page - 1)">‹</button>
-            <input
-              v-model="pageInput"
-              class="page-input"
-              type="text"
-              inputmode="numeric"
-              :title="`跳到第 1–${pageCount} 页`"
-              @keyup.enter="jumpToPage"
-              @blur="jumpToPage"
-            />
-            <span class="muted">/ {{ pageCount }}</span>
-            <button type="button" title="下一页" :disabled="page >= pageCount - 1" @click="goPage(page + 1)">›</button>
-            <button type="button" title="最后一页" :disabled="page >= pageCount - 1" @click="goLast">»</button>
-            <button type="button" :disabled="busy || picked.length === 0" @click="scrapePicked">
-              刮削选中 ({{ picked.length }})
-            </button>
-            <button type="button" :disabled="busy || picked.length === 0" @click="postersPicked">
-              下载图片 ({{ picked.length }})
-            </button>
-            <button type="button" :disabled="busy || picked.length === 0" @click="translateSelected">
-              翻译选中 ({{ picked.length }})
-            </button>
-            <button v-if="translateProgress" type="button" class="danger" @click="cancelTranslate">
-              停止翻译
-            </button>
+              <button v-if="hasFilters" type="button" class="chip" @click="clearFilters">清空筛选 ✕</button>
+            </div>
+
+            <div class="toolbar-row">
+              <!-- 翻页是只读操作, 不该被长任务锁住: 刮削 200 条要十几分钟, 期间连看下一页都不行毫无道理 -->
+              <button type="button" title="第一页" :disabled="page === 0" @click="goFirst">«</button>
+              <button type="button" title="上一页" :disabled="page === 0" @click="goPage(page - 1)">‹</button>
+              <input
+                v-model="pageInput"
+                class="page-input"
+                type="text"
+                inputmode="numeric"
+                :title="`跳到第 1–${pageCount} 页`"
+                @keyup.enter="jumpToPage"
+                @blur="jumpToPage"
+              />
+              <span class="muted nowrap">/ {{ pageCount }}</span>
+              <button type="button" title="下一页" :disabled="page >= pageCount - 1" @click="goPage(page + 1)">›</button>
+              <button type="button" title="最后一页" :disabled="page >= pageCount - 1" @click="goLast">»</button>
+              <span class="muted nowrap">
+                共 {{ itemTotal }} 条 · 待刮削 {{ pendingTotal }}
+                <template v-if="exhaustedTotal > 0">
+                  · <span class="warn" title="失败的条目不再自动重试, 用 kura scrape --retry-failed 显式重试">已达上限 {{ exhaustedTotal }}</span>
+                </template>
+              </span>
+              <span class="spacer" />
+              <button type="button" :disabled="busy || picked.length === 0" @click="scrapePicked">
+                刮削选中 ({{ picked.length }})
+              </button>
+              <button type="button" :disabled="busy || picked.length === 0" @click="postersPicked">
+                下载图片 ({{ picked.length }})
+              </button>
+              <button type="button" :disabled="busy || picked.length === 0" @click="translateSelected">
+                翻译选中 ({{ picked.length }})
+              </button>
+              <button v-if="translateProgress" type="button" class="danger" @click="cancelTranslate">停止翻译</button>
+            </div>
           </div>
 
-          <div v-if="Object.keys(filters).length" class="filter-bar">
+          <div v-if="hasFilters" class="filter-bar">
             <span
               v-for="(value, key) in filters"
               :key="key"
@@ -764,7 +815,7 @@ async function testDmm(): Promise<void> {
 
           <div class="split">
             <div class="list">
-              <table>
+              <table v-if="items.length > 0">
                 <thead>
                   <tr>
                     <th class="pick" />
@@ -794,7 +845,9 @@ async function testDmm(): Promise<void> {
                       <span v-if="item.pinned.length" title="有锁定字段">🔒</span>
                     </td>
                     <td>{{ TYPE_LABEL[item.contentType] ?? item.contentType }}</td>
-                    <td class="wrap-2" :title="item.title ?? ''">{{ item.title ?? "未刮削" }}</td>
+                    <td class="title-cell" :title="item.title ?? ''">
+                      <span>{{ item.title ?? "未刮削" }}</span>
+                    </td>
                     <td>
                       <button v-if="item.studio" type="button" class="actor" :title="`只看 ${item.studio}`" @click="applyFilter('studio', item.studio!)">
                         {{ item.studio }}
@@ -818,13 +871,26 @@ async function testDmm(): Promise<void> {
                       <span v-else>—</span>
                     </td>
                   </tr>
-                  <tr v-if="items.length === 0">
-                    <td colspan="6" class="muted">
-                      {{ Object.keys(filters).length ? "没有符合筛选条件的条目。" : "没有条目。先扫描一个媒体库。" }}
-                    </td>
-                  </tr>
                 </tbody>
               </table>
+
+              <!-- 空状态要给出"下一步该做什么", 只说"没有条目"等于把问题丢回给用户 -->
+              <div v-else class="empty">
+                <template v-if="hasFilters">
+                  <p>没有符合当前筛选条件的条目。</p>
+                  <button type="button" class="chip" @click="clearFilters">清空筛选</button>
+                </template>
+                <template v-else-if="libraries.length === 0">
+                  <p>还没有媒体库。</p>
+                  <button type="button" class="primary" :disabled="busy" @click="addLibrary">添加媒体库</button>
+                  <p class="hint">选一个存放影片的文件夹, Kura 会扫一遍并登记所有文件。</p>
+                </template>
+                <template v-else>
+                  <p>这个库里还没有条目。</p>
+                  <button type="button" class="primary" :disabled="busy || !selected" @click="doScan">扫描 «{{ selected?.name }}»</button>
+                  <p class="hint">第一次扫描要遍历整棵目录树, 大库可能需要几分钟。</p>
+                </template>
+              </div>
             </div>
 
             <aside v-if="detail" class="detail">
@@ -839,10 +905,28 @@ async function testDmm(): Promise<void> {
                 <li
                   v-for="field in FIELDS"
                   :key="field"
-                  v-show="fieldValue(detail, field) && !LIST_FIELDS.includes(field)"
+                  v-show="(IMAGE_FIELDS.includes(field) || fieldValue(detail, field)) && !LIST_FIELDS.includes(field)"
                 >
                   <span class="label">{{ FIELD_LABEL[field] }}</span>
                   <span
+                    v-if="IMAGE_FIELDS.includes(field)"
+                    class="value"
+                    :title="fieldValue(detail, field)"
+                  >
+                    <template v-if="detail.coverUrl">已缓存 ✓</template>
+                    <button
+                      v-else
+                      type="button"
+                      class="chip"
+                      :disabled="busy"
+                      title="从来源下载这一张图, 并复制到视频旁边"
+                      @click="fetchOneImage(detail!.key)"
+                    >
+                      未缓存 · 下载
+                    </button>
+                  </span>
+                  <span
+                    v-else
                     class="value"
                     :class="{ link: FILTERABLE_SINGLE.includes(field) }"
                     :title="FILTERABLE_SINGLE.includes(field) ? '点一下只看这个' : ''"
@@ -1151,6 +1235,11 @@ async function testDmm(): Promise<void> {
   --space-4: 16px;
   --space-5: 24px;
   --ease: cubic-bezier(0.2, 0, 0, 1);
+  /* ---- 字阶: 四层, 每层至少差 2px 才看得出层级 (18 / 15 / 13 / 12) ---- */
+  --fs-display: 18px;
+  --fs-section: 15px;
+  --fs-body: 13px;
+  --fs-label: 12px;
 
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif;
 }
@@ -1178,14 +1267,16 @@ body {
 
 h1 {
   margin: 0;
-  font-size: 18px;
-  letter-spacing: 0.08em;
+  font-size: var(--fs-display);
+  font-weight: 600;
+  /* 大字号要收紧字距, 否则标题看着比正文松散 */
+  letter-spacing: -0.02em;
 }
 
 .meta,
 .muted {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 /* 侧边栏库列表: 名字旁边一个铅笔, 点了就地改名 */
@@ -1199,7 +1290,7 @@ h1 {
   right: 8px;
   opacity: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .lib:hover .pencil {
@@ -1232,7 +1323,7 @@ h1 {
   align-items: center;
   justify-content: center;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .search {
@@ -1243,7 +1334,7 @@ h1 {
   background: var(--panel);
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .filter-bar {
@@ -1291,7 +1382,7 @@ h1 {
   background: var(--panel);
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-label);
   text-align: center;
 }
 
@@ -1302,7 +1393,7 @@ h1 {
   padding: 0 4px;
   color: var(--accent);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-label);
   cursor: pointer;
 }
 
@@ -1319,7 +1410,7 @@ h1 {
   border-radius: 999px;
   background: none;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--fs-label);
   cursor: pointer;
 }
 
@@ -1340,7 +1431,7 @@ h1 {
   border-radius: 8px;
   background: var(--panel);
   color: var(--warn);
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .banner code {
@@ -1369,7 +1460,7 @@ h1 {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 12px;
+  font-size: var(--fs-label);
   color: var(--muted);
 }
 
@@ -1404,7 +1495,7 @@ h1 {
 .libs small {
   color: var(--muted);
   font-family: ui-monospace, monospace;
-  font-size: 12px;
+  font-size: var(--fs-label);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1416,8 +1507,48 @@ h1 {
   gap: 8px;
 }
 
+/* 主按钮撑满侧栏宽度, 是这一屏唯一的行动号召 */
+.actions .primary {
+  width: 100%;
+  padding: 8px 12px;
+  font-weight: 600;
+}
+
+.more summary {
+  font-size: var(--fs-label);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px 2px;
+  border-radius: var(--radius-sm);
+  list-style: none;
+}
+
+.more summary::-webkit-details-marker {
+  display: none;
+}
+
+.more summary::before {
+  content: "▸ ";
+}
+
+.more[open] summary::before {
+  content: "▾ ";
+}
+
+.more summary:hover,
+.more summary:focus-visible {
+  color: var(--text);
+}
+
+.more-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .sources {
-  font-size: 12px;
+  font-size: var(--fs-label);
   color: var(--muted);
   line-height: 1.8;
 }
@@ -1439,7 +1570,7 @@ button {
   background: #1e232d;
   color: var(--text);
   padding: 8px 12px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   cursor: pointer;
 }
 
@@ -1511,7 +1642,7 @@ button:disabled {
 
 .progress {
   font-family: ui-monospace, monospace;
-  font-size: 12px;
+  font-size: var(--fs-label);
   color: var(--warn);
   max-width: 320px;
   overflow: hidden;
@@ -1533,9 +1664,28 @@ button:disabled {
 
 .toolbar {
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--fs-body);
+}
+
+.toolbar-row {
+  display: flex;
   align-items: center;
-  gap: 12px;
-  font-size: 13px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 工具栏里的文字一律不折行: 挤不下就换行到下一行, 而不是压成竖排 */
+.toolbar-row button,
+.toolbar-row .nowrap {
+  white-space: nowrap;
+  flex: none;
+}
+
+.toolbar-row .spacer {
+  flex: 1 1 0;
+  min-width: 8px;
 }
 
 .row-actions {
@@ -1546,7 +1696,7 @@ button:disabled {
 
 .row-actions button {
   padding: 4px 8px;
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .split {
@@ -1562,17 +1712,42 @@ button:disabled {
   overflow: auto;
 }
 
+.empty {
+  height: 100%;
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+}
+
+.empty p {
+  margin: 0;
+  font-size: var(--fs-body);
+  color: var(--muted);
+}
+
+.empty .hint {
+  font-size: var(--fs-label);
+  max-width: 36ch;
+}
+
 table {
   width: 100%;
+  /* 打开详情面板后表格区只剩一半宽度: 给它一条底线, 让它横向滚动, 而不是把列压到两三个字宽 */
+  min-width: 680px;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 th {
   text-align: left;
   color: var(--muted);
   font-weight: 500;
-  font-size: 12px;
+  font-size: var(--fs-label);
   padding: 8px;
   border-bottom: 1px solid var(--line);
   position: sticky;
@@ -1627,13 +1802,18 @@ td {
 }
 
 /* 标题这类长文本: 允许折两行, 鼠标悬停看完整内容 */
-td.wrap-2 {
+td.title-cell {
   max-width: 380px;
   white-space: normal;
+}
+
+/* 两行截断必须作用在单元格内部: 直接把 td 变成 -webkit-box 会让表格行高错乱 */
+td.title-cell > span {
   display: -webkit-box;
-  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-  line-height: 1.35;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  line-height: 1.4;
 }
 
 /*
@@ -1681,12 +1861,12 @@ td.pick {
 
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
+  font-size: var(--fs-label);
   font-variant-numeric: tabular-nums;
 }
 
 .detail {
-  width: 380px;
+  width: 340px;
   flex: none;
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -1717,7 +1897,7 @@ td.pick {
   align-items: baseline;
   padding: 4px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .detail .label {
@@ -1735,7 +1915,7 @@ td.pick {
   padding: 0;
   border: none;
   background: transparent;
-  font-size: 12px;
+  font-size: var(--fs-label);
   opacity: 0.45;
 }
 
@@ -1746,7 +1926,7 @@ td.pick {
 .detail .from {
   color: var(--line-strong);
   font-family: ui-monospace, monospace;
-  font-size: 12px;
+  font-size: var(--fs-label);
   text-align: right;
 }
 
@@ -1759,19 +1939,19 @@ td.pick {
   align-items: center;
   gap: 8px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .error {
   margin: 0;
   color: var(--danger);
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .note {
   margin: 0;
   color: var(--ok);
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .lib-config {
@@ -1783,7 +1963,7 @@ td.pick {
   border-radius: 12px;
   background: var(--panel);
   margin-bottom: 8px;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .lib-config select {
@@ -1792,12 +1972,12 @@ td.pick {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 8px;
-  font-size: 13px;
+  font-size: var(--fs-body);
   max-width: 320px;
 }
 
 .badge {
-  font-size: 12px;
+  font-size: var(--fs-label);
   color: var(--warn);
   border: 1px solid var(--line-strong);
   border-radius: 999px;
@@ -1810,7 +1990,7 @@ td.pick {
 .note-line code {
   color: var(--text);
   font-family: ui-monospace, monospace;
-  font-size: 12px;
+  font-size: var(--fs-label);
 }
 
 .note-line {
@@ -1818,7 +1998,7 @@ td.pick {
 }
 
 .summary {
-  font-size: 13px;
+  font-size: var(--fs-body);
   color: var(--text);
 }
 
@@ -1843,7 +2023,7 @@ td.pick {
   border-radius: 999px;
   background: var(--panel-3);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-label);
   padding: 4px 0;
 }
 
@@ -1864,11 +2044,11 @@ td.pick {
 
 .warn {
   color: var(--warn);
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .settings h2 {
-  font-size: 14px;
+  font-size: var(--fs-section);
   margin: 16px 0 8px;
   color: var(--text);
 }
@@ -1887,7 +2067,7 @@ td.pick {
 .settings .field span {
   width: 110px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .settings .field input {
@@ -1899,7 +2079,7 @@ td.pick {
   padding: 8px 12px;
   color: var(--text);
   font-family: ui-monospace, monospace;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .settings .row {
@@ -1921,7 +2101,7 @@ td.pick {
   gap: 12px;
   padding: 8px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 
 .tag[data-ready="true"] {
@@ -1930,7 +2110,7 @@ td.pick {
 
 .path {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-label);
   font-family: ui-monospace, monospace;
 }
 
@@ -1940,7 +2120,7 @@ td.pick {
   overflow: hidden;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-label);
   border-top: 1px solid var(--line);
   padding-top: 8px;
 }

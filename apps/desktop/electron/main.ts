@@ -233,6 +233,22 @@ async function createWindow(): Promise<void> {
     if (!devUrl || !url.startsWith(devUrl)) event.preventDefault();
   });
 
+  // 仅供开发自查: 截图后退出 (KURA_SCREENSHOT=/path/to.png)。
+  // 必须在 load 之前挂, 否则 await loadFile 返回时事件已经过去了。
+  if (process.env.KURA_SCREENSHOT) {
+    win.webContents.once("did-finish-load", async () => {
+      await new Promise((resolve) => setTimeout(resolve, Number(process.env.KURA_SCREENSHOT_DELAY ?? 2500)));
+      try {
+        const image = await win!.webContents.capturePage();
+        await writeFile(process.env.KURA_SCREENSHOT!, image.toPNG());
+        console.log("screenshot:", process.env.KURA_SCREENSHOT);
+      } catch (err) {
+        console.error("screenshot failed:", err);
+      }
+      app.exit(0);
+    });
+  }
+
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
     await win.loadURL(devUrl);
@@ -636,20 +652,6 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     await createWindow();
 
-    // 仅供开发自查: 截图后退出 (KURA_SCREENSHOT=/path/to.png), 无头环境下也能拿到真实渲染结果
-    if (process.env.KURA_SCREENSHOT) {
-      win!.webContents.once("did-finish-load", async () => {
-        await new Promise((resolve) => setTimeout(resolve, Number(process.env.KURA_SCREENSHOT_DELAY ?? 2500)));
-        try {
-          const image = await win!.webContents.capturePage();
-          await writeFile(process.env.KURA_SCREENSHOT!, image.toPNG());
-          console.log("screenshot:", process.env.KURA_SCREENSHOT);
-        } catch (err) {
-          console.error("screenshot failed:", err);
-        }
-        app.exit(0);
-      });
-    }
   });
 
   app.on("activate", async () => {

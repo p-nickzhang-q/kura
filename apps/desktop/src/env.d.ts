@@ -207,6 +207,8 @@ interface KuraBridge {
   scrapeKeys(keys: string[]): Promise<{ count: number; results: { key: string; ok: boolean; filled: number; error?: string }[] }>;
   fetchPoster(key: string): Promise<{
     key: string;
+    saved: string[];
+    saveErrors: string[];
     poster: { path: string; size: number } | null;
     thumb: { path: string; size: number } | null;
   }>;
