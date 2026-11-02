@@ -1,7 +1,10 @@
 # UI 审查与整改记录
 
 > 工具：`premium-ui` 技能（仓库级 `.pi/skills/@user_49d9b6a1/premium-ui`）的 audit 协议 + `scripts/check_ui.py` 硬校验。
-> 技能随仓库提交（`.pi/skills/`），换机器直接可用。
+> 技能随仓库提交（`.pi/skills/`）。注意三件事：
+> 1. 技能在 frontmatter 里的名字是 **`ui-design-system`**（不是目录名 `premium-ui`），所以命令是 `/skill:ui-design-system`；
+> 2. 项目级 `.pi/skills` 受**项目信任**保护 —— 在仓库里启动 pi 时要在信任提示里同意，否则整个目录被静默跳过（`-p` 模式不会问你，等于永远不加载）；
+> 3. 发现范围是**当前工作目录**，在 `~` 下启动 pi 是看不到这个仓库的技能的。
 > 每次改界面后跑：`python3 .pi/skills/@user_49d9b6a1/premium-ui/scripts/check_ui.py audit apps/desktop/src/App.vue`（这个脚本扫的是源文件，不是构建产物）。
 
 ## 已完成（0.4.4）
