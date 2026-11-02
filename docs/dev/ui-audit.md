@@ -1,11 +1,21 @@
 # UI 审查与整改记录
 
-> 工具：`premium-ui` 技能（仓库级 `.pi/skills/premium-ui`）的 audit 协议 + `scripts/check_ui.py` 硬校验。
-> 技能随仓库提交（`.pi/skills/`）。注意三件事：
-> 1. 技能在 frontmatter 里的名字是 **`ui-design-system`**（不是目录名 `premium-ui`），所以命令是 `/skill:ui-design-system`；
-> 2. 项目级 `.pi/skills` 受**项目信任**保护 —— 在仓库里启动 pi 时要在信任提示里同意，否则整个目录被静默跳过（`-p` 模式不会问你，等于永远不加载）；
-> 3. 发现范围是**当前工作目录**，在 `~` 下启动 pi 是看不到这个仓库的技能的。
-> 每次改界面后跑：`python3 .pi/skills/premium-ui/scripts/check_ui.py audit apps/desktop/src/App.vue`（这个脚本扫的是源文件，不是构建产物）。
+> 工具：`premium-ui` 技能（**装在用户级** `~/.pi/agent/skills/ui-design-system/`）的 audit 协议 + `scripts/check_ui.py` 硬校验。
+>
+> 技能**不再随仓库提交**。它装在本机用户目录，任何工作目录下启动 pi 都能用：
+>
+> | 事实 | 说明 |
+> |---|---|
+> | frontmatter `name: ui-design-system` | 命令是 `/skill:ui-design-system`，目录名 `premium-ui` 只是 skillhub 的 slug |
+> | 装在哪 | `~/.pi/agent/skills/ui-design-system/`（用户级，免项目信任） |
+> | 为什么不用仓库级 | 仓库级 `.pi/skills` 受**项目信任**保护，未授权时被静默跳过；且发现范围只认**精确 cwd**（子目录里启动也找不到） |
+> | 换机器怎么办 | `skillhub --dir ~/.pi/agent/skills install premium-ui --namespace user_49d9b6a1` |
+>
+> 每次改界面后跑（脚本扫的是源文件，不是构建产物）：
+>
+> ```bash
+> python3 ~/.pi/agent/skills/ui-design-system/scripts/check_ui.py audit apps/desktop/src/App.vue
+> ```
 
 ## 已完成（0.4.4）
 
