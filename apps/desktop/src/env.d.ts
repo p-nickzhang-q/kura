@@ -187,6 +187,8 @@ interface KuraBridge {
     series?: string;
     director?: string;
     tag?: string;
+    state?: "unscraped" | "scraped" | "exhausted";
+    sort?: { field: "updated" | "number" | "title" | "release" | "studio" | "duration"; desc?: boolean };
   }): Promise<{
     items: KuraItem[];
     total: number;

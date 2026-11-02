@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 
 const TYPE_LABEL: Record<string, string> = {
   censored: "有码",
@@ -70,6 +70,34 @@ const FILTER_LABEL: Record<FilterKey, string> = {
   state: "状态",
 };
 const filters = ref<Partial<Record<FilterKey, string>>>({});
+/**
+ * 列表排序。点表头切换: 第一次升序, 再点倒序, 第三次回到默认(按更新时间)。
+ * 空值永远排最后 (core 里处理), 所以"未刮削"不会占满第一页。
+ */
+type SortField = "number" | "title" | "studio" | "release" | "duration" | "updated";
+const sort = ref<{ field: SortField; desc: boolean } | null>(null);
+const SORT_LABEL: Record<SortField, string> = {
+  number: "番号",
+  title: "标题",
+  studio: "片商",
+  release: "发行日期",
+  duration: "时长",
+  updated: "更新时间",
+};
+/** 表头点击: 升 → 降 → 取消。 */
+function toggleSort(field: SortField): void {
+  const current = sort.value;
+  if (!current || current.field !== field) sort.value = { field, desc: false };
+  else if (!current.desc) sort.value = { field, desc: true };
+  else sort.value = null;
+  page.value = 0;
+  void refreshItems();
+}
+
+function sortState(field: SortField): "none" | "ascending" | "descending" {
+  if (sort.value?.field !== field) return "none";
+  return sort.value.desc ? "descending" : "ascending";
+}
 const hasFilters = computed(() => Object.keys(filters.value).length > 0);
 /** 首次读库还没回来 —— 和"库里确实空"是两件事, 不能混成一个空状态。 */
 const firstLoad = ref(true);
@@ -85,6 +113,12 @@ const taskPercent = computed(() =>
 const searchDraft = ref("");
 /** 刷新请求的序号, 用来丢弃乱序返回的旧结果。 */
 let refreshSeq = 0;
+/** 遮罩里的大图地址; null = 没在放大。 */
+const zoom = ref<string | null>(null);
+const lightboxEl = ref<HTMLElement | null>(null);
+watch(zoom, (value) => {
+  if (value) void nextTick(() => lightboxEl.value?.focus());
+});
 const llmTest = ref<{ ok: boolean; model: string; endpoint: string; sample: string } | null>(null);
 const translateProgress = ref<{ index: number; total: number; key: string; error?: string } | null>(null);
 const pendingTotal = ref(0);
@@ -219,6 +253,9 @@ async function refreshItems(): Promise<void> {
   const seq = ++refreshSeq;
   const result = await window.kura.items({
     ...filters.value,
+    // filters 里的值是 string 宽类型, 这里收窄回 IPC 契约上的枚举
+    state: filters.value.state as "unscraped" | "scraped" | "exhausted" | undefined,
+    sort: sort.value ? { ...sort.value } : undefined,
     limit: pageSize,
     offset: page.value * pageSize,
   });
@@ -856,9 +893,22 @@ async function testDmm(): Promise<void> {
                 <thead>
                   <tr>
                     <th class="pick" />
-                    <th>番号</th>
-                    <th>标题</th>
-                    <th>片商</th>
+                    <th
+                      v-for="column in [
+                        { field: 'number', label: '番号' },
+                        { field: 'title', label: '标题' },
+                        { field: 'studio', label: '片商' },
+                      ] as const"
+                      :key="column.field"
+                      :aria-sort="sortState(column.field)"
+                    >
+                      <button type="button" class="sort" @click="toggleSort(column.field)">
+                        {{ column.label }}
+                        <span class="sort-arrow" aria-hidden="true">{{
+                          sortState(column.field) === "ascending" ? "↑" : sortState(column.field) === "descending" ? "↓" : ""
+                        }}</span>
+                      </button>
+                    </th>
                     <th>演员</th>
                   </tr>
                 </thead>
@@ -1009,7 +1059,9 @@ async function testDmm(): Promise<void> {
               <p class="muted hint">锁定后重新刮削不会覆盖该字段。点片商/厂牌/系列/演员/导演/标签可以筛出同类条目。</p>
               <!-- 图放最后: 字段通常占不满整栏, 让图吃掉剩下的空白, 也就能显示得更大 -->
               <div v-if="detail.coverUrl" class="detail-cover">
-                <img :src="detail.coverUrl" :alt="detail.number" />
+                <button type="button" class="cover-zoom" :aria-label="`放大 ${detail.number} 的封面`" @click="zoom = detail.coverUrl!">
+                  <img :src="detail.coverUrl" :alt="detail.number" />
+                </button>
               </div>
             </aside>
           </div>
@@ -1254,6 +1306,22 @@ async function testDmm(): Promise<void> {
           </span>
         </div>
       </section>
+    </div>
+
+    <!-- 看大图: 点封面放大, 点任意处或按 Esc 关闭 -->
+    <div
+      v-if="zoom"
+      class="lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label="封面大图"
+      tabindex="-1"
+      ref="lightboxEl"
+      @click="zoom = null"
+      @keydown.esc="zoom = null"
+    >
+      <img :src="zoom" alt="" />
+      <button type="button" class="ghost lightbox-close" aria-label="关闭大图" @click.stop="zoom = null">×</button>
     </div>
   </main>
 </template>
@@ -1917,6 +1985,29 @@ td {
 
 /* 标题这类长文本: 允许折两行, 鼠标悬停看完整内容 */
 /* 番号格: 番号 + 类型小徽标, 省掉一整个「类型」列 */
+/* 表头即排序开关: 保持表头的克制, 只在 hover 时提示可点 */
+th .sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+th .sort:hover {
+  color: var(--text);
+}
+
+.sort-arrow {
+  font-size: var(--fs-label);
+  color: var(--accent);
+}
+
 td.num-cell {
   white-space: nowrap;
 }
@@ -1952,6 +2043,62 @@ td.title-cell > span {
  * - 图片不设宽高, 只用 max-*: 小图 (比如 147x200 的缩略图) 保持自然尺寸不被放大糊掉
  * - object-fit: contain 保证任何比例都不裁切
  */
+/* 封面按钮只为了让键盘也能打开大图, 视觉上就是那张图 */
+.cover-zoom {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: zoom-in;
+}
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgba(8, 10, 14, 0.86);
+  animation: lightbox-in 160ms var(--ease);
+}
+
+.lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-md);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 24px 64px rgba(0, 0, 0, 0.45);
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  font-size: var(--fs-section);
+}
+
+@keyframes lightbox-in {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightbox {
+    animation: none;
+  }
+}
+
 .detail-cover {
   margin-top: 12px;
   flex: 1 1 auto;

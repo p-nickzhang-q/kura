@@ -51,12 +51,12 @@ export { countFiles, filePhase, listFiles, scan } from "./tasks/scan";
 export type { MediaFileView } from "./tasks/scan";
 export type { ScanEvent, ScanOptions, ScanReport } from "./tasks/scan";
 
-export { countExhausted, countItems, countPending, getItem, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys, scrape, scrapePending, scrapePendingTask } from "./tasks/scrape";
+export { countExhausted, countItems, countPending, getItem, isItemSortField, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys, scrape, scrapePending, scrapePendingTask } from "./tasks/scrape";
 export { countPendingTranslation, pendingTranslationKeys, translationStats, translateItem, repairTranslations, translatePending, type RepairReport, type TranslateBatchResult, type TranslateProgress } from "./tasks/translate";
 export type { TranslateReport } from "./tasks/translate";
 export { buildSystemPrompt, chatEndpoint, createTranslator, hasKana, needsTranslation, openTranslator, probeTranslator, TranslationCache } from "./llm/translate";
 export type { LlmConfig, Translator } from "./llm/translate";
-export type { ItemView, ScrapeOptions, ScrapePendingOptions, ScrapePendingResult, ScrapeProgress, ScrapeReport, TaskScrapeOptions, TaskScrapeResult } from "./tasks/scrape";
+export type { ItemSort, ItemSortField, ItemView, ScrapeOptions, ScrapePendingOptions, ScrapePendingResult, ScrapeProgress, ScrapeReport, TaskScrapeOptions, TaskScrapeResult } from "./tasks/scrape";
 
 export { parseFieldList, parseListValue, updateItem } from "./tasks/item";
 export type { UpdateItemOptions } from "./tasks/item";

@@ -125,6 +125,8 @@ interface ItemListInput {
   series?: string;
   director?: string;
   tag?: string;
+  state?: "unscraped" | "scraped" | "exhausted";
+  sort?: { field: "updated" | "number" | "title" | "release" | "studio" | "duration"; desc?: boolean };
 }
 
 /**
@@ -412,6 +414,7 @@ function registerIpc(): void {
 
   ipcMain.handle("item:list", (_event, input: ItemListInput = {}) => {
     const rt = mustRuntime();
+    // 逐字段转发, 少写一个界面上的筛选就静默失效 (漏过 state 与 sort)。
     const filters = {
       type: input.type,
       actor: input.actor,
@@ -422,6 +425,8 @@ function registerIpc(): void {
       series: input.series,
       director: input.director,
       tag: input.tag,
+      state: input.state,
+      sort: input.sort,
     };
     const items = listItems(rt, { ...filters, limit: input.limit ?? 100, offset: input.offset ?? 0 });
     return {

@@ -6,7 +6,7 @@ import { openRuntime } from "../src/runtime";
 import { createLibrary } from "../src/db/rows";
 import { scan } from "../src/tasks/scan";
 import { placeImagesBesideVideo } from "../src/tasks/resources";
-import { listItems, countItems, getItem } from "../src/tasks/scrape";
+import { listItems, countItems, getItem, isItemSortField } from "../src/tasks/scrape";
 
 function setup() {
   const dir = mkdtempSync(join(tmpdir(), "kura-sidecar-"));
@@ -94,5 +94,43 @@ describe("按刮削状态筛选", () => {
 
     rt.close();
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("列表排序", () => {
+  test("按标题升序时, 空标题排最后 (不让未刮削占满第一页)", async () => {
+    const { dir, media } = setup();
+    const rt = await openRuntime({ dataDir: join(dir, "data") });
+    const library = createLibrary(rt.db, { name: "库", root: media });
+    await scan(rt, { library });
+    // setup() 造了 SSIS-100 两个文件, 再加一个有标题的条目
+    rt.db.run("update items set title = 'B 标题', release_date = '2024-02-01' where number = 'SSIS-100'");
+    rt.db.run(
+      "insert into items (number, content_type, title, release_date, updated_at) values ('SSIS-050', 'censored', 'A 标题', null, unixepoch())",
+    );
+
+    const byTitle = listItems(rt, { sort: { field: "title" } });
+    expect(byTitle.map((item) => item.number)).toEqual(["SSIS-050", "SSIS-100"]);
+
+    const byTitleDesc = listItems(rt, { sort: { field: "title", desc: true } });
+    expect(byTitleDesc.map((item) => item.number)).toEqual(["SSIS-100", "SSIS-050"]);
+
+    // 空 release_date 一样沉底
+    const byRelease = listItems(rt, { sort: { field: "release" } });
+    expect(byRelease.map((item) => item.number)).toEqual(["SSIS-100", "SSIS-050"]);
+
+    rt.db.run("update items set title = null where number = 'SSIS-050'");
+    expect(listItems(rt, { sort: { field: "title" } }).map((item) => item.number)).toEqual(["SSIS-100", "SSIS-050"]);
+
+    rt.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("排序字段来自白名单", async () => {
+    expect(isItemSortField("title")).toBe(true);
+    expect(isItemSortField("updated")).toBe(true);
+    // 直接传列名不合法: 字段名会拼进 SQL
+    expect(isItemSortField("title; drop table items")).toBe(false);
+    expect(isItemSortField("id")).toBe(false);
   });
 });

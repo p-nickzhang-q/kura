@@ -376,6 +376,46 @@ export interface ListItemOptions {
   series?: string;
   director?: string;
   tag?: string;
+  /** 排序。不给就按更新时间倒序 (最近刮到的在最前)。 */
+  sort?: ItemSort;
+}
+
+/**
+ * 可排序字段的**白名单**。
+ *
+ * 字段名会拼进 SQL, 所以只能是这张表里的固定字符串 —— 不接受调用方传列名。
+ */
+export type ItemSortField = "updated" | "number" | "title" | "release" | "studio" | "duration";
+
+export interface ItemSort {
+  field: ItemSortField;
+  /** true = 从大到小 / 从后到前。默认升序。 */
+  desc?: boolean;
+}
+
+const SORT_COLUMNS: Record<ItemSortField, string> = {
+  updated: "items.updated_at",
+  number: "items.number",
+  title: "items.title",
+  release: "items.release_date",
+  studio: "items.studio",
+  duration: "items.duration_min",
+};
+
+/** 文本列排序时把空值排到最后: 否则"未刮削"的条目会占满第一页。 */
+const SORT_TEXT_FIELDS = new Set<ItemSortField>(["number", "title", "studio", "release"]);
+
+export function isItemSortField(value: string): value is ItemSortField {
+  return value in SORT_COLUMNS;
+}
+
+function itemOrderBy(sort: ItemSort | undefined): string {
+  if (!sort) return "order by items.updated_at desc";
+  const column = SORT_COLUMNS[sort.field];
+  const direction = sort.desc ? "desc" : "asc";
+  if (!SORT_TEXT_FIELDS.has(sort.field)) return `order by ${column} ${direction}`;
+  // 空值固定排最后, 与方向无关
+  return `order by (${column} is null or ${column} = '') asc, ${column} collate nocase ${direction}`;
 }
 
 /**
@@ -457,7 +497,7 @@ function itemFilters(options: Omit<ListItemOptions, "limit" | "offset">): { wher
 
 export function listItems(rt: Runtime, options: ListItemOptions = {}): ItemView[] {
   const { where, params } = itemFilters(options);
-  const sql = `select items.* from items${where.length > 0 ? ` where ${where.join(" and ")}` : ""} order by items.updated_at desc limit ? offset ?`;
+  const sql = `select items.* from items${where.length > 0 ? ` where ${where.join(" and ")}` : ""} ${itemOrderBy(options.sort)} limit ? offset ?`;
   const rows = rt.db.all<ItemRow>(sql, [...params, options.limit ?? 50, options.offset ?? 0]);
   return rows.map((row) => ({ ...rowToMetadata(row), pinned: parseJson<string[]>(row.pinned) ?? [] }));
 }

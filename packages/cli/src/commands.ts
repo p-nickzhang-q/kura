@@ -9,6 +9,7 @@ import {
   detectContentType,
   findLibrary,
   getItem,
+  isItemSortField,
   isSiteKey,
   listItems,
   countItems,
@@ -611,6 +612,8 @@ export const COMMANDS: Command[] = [
       { name: "tag", type: "string", description: "按标签筛选 (list)" },
       { name: "library", type: "string", description: "只看某个媒体库 (list)" },
       { name: "state", type: "string", description: "list: unscraped (还没标题) | scraped | exhausted (刮削失败到上限)" },
+      { name: "sort", type: "string", description: "list: number | title | release | studio | duration | updated (默认 updated)" },
+      { name: "desc", type: "boolean", description: "list: 排序方向改为倒序", default: false },
       { name: "limit", type: "number", description: "条数 (list)", default: 20 },
       { name: "offset", type: "number", description: "跳过条数 (list)", default: 0 },
       { name: "title", type: "string", description: "set: 标题" },
@@ -651,6 +654,14 @@ export const COMMANDS: Command[] = [
           tag: text("tag"),
           libraryId: library?.id,
           state: text("state") as "unscraped" | "scraped" | "exhausted" | undefined,
+          sort: (() => {
+            const field = text("sort");
+            if (!field) return undefined;
+            if (!isItemSortField(field)) {
+              throw new AppError(`未知排序字段: ${field}`, EXIT.USAGE, { field, allowed: "number|title|release|studio|duration|updated" });
+            }
+            return { field, desc: args.options.desc === true };
+          })(),
         };
         const items = listItems(ctx.rt!, {
           ...filters,

@@ -73,6 +73,10 @@ kura scrape ABC-123 --json
 kura organize 主库 --json          # 只出计划
 kura organize 主库 --apply --json  # 真的移动
 
+# 找活干: 只看还没元数据的条目, 按标题排序
+kura item list --state unscraped --json
+kura item list --sort title --desc --limit 20 --json
+
 # 手改字段并锁定: 锁定的字段重新刮削不覆盖
 kura item set ABC-123 --title "我改的标题" --json
 kura item lock ABC-123 title,plot --json
@@ -84,6 +88,13 @@ kura source test dmm --json
 # 自检(数据目录、schema 版本、库/条目/文件数)
 kura doctor --json
 ```
+
+`item list` 的筛选与排序(都可组合):
+`--q` 关键词(番号/标题/原名/片商/厂牌/系列/演员/标签/导演)、`--type`、
+`--actor` `--studio` `--label` `--series` `--director` `--tag` `--library`、
+`--state unscraped|scraped|exhausted`、
+`--sort number|title|release|studio|duration|updated`(默认 updated)+ `--desc`。
+排序字段走**白名单**, 未知字段是退出码 2; 文本列的空值永远排最后。
 
 **长时间批量任务**: `scrape --pending` 会逐条把进度写到 **stderr**(`[3/200] ABC-123 ✓ 11 字段`),
 stdout 仍只有最后那一个结果信封。Ctrl-C 会中断在途请求并提前收尾, 结果里 `cancelled: true`、`count` 为已完成条数,
