@@ -1,4 +1,4 @@
-import type { ContentType, FieldKey, FileInfo, Metadata } from "../domain/types";
+import { isDomain, type ContentType, type Domain, type FieldKey, type FileInfo, type Metadata } from "../domain/types";
 import type { Library } from "../domain/materialize";
 import { sanitizeActorNames } from "../domain/actors";
 import type { Db } from "./driver";
@@ -28,6 +28,9 @@ export interface ItemRow {
 
 export interface MediaFileRow {
   path: string;
+  /** 影视域的集号; av 域为 null。 */
+  season?: number | null;
+  episode?: number | null;
   library_id: number;
   number: string | null;
   size: number;
@@ -116,6 +119,7 @@ export interface LibraryRow {
   root: string;
   template: string;
   organize_enabled?: number;
+  domain?: string | null;
 }
 
 export function rowToLibrary(row: LibraryRow): Library {
@@ -126,21 +130,23 @@ export function rowToLibrary(row: LibraryRow): Library {
     template: row.template,
     // 老库升上来时列可能存在但为 NULL, 统一按"允许整理"处理。
     organizeEnabled: row.organize_enabled !== 0,
+    // v9 之前建的库没有 domain 列, 一律是番号制
+    domain: isDomain(row.domain) ? row.domain : "av",
   };
 }
 
 export function listLibraries(db: Db): Library[] {
-  return db.all<LibraryRow>("select id, name, root, template, organize_enabled from libraries order by name").map(rowToLibrary);
+  return db.all<LibraryRow>("select id, name, root, template, organize_enabled, domain from libraries order by name").map(rowToLibrary);
 }
 
 export function findLibrary(db: Db, ref: string): Library | undefined {
   const byId = Number(ref);
   const row = Number.isInteger(byId)
-    ? db.get<LibraryRow>("select id, name, root, template, organize_enabled from libraries where id = ?", [byId])
+    ? db.get<LibraryRow>("select id, name, root, template, organize_enabled, domain from libraries where id = ?", [byId])
     : undefined;
   const found =
     row ??
-    db.get<LibraryRow>("select id, name, root, template, organize_enabled from libraries where name = ?", [ref]);
+    db.get<LibraryRow>("select id, name, root, template, organize_enabled, domain from libraries where name = ?", [ref]);
   return found ? rowToLibrary(found) : undefined;
 }
 
@@ -159,9 +165,26 @@ function uniqueLibraryName(db: Db, base: string): string {
   }
 }
 
+/**
+ * 每个域有自己的默认整理模板。
+ *
+ * `av` 的 `{content_type}/{studio}/{number}` 对影视毫无意义(影视没有 content_type),
+ * 照抄会生成一堆叫 "censored" 的目录。
+ */
+export function defaultTemplateFor(domain: Domain): string {
+  switch (domain) {
+    case "tv":
+      return "{series}/Season {season}";
+    case "movie":
+      return "{series}";
+    default:
+      return "{content_type}/{studio}/{number}";
+  }
+}
+
 export function createLibrary(
   db: Db,
-  input: { name: string; root: string; template?: string; organizeEnabled?: boolean },
+  input: { name: string; root: string; template?: string; organizeEnabled?: boolean; domain?: Domain },
 ): Library {
   // 同一个目录建两个库毫无意义, 而且会让同一批文件被索引两遍。
   const existing = db.get<{ name: string }>("select name from libraries where root = ?", [input.root]);
@@ -174,14 +197,15 @@ export function createLibrary(
 
   const name = uniqueLibraryName(db, input.name);
 
-  db.run("insert into libraries (name, root, template, organize_enabled) values (?, ?, ?, ?)", [
+  db.run("insert into libraries (name, root, template, organize_enabled, domain) values (?, ?, ?, ?, ?)", [
     name,
     input.root,
-    input.template ?? "{content_type}/{studio}/{number}",
+    input.template ?? defaultTemplateFor(input.domain ?? "av"),
     input.organizeEnabled === false ? 0 : 1,
+    input.domain ?? "av",
   ]);
   const row = db.get<LibraryRow>(
-    "select id, name, root, template, organize_enabled from libraries where name = ?",
+    "select id, name, root, template, organize_enabled, domain from libraries where name = ?",
     [name],
   )!;
   return rowToLibrary(row);
@@ -199,7 +223,7 @@ export function renameLibrary(db: Db, libraryId: number, name: string): Library 
 
   db.run("update libraries set name = ? where id = ?", [trimmed, libraryId]);
   const row = db.get<LibraryRow>(
-    "select id, name, root, template, organize_enabled from libraries where id = ?",
+    "select id, name, root, template, organize_enabled, domain from libraries where id = ?",
     [libraryId],
   )!;
   return rowToLibrary(row);

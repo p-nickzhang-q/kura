@@ -3,6 +3,7 @@ import { AppError, EXIT } from "../exit";
 import { extname, join } from "node:path";
 import { detectContentType, extractNumber, isAuxiliaryMedia, parseFileInfo } from "../domain/identify";
 import { existsSync } from "node:fs";
+import { locateEpisode, locateMovie } from "../domain/episodes";
 import { nfoPathFor } from "../domain/nfo";
 import { hasNetworkSource } from "./nfo-sync";
 import type { Library } from "../domain/materialize";
@@ -39,6 +40,11 @@ export interface ScanReport {
      * 这里只报数, 免得"换电脑重扫"这条路上的人不知道下一步该做什么。
      */
     nfoPending: number;
+    /**
+     * 影视域的"候选剧目录"个数: 一个目录 = 一部剧的候选 (电影域则是候选文件数)。
+     * 它们还没有条目身份 —— 绑定到 TMDB 之后才建 items 行。
+     */
+    shows: number;
     /**
      * 修正了内容类型的条数。
      *
@@ -77,6 +83,12 @@ interface Found {
  * 幂等: 同一目录重复扫描, 第二次应全部 unchanged。
  */
 export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
+  // 域在建库时落定, 扫描按它分流: 番号制走番号识别, 影视走目录/集号解析。
+  return opts.library.domain === "av" ? scanAv(rt, opts) : scanVideo(rt, opts);
+}
+
+/** 番号制域的扫描: 从文件名抽番号, 建条目占位行。 */
+async function scanAv(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
   const started = Date.now();
   const { library } = opts;
   const dryRun = opts.dryRun ?? false;
@@ -87,7 +99,7 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
     throw new Error(`媒体库目录不存在: ${library.root}`);
   }
 
-  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, auxiliary: 0, nfoPending: 0, retyped: 0 };
+  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, auxiliary: 0, nfoPending: 0, retyped: 0, shows: 0 };
   const found: Found[] = [];
   const auxiliary = { count: 0 };
   await walk(library.root, found, auxiliary);
@@ -166,32 +178,140 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
       emit({ type, path: file.path, number });
     }
 
-    const toRemove = [...known.keys()].filter((path) => !seen.has(path));
-    const pruneGuard = !opts.force && known.size >= 20 && toRemove.length / known.size > 0.3;
-    if (pruneGuard) {
-      // 不在这里 rollback: 外层 catch 统一回滚, 这里再回滚一次会报
-      // "cannot rollback - no transaction is active"
-      const percent = Math.round((toRemove.length / known.size) * 100);
-      throw new AppError(
-        `这次扫描要移除 ${toRemove.length} 个已登记文件 (占 ${percent}%), 库根可能没挂载完整, 已中止`,
-        EXIT.NEEDS_INPUT,
-        {
-          libraryId: library.id,
-          root: library.root,
-          known: known.size,
-          wouldRemove: toRemove.length,
-          sample: toRemove.slice(0, 3),
-          hint: `确认目录完整后重试; 确实要删就加 --force`,
-        },
-      );
+    pruneMissing(rt, { library, known, seen, dryRun, force: opts.force === true, counts, emit });
+
+    if (dryRun) rt.db.exec("rollback");
+    else rt.db.exec("commit");
+  } catch (err) {
+    rt.db.exec("rollback");
+    throw err;
+  }
+
+  return { libraryId: library.id, root: library.root, dryRun, counts, durationMs: Date.now() - started };
+}
+
+/** 从索引里删掉这次没看到的文件 —— 两个域共用, 安全阀也只有一份。 */
+function pruneMissing(
+  rt: Runtime,
+  args: {
+    library: Library;
+    known: Map<string, MediaFileRow>;
+    seen: Set<string>;
+    dryRun: boolean;
+    force: boolean;
+    counts: ScanReport["counts"];
+    emit: (event: ScanEvent) => void;
+  },
+): void {
+  const { library, known, seen, dryRun, counts, emit } = args;
+  const toRemove = [...known.keys()].filter((path) => !seen.has(path));
+  const pruneGuard = !args.force && known.size >= 20 && toRemove.length / known.size > 0.3;
+  if (pruneGuard) {
+    // 不在这里 rollback: 外层 catch 统一回滚, 这里再回滚一次会报
+    // "cannot rollback - no transaction is active"
+    const percent = Math.round((toRemove.length / known.size) * 100);
+    throw new AppError(
+      `这次扫描要移除 ${toRemove.length} 个已登记文件 (占 ${percent}%), 库根可能没挂载完整, 已中止`,
+      EXIT.NEEDS_INPUT,
+      {
+        libraryId: library.id,
+        root: library.root,
+        known: known.size,
+        wouldRemove: toRemove.length,
+        sample: toRemove.slice(0, 3),
+        hint: `确认目录完整后重试; 确实要删就加 --force`,
+      },
+    );
+  }
+
+  for (const path of known.keys()) {
+    if (seen.has(path)) continue;
+    counts.removed++;
+    if (!dryRun) rt.db.run("delete from media_files where path = ?", [path]);
+    emit({ type: "file.removed", path });
+  }
+}
+
+/**
+ * 影视域的扫描: 登记文件 + 解析出 (剧目录, 季, 集), **不建条目**。
+ *
+ * 为什么不在扫描时建条目: 影视的身份是 TMDB id, 而 id 要绑定之后才知道 ——
+ * 扫描时凭名字猜一个 id 写进库里, 猜错等于整季集名全错 (见 ADR 0008 决策 4)。
+ * 所以这里只把"候选"准备好, 绑定由 `file bind` 完成。
+ */
+async function scanVideo(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
+  const started = Date.now();
+  const { library } = opts;
+  const dryRun = opts.dryRun ?? false;
+  const emit = opts.onEvent ?? (() => {});
+
+  const rootStat = await stat(library.root).catch(() => null);
+  if (!rootStat?.isDirectory()) {
+    throw new Error(`媒体库目录不存在: ${library.root}`);
+  }
+
+  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, auxiliary: 0, nfoPending: 0, retyped: 0, shows: 0 };
+  const found: Found[] = [];
+  const auxiliary = { count: 0 };
+  await walk(library.root, found, auxiliary);
+  counts.auxiliary = auxiliary.count;
+
+  const known = new Map<string, MediaFileRow>();
+  for (const row of rt.db.all<MediaFileRow>(
+    "select path, library_id, number, size, mtime_ms, sha256, phase, season, episode from media_files where library_id = ?",
+    [library.id],
+  )) {
+    known.set(row.path, row);
+  }
+
+  const seen = new Set<string>();
+  const shows = new Set<string>();
+
+  rt.db.exec("begin");
+  try {
+    for (const file of found) {
+      seen.add(file.path);
+      const previous = known.get(file.path);
+
+      // 解析是纯函数、不花 IO, 所以每次重算 —— 解析器升级后, 旧库里"以前认不出"的文件重扫一次就自愈。
+      const episodeInfo = library.domain === "tv" ? locateEpisode(file.path, library.root) : null;
+      if (library.domain === "tv" && !episodeInfo) counts.unparsed++;
+      shows.add((episodeInfo ?? locateMovie(file.path, library.root)).showDir);
+      const season = episodeInfo?.season ?? null;
+      const episode = episodeInfo?.episode ?? null;
+      const phase = parseFileInfo(file.path);
+
+      const untouched =
+        previous &&
+        previous.size === file.size &&
+        previous.mtime_ms === file.mtimeMs &&
+        (previous.season ?? null) === season &&
+        (previous.episode ?? null) === episode;
+      if (untouched) {
+        counts.unchanged++;
+        emit({ type: "file.unchanged", path: file.path, number: null });
+        continue;
+      }
+
+      // 影视文件此刻没有身份: number 留空, 于是它自然落在"未识别"里等绑定。
+      const type: ScanEventType = previous ? "file.updated" : "file.added";
+      counts[type === "file.added" ? "added" : "updated"]++;
+
+      if (!dryRun) {
+        rt.db.run(
+          `insert into media_files (path, library_id, number, size, mtime_ms, sha256, phase, season, episode, seen_at)
+           values (?, ?, null, ?, ?, ?, ?, ?, ?, unixepoch())
+           on conflict(path) do update set library_id = excluded.library_id, number = excluded.number,
+             size = excluded.size, mtime_ms = excluded.mtime_ms, sha256 = excluded.sha256,
+             phase = excluded.phase, season = excluded.season, episode = excluded.episode, seen_at = excluded.seen_at`,
+          [file.path, library.id, file.size, file.mtimeMs, previous?.sha256 ?? null, stringify(phase), season, episode],
+        );
+      }
+      emit({ type, path: file.path, number: null });
     }
 
-    for (const path of known.keys()) {
-      if (seen.has(path)) continue;
-      counts.removed++;
-      if (!dryRun) rt.db.run("delete from media_files where path = ?", [path]);
-      emit({ type: "file.removed", path });
-    }
+    pruneMissing(rt, { library, known, seen, dryRun, force: opts.force === true, counts, emit });
+    counts.shows = shows.size;
 
     if (dryRun) rt.db.exec("rollback");
     else rt.db.exec("commit");
@@ -206,6 +326,9 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
 export interface MediaFileView {
   path: string;
   number: string | null;
+  /** 影视域的集号; av 域为 null。 */
+  season: number | null;
+  episode: number | null;
   libraryId: number;
   size: number;
   mtimeMs: number;
@@ -228,7 +351,7 @@ export function listFiles(
   }
   if (options.unparsedOnly) where.push("number is null");
 
-  const sql = `select path, number, library_id, size, mtime_ms, phase from media_files
+  const sql = `select path, number, library_id, size, mtime_ms, phase, season, episode from media_files
     ${where.length > 0 ? `where ${where.join(" and ")}` : ""}
     order by path limit ? offset ?`;
   params.push(options.limit ?? 200, options.offset ?? 0);
@@ -236,6 +359,8 @@ export function listFiles(
   return rt.db.all<MediaFileRow & { library_id: number; size: number; mtime_ms: number }>(sql, params).map((row) => ({
     path: row.path,
     number: row.number,
+    season: row.season ?? null,
+    episode: row.episode ?? null,
     libraryId: row.library_id,
     size: row.size,
     mtimeMs: row.mtime_ms,

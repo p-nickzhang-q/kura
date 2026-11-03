@@ -1,3 +1,20 @@
+/**
+ * 域 (ADR 0008): 库与条目的所属范畴。内容类型是 `av` 域**内部**的分类, 两者不是一个轴。
+ * 一个库只属于一个域, 一个条目只属于一个域, 永不跨域转换。
+ */
+export const DOMAINS = ["av", "movie", "tv"] as const;
+export type Domain = (typeof DOMAINS)[number];
+
+export const DOMAIN_LABEL: Record<Domain, string> = {
+  av: "番号制",
+  movie: "电影",
+  tv: "剧集",
+};
+
+export function isDomain(value: unknown): value is Domain {
+  return typeof value === "string" && (DOMAINS as readonly string[]).includes(value);
+}
+
 export const CONTENT_TYPES = ["censored", "uncensored", "fc2", "chinese", "amateur", "western", "anime"] as const;
 export type ContentType = (typeof CONTENT_TYPES)[number];
 
