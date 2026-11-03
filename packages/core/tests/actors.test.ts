@@ -83,14 +83,35 @@ describe("演员索引", () => {
     dir = await mkdtemp(join(tmpdir(), "kura-actors-"));
     const { db } = await openDb(join(dir, "kura.db"));
     try {
-      // 造一个 v7 形态的库: 有 items.actors, 但没有 actors / item_actors 表
-      db.exec("create table items (number text primary key, content_type text not null, actors text)");
+      // 造一个 v7 形态的库: 有 items.actors, 但没有 actors / item_actors 表。
+      // libraries / media_files 也要给: 真实 v7 库一定有 (v2/v3 建的), 而 v9 会 alter 它们。
+      db.exec(`
+        create table items (number text primary key, content_type text not null, actors text);
+        create table libraries (
+          id integer primary key autoincrement,
+          name text not null unique,
+          root text not null,
+          template text not null default '',
+          created_at integer not null default (unixepoch()),
+          organize_enabled integer not null default 1
+        );
+        create table media_files (
+          path text primary key,
+          library_id integer not null,
+          number text,
+          size integer not null,
+          mtime_ms integer not null,
+          sha256 text,
+          phase text,
+          seen_at integer not null default (unixepoch())
+        );
+      `);
       db.run("insert into items (number, content_type, actors) values ('OLD-001', 'censored', ?)", [
         JSON.stringify(["甲", "乙"]),
       ]);
       db.exec("pragma user_version = 7");
 
-      expect(migrate(db)).toBe(8);
+      expect(migrate(db)).toBe(9);
 
       const actors = db.all<{ name: string }>("select name from actors order by name");
       expect(actors.map((row) => row.name)).toEqual(["乙", "甲"]);

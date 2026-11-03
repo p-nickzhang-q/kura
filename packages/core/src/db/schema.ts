@@ -139,6 +139,29 @@ const MIGRATIONS: string[] = [
   );
   create index if not exists item_actors_actor on item_actors(actor_id);
   `,
+
+  // v9 — 影视域 (ADR 0008): 域挂在库上, 条目冗余一列省 join; 剧的集自成一表;
+  // 演员按域标记(同一个演员两边都会出现, 但 [演员] 维度只对 av 有意义)。
+  // 纯加法: 老库升级后所有行 domain 都是 'av', av 域行为逐字不变。
+  `
+  alter table libraries add column domain text not null default 'av';
+  alter table items add column domain text not null default 'av';
+  alter table actors add column domain text not null default 'av';
+  alter table media_files add column season integer;
+  alter table media_files add column episode integer;
+
+  create table episodes (
+    number       text not null references items(number) on delete cascade,
+    season       integer not null default 1,
+    episode      integer not null,
+    title        text,
+    plot         text,
+    air_date     text,
+    duration_min integer,
+    field_sources text,
+    primary key (number, season, episode)
+  );
+  `,
 ];
 
 /**
