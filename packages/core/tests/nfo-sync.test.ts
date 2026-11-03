@@ -317,3 +317,42 @@ describe("Emby 辅助文件不是影片", () => {
     }
   });
 });
+
+describe("任务记录不进干跑", () => {
+  test("干跑不建任务行, 写入才建一条", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kura-dry-"));
+    const dataDir = join(root, "data");
+    const media = join(root, "media");
+    await mkdir(media, { recursive: true });
+    await writeFile(join(media, "ABC-123.mp4"), "video", "utf8");
+    await writeFile(join(media, "ABC-123.nfo"), EXISTING, "utf8");
+
+    const rt = await openRuntime({ dataDir });
+    try {
+      const library = createLibrary(rt.db, { name: "库", root: media, organizeEnabled: false });
+      await scan(rt, { library });
+      rt.db.run("update items set title = '新标题', actors = '[\"新演员\"]', field_sources = ? ", [
+        JSON.stringify({ title: "javbus", actors: "javbus" }),
+      ]);
+
+      // 干跑: syncNfo 本身不碰 tasks 表
+      await syncNfo(rt, { libraryId: library.id });
+      expect(listTasks(rt, { limit: 100 })).toHaveLength(0);
+
+      const { syncNfoTask } = await import("../src/tasks/nfo-sync");
+      const { task } = await syncNfoTask(rt, { libraryId: library.id, apply: true }, new AbortController().signal);
+      const tasks = listTasks(rt, { limit: 100 });
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0]!.type).toBe("nfo.sync");
+      expect(tasks[0]!.id).toBe(task.id);
+
+      // deleteTask: 记录与 jsonl 一起清掉
+      const { deleteTask } = await import("../src/tasks/queue");
+      expect(deleteTask(rt, task.id)).toBe(true);
+      expect(listTasks(rt, { limit: 100 })).toHaveLength(0);
+    } finally {
+      rt.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

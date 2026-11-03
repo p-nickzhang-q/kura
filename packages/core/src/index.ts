@@ -78,7 +78,7 @@ export {
 } from "./tasks/resources";
 export type { LocalResource, PosterDownloadResult } from "./tasks/resources";
 
-export { cancelTask, createTask, finishTask, getTask, listTasks, markRunning, pruneTasks, recoverInterrupted, retryTask, runTask, taskFailures, updateProgress, TASK_KEEP } from "./tasks/queue";
+export { cancelTask, createTask, deleteTask, finishTask, getTask, listTasks, markRunning, pruneTasks, recoverInterrupted, retryTask, runTask, taskFailures, updateProgress, TASK_KEEP } from "./tasks/queue";
 export type { TaskFailure, TaskRow, TaskRun, TaskStatus } from "./tasks/queue";
 export { redact, TaskLog, taskLogFiles } from "./observability/task-log";
 

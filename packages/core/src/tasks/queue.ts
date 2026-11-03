@@ -118,6 +118,29 @@ export function pruneTasks(rt: Runtime, keep = TASK_KEEP): number {
   return stale.length;
 }
 
+/** 删掉一条任务记录与它的 jsonl —— 历史里那些"只干跑过"或跑错参数的记录用这个清。 */
+export function deleteTask(rt: Runtime, id: number): boolean {
+  const row = rt.db.get<{ id: number }>("select id from tasks where id = ?", [id]);
+  if (!row) return false;
+  const dir = join(rt.paths.logDir, "tasks");
+  const prefix = String(id).padStart(6, "0");
+  try {
+    for (const name of readdirSync(dir)) {
+      if (name.startsWith(`${prefix}-`)) {
+        try {
+          unlinkSync(join(dir, name));
+        } catch {
+          // 日志删不掉不影响
+        }
+      }
+    }
+  } catch {
+    // 目录不存在就是没有日志
+  }
+  rt.db.run("delete from tasks where id = ?", [id]);
+  return true;
+}
+
 export interface TaskFailure {
   key: string;
   error: string;

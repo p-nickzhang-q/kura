@@ -677,20 +677,24 @@ function registerIpc(): void {
     ) =>
       exclusive("同步 NFO", async (signal) => {
         const rt = mustRuntime();
-        const { task, result } = await syncNfoTask(
-          rt,
-          {
-            ...(input.libraryId !== undefined ? { libraryId: input.libraryId } : {}),
-            ...(input.number ? { number: input.number } : {}),
-            ...(Array.isArray(input.numbers) ? { numbers: input.numbers.filter((key): key is string => typeof key === "string") } : {}),
-            apply: input.apply === true,
-            includeUnscraped: input.includeUnscraped === true,
-            writeOnly: input.writeOnly === true,
-          },
-          signal,
-          (progress) => win?.webContents.send("nfo:progress", progress),
-        );
-        return result ?? { dryRun: !input.apply, scanned: 0, imported: 0, written: 0, created: 0, skipped: 0, errors: 0, cancelled: true, entries: [], taskId: task.id };
+        const options = {
+          ...(input.libraryId !== undefined ? { libraryId: input.libraryId } : {}),
+          ...(input.number ? { number: input.number } : {}),
+          ...(Array.isArray(input.numbers) ? { numbers: input.numbers.filter((key): key is string => typeof key === "string") } : {}),
+          includeUnscraped: input.includeUnscraped === true,
+          writeOnly: input.writeOnly === true,
+        };
+        const onProgress = (progress: { index: number; total: number; key: string; action: string }): void => {
+          win?.webContents.send("nfo:progress", progress);
+        };
+
+        // 干跑不写任务行: 它不改库、不写盘, 只是"看看要做什么"。同一次同步在历史里
+        // 只该有一条 —— 以前预览和写入各建一条, 看起来像跑了两次。
+        if (input.apply !== true) {
+          return syncNfo(rt, { ...options, signal, onProgress });
+        }
+        const { task, result } = await syncNfoTask(rt, { ...options, apply: true }, signal, onProgress);
+        return result ?? { dryRun: false, scanned: 0, imported: 0, written: 0, created: 0, skipped: 0, errors: 0, cancelled: true, entries: [], taskId: task.id };
       }),
   );
 

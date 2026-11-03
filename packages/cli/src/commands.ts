@@ -41,10 +41,12 @@ import {
   runTask,
   listTasks,
   getTask,
+  syncNfo,
   syncNfoTask,
   retryTask,
   cancelTask,
   taskLogFiles,
+  deleteTask,
   resolveLlm,
   translateEnabled,
   translateItem,
@@ -420,9 +422,10 @@ export const COMMANDS: Command[] = [
         throw new AppError(`未知动作: ${action} (sync | write | import)`, EXIT.USAGE);
       }
       const variant = action === "write" ? { ...options, writeOnly: true } : action === "import" ? { ...options, readOnly: true } : options;
-      // 与刮削/翻译一样走任务版: CLI 跑完也要能在 `task list` / 界面里查到失败项
+      // 干跑不建任务行(不改库、不写盘), 只有真写盘才记一条, 历史里一次同步只有一行。
+      if (!options.apply) return syncNfo(ctx.rt!, variant);
       const controller = new AbortController();
-      const { task, result } = await syncNfoTask(ctx.rt!, variant, controller.signal);
+      const { task, result } = await syncNfoTask(ctx.rt!, { ...variant, apply: true }, controller.signal);
       if (!result) throw new AppError(`任务 #${task.id} 没有结果`, EXIT.INTERNAL);
       return { ...result, taskId: task.id };
     },
@@ -971,10 +974,10 @@ export const COMMANDS: Command[] = [
 
   {
     name: "task",
-    summary: "任务: list | show <id> | retry <id> | cancel <id> —— 批量操作的进度与恢复",
+    summary: "任务: list | show <id> | retry <id> | cancel <id> | delete <id> —— 批量操作的进度与恢复",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "list | show | retry | cancel", positional: true, default: "list" },
+      { name: "action", type: "string", description: "list | show | retry | cancel | delete", positional: true, default: "list" },
       { name: "id", type: "number", description: "任务号", positional: true },
       { name: "limit", type: "number", description: "list 条数", default: 10 },
     ],
@@ -994,6 +997,13 @@ export const COMMANDS: Command[] = [
           file.includes(String(id).padStart(6, "0")),
         );
         return { task, log: log ?? null };
+      }
+
+      if (action === "delete") {
+        if (id === null) throw new AppError("用法: task delete <id>", EXIT.USAGE);
+        const removed = deleteTask(ctx.rt!, id);
+        if (!removed) throw new AppError(`任务不存在: ${id}`, EXIT.NOT_FOUND, { id });
+        return { deleted: id, note: "任务记录与它的日志一起删了 (不动任何媒体文件)" };
       }
 
       if (action === "retry") {
