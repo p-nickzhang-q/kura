@@ -73,7 +73,8 @@ import {
   type FieldKey,
   type ItemKey,
 } from "@kura/core";
-import type { TranslateReport, TaskRow } from "@kura/core";
+import { createTmdbClient, resolveTmdbEnv } from "@kura/core";
+import type { TranslateReport, TaskRow, TmdbShow } from "@kura/core";
 import type { ArgSpec, ParsedArgs } from "./args";
 import type { Output } from "./output";
 import { VERSION } from "./version";
@@ -918,20 +919,64 @@ export const COMMANDS: Command[] = [
       }
 
       if (action === "list") {
+        const tmdbEnv = resolveTmdbEnv(ctx.rt!.settings);
         return {
-          sources: registry.list().map((source) => ({
-            id: source.id,
-            label: source.label,
-            status: source.status,
-            missing: source.requirements(),
-            contentTypes: source.contentTypes,
-          })),
+          sources: [
+            ...registry.list().map((source) => ({
+              id: source.id,
+              label: source.label,
+              status: source.status,
+              missing: source.requirements(),
+              contentTypes: source.contentTypes,
+              domains: ["av"],
+            })),
+            // TMDB 不进 registry: 它按 TMDB id 取而不是番号, 也没有内容类型路由
+            {
+              id: "tmdb",
+              label: "TMDB",
+              status: "ready",
+              missing: tmdbEnv.apiKey ? [] : ["KURA_TMDB_API_KEY"],
+              contentTypes: [],
+              domains: ["movie", "tv"],
+            },
+          ],
         };
       }
 
       if (action === "test") {
         const id = args.positionals.id;
         if (!id) throw new AppError("用法: source test <id> [--probe SSIS-001]", EXIT.USAGE);
+
+        if (id === "tmdb") {
+          // 影视域的自检: 拿一部固定剧验证 key、语言与集列表三层都通
+          const tmdb = createTmdbClient({ http, env: resolveTmdbEnv(ctx.rt!.settings) });
+          const missingTmdb = tmdb.requirements();
+          if (missingTmdb.length > 0) {
+            throw new AppError("未配置 TMDB API key", EXIT.NEEDS_INPUT, {
+              missing: missingTmdb,
+              hint: "kura config set --tmdb-api-key <key>; key 到 https://www.themoviedb.org/settings/api 申请 (个人用途免费)",
+            });
+          }
+          const probe = String(args.options.probe ?? "1429");
+          const id2 = Number(probe);
+          if (!Number.isInteger(id2) || id2 <= 0) throw new AppError("--probe 用 TMDB 剧集 id (如 1429)", EXIT.USAGE);
+          const started = Date.now();
+          const show: TmdbShow | null = await tmdb.show(id2, { seasons: [1] });
+          if (!show) throw new AppError(`TMDB 没有这个 id: ${id2}`, EXIT.NOT_FOUND, { id: id2 });
+          return {
+            id: "tmdb",
+            ok: true,
+            status: "ok",
+            probe: id2,
+            title: show.fields.title ?? null,
+            originalTitle: show.originalTitle,
+            fields: Object.keys(show.fields),
+            seasons: show.seasons.map((season) => ({ season: season.season, episodes: season.declaredEpisodes })),
+            firstEpisodes: show.seasons[0]?.episodes.slice(0, 3).map((episode) => episode.title) ?? [],
+            durationMs: Date.now() - started,
+          };
+        }
+
         const source = registry.get(id);
         if (!source) throw new AppError(`未知来源: ${id}`, EXIT.NOT_FOUND, { id });
         if (source.status !== "ready") return { id, ok: false, status: "todo" };
@@ -1062,7 +1107,7 @@ export const COMMANDS: Command[] = [
 
   {
     name: "config",
-    summary: "配置: get (脱敏) | set --llm-base-url ... | test-llm (真发一次模型请求) | path",
+    summary: "配置: get (脱敏) | set --llm-base-url / --tmdb-api-key ... | test-llm (真发一次模型请求) | path",
     needsDb: true,
     args: [
       { name: "action", type: "string", description: "get | set | test-llm | path", positional: true, default: "get" },
@@ -1072,6 +1117,7 @@ export const COMMANDS: Command[] = [
       { name: "llm-base-url", type: "string", description: "set: OpenAI 兼容端点, 如 https://api.deepseek.com/v1" },
       { name: "llm-api-key", type: "string", description: "set: 模型 API Key" },
       { name: "llm-model", type: "string", description: "set: 模型名, 如 deepseek-chat" },
+      { name: "tmdb-api-key", type: "string", description: "set: TMDB API key (v3), 影视域来源凭据" },
       { name: "translate", type: "boolean", description: "set: 刮削后自动翻译" },
       { name: "no-translate", type: "boolean", description: "set: 关闭翻译开关", default: false },
       { name: "no-save-images", type: "boolean", description: "set: 图片只存缓存, 不复制到视频旁边", default: false },
@@ -1096,6 +1142,8 @@ export const COMMANDS: Command[] = [
           proxyFromEnv: Boolean(process.env.KURA_PROXY),
           llm: resolveLlm(ctx.rt!.settings) ? "已配置" : "未配置",
           translate: translateEnabled(ctx.rt!.settings),
+          tmdb: resolveTmdbEnv(ctx.rt!.settings).apiKey ? "已配置" : "未配置",
+          tmdbFromEnv: Boolean(process.env.KURA_TMDB_API_KEY),
         };
       }
 
@@ -1121,6 +1169,7 @@ export const COMMANDS: Command[] = [
         const patch: {
           dmm: { apiId?: string; affiliateId?: string };
           proxy?: string;
+          tmdbApiKey?: string;
           llm: { baseUrl?: string; apiKey?: string; model?: string };
           translate?: boolean;
           saveImages?: boolean;
@@ -1128,6 +1177,7 @@ export const COMMANDS: Command[] = [
         if (typeof args.options["dmm-api-id"] === "string") patch.dmm.apiId = args.options["dmm-api-id"];
         if (typeof args.options["dmm-affiliate-id"] === "string") patch.dmm.affiliateId = args.options["dmm-affiliate-id"];
         if (typeof args.options.proxy === "string") patch.proxy = args.options.proxy;
+        if (typeof args.options["tmdb-api-key"] === "string") patch.tmdbApiKey = args.options["tmdb-api-key"];
         if (typeof args.options["llm-base-url"] === "string") patch.llm.baseUrl = args.options["llm-base-url"];
         if (typeof args.options["llm-api-key"] === "string") patch.llm.apiKey = args.options["llm-api-key"];
         if (typeof args.options["llm-model"] === "string") patch.llm.model = args.options["llm-model"];

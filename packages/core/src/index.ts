@@ -8,7 +8,7 @@ export type { ExitCode } from "./exit";
 export { openRuntime, withRuntime } from "./runtime";
 export type { Runtime, RuntimeOptions } from "./runtime";
 export { resolvePaths } from "./paths";
-export { resolveLlm, translateEnabled } from "./config";
+export { resolveLlm, resolveTmdbEnv, translateEnabled } from "./config";
 export { AUTO_PROXY, EMPTY_SETTINGS, isDmmConfigured, loadSettings, maskSecret, maskSettings, proxyCandidates, resetProxyCache, resolveDmmEnv, resolveProxy, resolveProxyUrl, saveSettings, settingsPath } from "./config";
 export type { ProbeOptions } from "./config";
 export type { Settings } from "./config";
@@ -40,6 +40,18 @@ export type { ApplyResult, Library, Plan, PlanEntry, PlanInput, TargetState } fr
 export { defaultSources, DEFAULT_ROUTES, createRegistry, fixtureSource, routeFor } from "./sources";
 export { buildUrl, createDmmSource, matchDmmItem, normalizeCode, toRawFields } from "./sources/dmm";
 export { assertNotBlocked, assertNotLoginPage, createJavdbSource, parseDetail as parseJavdbDetail, parseSearch as parseJavdbSearch } from "./sources/javdb";
+export {
+  createTmdbClient,
+  parseTmdbKey,
+  redactKey,
+  redactUrl,
+  TMDB_BASE,
+  toMovieFields,
+  toSearchHits,
+  toSeason,
+  toShowFields,
+} from "./sources/tmdb";
+export type { TmdbClient, TmdbEnv, TmdbEpisode, TmdbSearchHit, TmdbSeason, TmdbShow } from "./sources/tmdb";
 export { createJavbusSource, numberMatch, numberVariants, parseDetail, parseSearch, selectCandidateIndex } from "./sources/javbus";
 export type { SearchCandidate } from "./sources/javbus";
 export type { DmmEnv, DmmItem, DmmResponse } from "./sources/dmm";

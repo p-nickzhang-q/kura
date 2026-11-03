@@ -1,0 +1,11 @@
+{
+  "id": 2002,
+  "title": "示例电影",
+  "original_title": "Example Movie",
+  "overview": "示例剧情。",
+  "release_date": "2019-05-17",
+  "runtime": 118,
+  "genres": [{ "id": 18, "name": "剧情" }],
+  "production_companies": [{ "id": 9, "name": "示例影业" }],
+  "credits": { "cast": [{ "name": "演员丙" }] }
+}

@@ -290,6 +290,14 @@ docs/dev           给 agent 的架构与契约
 
 [MIT](LICENSE)。
 
+## 数据来源与署名
+
+- 番号制来源:DMM / JavBus / JavDB(见 `docs/dev/sources.md`)
+- 普通影视来源:**TMDB**
+
+> 本产品使用 TMDB API,但**不代表或受 TMDB 认可**。
+> This product uses the TMDB API but is not endorsed or certified by TMDB.
+
 ## 致谢
 
 数据来源是各家公开站点与官方 API, 解析器与任务模型的设计参考了

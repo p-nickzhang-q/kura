@@ -144,6 +144,8 @@ stdout 仍只有最后那一个结果信封。Ctrl-C 会中断在途请求并提
 
 ```bash
 kura library add 剧库 /media/tv --domain tv          # av | movie | tv, 默认 av
+kura source test tmdb --probe 1429                   # 影视来源自检 (key + 语言 + 集列表)
+kura config set --tmdb-api-key <key>                 # key 存 config.json (0600), 不进日志
 kura library list                                    # 每行带 domain 与模板
 ```
 

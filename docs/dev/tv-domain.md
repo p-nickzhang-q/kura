@@ -92,9 +92,22 @@ scan(library)
 
 (v1 不出手 organize,模板先存着,给 v2 用。)
 
-## 四、来源:TMDB
+## 四、来源:TMDB(已实现)
 
-新增 `source`:`src/sources/tmdb.ts`,id `tmdb`。key 走 `config.json` 的 `tmdbApiKey`,可用环境变量 `KURA_TMDB_API_KEY` 覆盖;`kura source test tmdb` 校验。
+`src/sources/tmdb.ts`,id `tmdb`。key 走 `config.json` 的 `tmdbApiKey`(0600),可用环境变量
+`KURA_TMDB_API_KEY` 覆盖;`kura source test tmdb [--probe <tmdb 剧集 id>]` 做真请求自检。
+
+实现要点:
+
+- **不进 registry**:它按 TMDB id 取,不按番号,也没有内容类型路由;`source list` 里单列一行。
+- **语言回落是逐字段的**:`zh-CN` 拿到后用 `en-US` 只补空字段(`name`/`overview`,电影是 `title`/`overview`),
+  绝不整份覆盖 —— 中文条目常常有剧名没简介,整份回落会把中文标题冲成英文。
+- **季不走英文回落**:我们只用集级的 name/overview,逐集回落等于把请求数翻倍;缺中文就留空。
+- **key 脱敏**:`api_key` 在 query 里,而 HttpClient 会把 url 放进 `AppError.details` ——
+  所有错误出口都过 `redactKey`,把 `api_key=***`。不脱敏等于 key 直接进了 stdout 与 issue。
+- 401 → `NEEDS_INPUT`(key 不对,重试没用);404 → `NOT_FOUND`;5xx 交给 HttpClient 重试。
+- `originalTitle` 不塞进 `RawFields`:原文名与译文是一对,不该被别的来源逐字段顶掉,
+  由刮削层直接落 `items.title_original`。
 
 | 域 | 请求 | 落库 |
 |---|---|---|

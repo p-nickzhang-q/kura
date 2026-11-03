@@ -91,7 +91,14 @@ protocol.registerSchemesAsPrivileged([
   { scheme: "kura-file", privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
 
-let settings: Settings = { dmm: { apiId: "", affiliateId: "" }, proxy: "", llm: { baseUrl: "", apiKey: "", model: "" }, translate: false, saveImages: true };
+let settings: Settings = {
+  dmm: { apiId: "", affiliateId: "" },
+  proxy: "",
+  tmdbApiKey: "",
+  llm: { baseUrl: "", apiKey: "", model: "" },
+  translate: false,
+  saveImages: true,
+};
 
 /** Electron 主进程的 fetch: 跟随系统代理(Clash 开了系统代理/TUN 就直接生效)。 */
 function browserFetch(url: string, init: FetchInit): Promise<Response> {

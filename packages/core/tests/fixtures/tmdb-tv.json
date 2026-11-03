@@ -1,0 +1,16 @@
+{
+  "id": 1001,
+  "name": "示例剧名",
+  "original_name": "Example Show",
+  "overview": "示例简介。",
+  "first_air_date": "2013-04-07",
+  "episode_run_time": [24],
+  "genres": [{ "id": 16, "name": "动画" }, { "id": 10759, "name": "动作冒险" }],
+  "networks": [{ "id": 1, "name": "示例台" }],
+  "seasons": [
+    { "season_number": 0, "name": "特别篇", "episode_count": 2 },
+    { "season_number": 1, "name": "第 1 季", "episode_count": 3 },
+    { "season_number": 2, "name": "第 2 季", "episode_count": 2 }
+  ],
+  "credits": { "cast": [{ "name": "演员甲" }, { "name": "演员乙" }, { "name": "演员甲" }] }
+}

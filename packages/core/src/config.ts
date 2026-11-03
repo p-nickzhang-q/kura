@@ -21,6 +21,11 @@ export interface Settings {
    *  - URL    显式指定, 如 http://127.0.0.1:7890
    */
   proxy: string;
+  /**
+   * TMDB API key (v3 auth)。影视域唯一来源的凭据。
+   * 个人用途免费, 每个用户自己申请; 绝不打包进发行版。
+   */
+  tmdbApiKey: string;
   /** OpenAI 兼容端点。空值 = 未配置, 翻译不可用。 */
   llm: {
     baseUrl: string;
@@ -39,6 +44,7 @@ export interface Settings {
 export const EMPTY_SETTINGS: Settings = {
   dmm: { apiId: "", affiliateId: "" },
   proxy: "",
+  tmdbApiKey: "",
   llm: { baseUrl: "", apiKey: "", model: "" },
   translate: false,
   saveImages: true,
@@ -59,6 +65,7 @@ export function loadSettings(paths: Paths): Settings {
         affiliateId: String(raw.dmm?.affiliateId ?? ""),
       },
       proxy: String(raw.proxy ?? ""),
+      tmdbApiKey: String(raw.tmdbApiKey ?? ""),
       llm: {
         baseUrl: String(raw.llm?.baseUrl ?? ""),
         apiKey: String(raw.llm?.apiKey ?? ""),
@@ -79,6 +86,7 @@ export function saveSettings(
   patch: {
     dmm?: Partial<Settings["dmm"]>;
     proxy?: string;
+    tmdbApiKey?: string;
     llm?: Partial<Settings["llm"]>;
     translate?: boolean;
     saveImages?: boolean;
@@ -88,6 +96,7 @@ export function saveSettings(
   const next: Settings = {
     dmm: { ...current.dmm, ...(patch.dmm ?? {}) },
     proxy: patch.proxy !== undefined ? patch.proxy : current.proxy,
+    tmdbApiKey: patch.tmdbApiKey !== undefined ? patch.tmdbApiKey : current.tmdbApiKey,
     llm: { ...current.llm, ...(patch.llm ?? {}) },
     translate: patch.translate !== undefined ? patch.translate : current.translate,
     saveImages: patch.saveImages !== undefined ? patch.saveImages : (current.saveImages ?? true),
@@ -97,6 +106,15 @@ export function saveSettings(
   // 0600: 里面有 API 密钥。
   writeFileSync(settingsPath(paths), `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   return next;
+}
+
+/** TMDB key: 环境变量 > 配置文件。 */
+export function resolveTmdbEnv(
+  settings: Settings,
+  env: Record<string, string | undefined> = process.env,
+): { apiKey?: string } {
+  const apiKey = env.KURA_TMDB_API_KEY?.trim() || settings.tmdbApiKey?.trim() || undefined;
+  return { apiKey };
 }
 
 /** 环境变量优先, 便于 CI / 临时覆盖。 */
@@ -130,6 +148,7 @@ export function maskSettings(settings: Settings): Settings {
     },
     translate: Boolean(settings.translate),
     saveImages: settings.saveImages ?? true,
+    tmdbApiKey: maskSecret(settings.tmdbApiKey ?? ""),
     // 代理地址不含密钥, 原样展示便于排障。
     proxy: settings.proxy,
   };
