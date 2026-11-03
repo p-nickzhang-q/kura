@@ -1,0 +1,199 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createLibrary } from "../src/db/rows";
+import { openRuntime, type Runtime } from "../src/runtime";
+import { bindDirectory, countBindableDirs, listBindableDirs, setFileEpisode, unbindDirectory } from "../src/tasks/bind";
+import { listFiles, scan } from "../src/tasks/scan";
+import { AppError } from "../src/exit";
+
+let root: string;
+let rt: Runtime;
+let media: string;
+
+beforeEach(async () => {
+  root = await mkdtemp(join(tmpdir(), "kura-bind-"));
+  rt = await openRuntime({ dataDir: join(root, "data") });
+  media = join(root, "media");
+  await mkdir(media, { recursive: true });
+});
+
+afterEach(async () => {
+  rt.close();
+  await rm(root, { recursive: true, force: true });
+});
+
+async function makeShow(relative: string, files: string[]): Promise<string> {
+  const dir = join(media, relative);
+  await mkdir(dir, { recursive: true });
+  for (const file of files) await writeFile(join(dir, file), "x");
+  return dir;
+}
+
+describe("待绑定目录清单", () => {
+  test("一个季目录 3 个文件 → 一个候选 (剧目录是它的上一层)", async () => {
+    await makeShow("某剧 (2019)/Season 01", ["某剧 - S01E01.mkv", "某剧 - S01E02.mkv", "某剧 - S01E03.mkv"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    await scan(rt, { library });
+
+    const dirs = listBindableDirs(rt, { libraryId: library.id });
+    expect(dirs).toHaveLength(1);
+    expect(dirs[0]?.name).toBe("某剧 (2019)");
+    expect(dirs[0]?.files).toBe(3);
+    expect(dirs[0]?.parsed).toBe(3);
+    expect(dirs[0]?.seasons).toEqual([1]);
+    expect(countBindableDirs(rt, { libraryId: library.id })).toBe(1);
+  });
+
+  test("认不出集号的文件也算进它所在目录, 并拉低 parsed", async () => {
+    await makeShow("某剧", ["第1集.mp4", "花絮片段.mp4"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    await scan(rt, { library });
+
+    const dirs = listBindableDirs(rt, { libraryId: library.id });
+    expect(dirs[0]?.files).toBe(2);
+    expect(dirs[0]?.parsed).toBe(1);
+  });
+});
+
+describe("目录级绑定", () => {
+  test("绑 12 个文件: 建条目 + 建集 + 文件全部有身份", async () => {
+    const dir = join(media, "某剧", "Season 01");
+    await makeShow(
+      "某剧/Season 01",
+      Array.from({ length: 12 }, (_, i) => `某剧 - S01E${String(i + 1).padStart(2, "0")}.mkv`),
+    );
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    await scan(rt, { library });
+
+    const result = bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1399" });
+    expect(result.key).toBe("tmdb:tv:1399");
+    expect(result.bound).toBe(12);
+    expect(result.episodes).toBe(12);
+    expect(result.stillUnparsed).toEqual([]);
+
+    const item = rt.db.get<{ number: string; domain: string; content_type: string }>(
+      "select number, domain, content_type from items",
+    );
+    expect(item?.number).toBe("tmdb:tv:1399");
+    expect(item?.domain).toBe("tv");
+    // 影视条目没有内容类型 (列是 NOT NULL, 用空串)
+    expect(item?.content_type).toBe("");
+
+    const episodes = rt.db.all<{ season: number; episode: number }>(
+      "select season, episode from episodes where number = 'tmdb:tv:1399' order by episode",
+    );
+    expect(episodes).toHaveLength(12);
+    expect(episodes[11]).toEqual({ season: 1, episode: 12 });
+
+    // 绑完就不再是"未识别"
+    expect(listFiles(rt, { libraryId: library.id, unparsedOnly: true })).toHaveLength(0);
+    expect(countBindableDirs(rt, { libraryId: library.id })).toBe(0);
+    expect(dir.length).toBeGreaterThan(0);
+  });
+
+  test("干跑不写库", async () => {
+    await makeShow("某剧", ["第1集.mp4", "第2集.mp4"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    await scan(rt, { library });
+
+    const dry = bindDirectory(rt, {
+      libraryId: library.id,
+      dir: join(media, "某剧"),
+      key: "tmdb:tv:42",
+      dryRun: true,
+    });
+    expect(dry.bound).toBe(2);
+    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(0);
+    expect(listFiles(rt, { libraryId: library.id, unparsedOnly: true })).toHaveLength(2);
+  });
+
+  test("认不出集号的文件绑了目录也留着, 等 set-episode", async () => {
+    await makeShow("某剧", ["第1集.mp4", "特典映像.mp4"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    await scan(rt, { library });
+
+    const result = bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:7" });
+    expect(result.bound).toBe(2);
+    expect(result.episodes).toBe(1);
+    expect(result.stillUnparsed).toHaveLength(1);
+    // 文件有了身份(不再进未识别), 但没有集号
+    const files = listFiles(rt, { libraryId: library.id });
+    expect(files.every((file) => file.number === "tmdb:tv:7")).toBe(true);
+  });
+
+  test("域与身份种类不匹配直接拒 (tv 库绑电影 id)", async () => {
+    await makeShow("某剧", ["第1集.mp4"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    await scan(rt, { library });
+
+    expect(() =>
+      bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:movie:603" }),
+    ).toThrow(AppError);
+  });
+
+  test("不是 TMDB 身份直接拒", async () => {
+    await makeShow("某剧", ["第1集.mp4"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    await scan(rt, { library });
+    expect(() => bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "SSIS-915" })).toThrow(
+      /不是 TMDB 身份/,
+    );
+  });
+
+  test("已经绑过的文件不会被静默改绑", async () => {
+    await makeShow("某剧", ["第1集.mp4", "第2集.mp4"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1" });
+
+    expect(() =>
+      bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:2" }),
+    ).toThrow(/没有待绑定的文件/);
+    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(1);
+  });
+
+  test("解绑退回未识别; 条目没人指向时删掉", async () => {
+    await makeShow("某剧", ["第1集.mp4", "第2集.mp4"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1" });
+
+    expect(unbindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧") })).toBe(2);
+    expect(listFiles(rt, { libraryId: library.id, unparsedOnly: true })).toHaveLength(2);
+    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(0);
+    // 集跟着条目级联删除
+    expect(rt.db.get<{ c: number }>("select count(*) c from episodes")?.c).toBe(0);
+  });
+});
+
+describe("手工补集号", () => {
+  test("绑定后给认不出的文件指定集号, 集行跟着长出来", async () => {
+    await makeShow("某剧", ["第1集.mp4", "特典映像.mp4"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    await scan(rt, { library });
+    const bound = bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:9" });
+
+    const target = bound.stillUnparsed[0]!;
+    const result = setFileEpisode(rt, { path: target, season: 1, episode: 2 });
+    expect(result.number).toBe("tmdb:tv:9");
+
+    const episodes = rt.db.all<{ episode: number }>(
+      "select episode from episodes where number = 'tmdb:tv:9' order by episode",
+    );
+    expect(episodes.map((row) => row.episode)).toEqual([1, 2]);
+  });
+
+  test("文件不在索引里报 NOT_FOUND", () => {
+    expect(() => setFileEpisode(rt, { path: join(media, "nope.mp4"), episode: 1 })).toThrow(AppError);
+  });
+
+  test("集号必须是正整数", async () => {
+    await makeShow("某剧", ["第1集.mp4"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    await scan(rt, { library });
+    const path = listFiles(rt, { libraryId: library.id })[0]!.path;
+    expect(() => setFileEpisode(rt, { path, episode: 0 })).toThrow(/正整数/);
+  });
+});

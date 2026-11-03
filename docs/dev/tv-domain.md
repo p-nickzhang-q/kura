@@ -118,6 +118,25 @@ scan(library)
 
 `field_sources` 记 `tmdb`。`zh-CN` 缺字段时回落 `?language=en-US` 再取一次,**不机翻**。
 
+## 四之二、绑定(task/bind.ts)
+
+扫描只准备候选,`bindDirectory` 才让候选变成条目。粒度为**目录**(一个目录 = 一部剧)。
+
+```
+kura file dirs [--library 库]                       # 待绑定目录清单: 文件数 / 已解析集数 / 有哪些季
+kura file bind <目录> --tmdb tmdb:tv:1399 [--dry-run]
+kura file unbind <目录> [--library 库]
+kura file set-episode <路径> --episode 5 [--season 1]   # 绑了目录但文件名没集号的文件
+```
+
+规矩:
+
+- **只动 `number is null` 的文件**。已经绑过的不碰 —— 静默改绑会让"我以为只绑了这一部"变成灾难;要改先 `unbind`。
+- **域与身份种类必须一致**:tv 库绑 `tmdb:movie:...` 直接报 USAGE。
+- 认不出集号的文件绑了目录后**仍然有身份**(`number` 落上),但没有 `episodes` 行 —— 它们出现在 `BindResult.stillUnparsed`,等人 `set-episode`。
+- 记条目占位行时 `content_type` 存**空串**:它是 av 域的概念,而列是 `not null`(改成可空要重建表,不值得)。
+- `unbind` 把文件退回未识别;条目没有文件指向时一并删除(否则列表里会出现"0 个文件的剧")。
+
 ## 五、缺集
 
 ```
@@ -160,7 +179,7 @@ source test tmdb
 | T2 | 扫描按域分流 + 剧目录分组 + 集号解析(纯函数) | T1 | 假数据:1 个剧目录 12 个文件 → 1 个候选剧 + 12 个集,解析表覆盖第三节全部写法 |
 | T3 | `library add --domain`;建库不可改域;同目录跨域拒绝 | T1 | 同一根目录加第二个域的库直接报错 |
 | T4 | TMDB 来源(key 配置、`source test tmdb`、tv/movie/season 三个请求 + zh-CN 回落) | T1 | 录制 fixture 解析出剧字段与整季集列表 |
-| T5 | 未识别 → 目录级绑定(搜索 + 一次绑整目录;剩余文件留未识别可补集号) | T2,T4 | 绑定后该目录文件全部有 `number` 与 `(season,episode)` |
+| T5 ✅ | 未识别 → 目录级绑定(搜索 + 一次绑整目录;剩余文件留未识别可补集号) | T2,T4 | 绑定后该目录文件全部有 `number` 与 `(season,episode)` |
 | T6 | 刮削剧:剧级字段 + 各季集落 `episodes`(剧级任务记账) | T4,T5 | 一次刮削写出剧字段与该季全部集;缺集角标数字正确 |
 | T7 | 集级 NFO 导出(`tvshow.nfo` + 每集 nfo,单向、字段级、原子写) | T6 | 干跑出清单;`--apply` 后 Emby 能读;再跑一次 `changed: []` 不抖 mtime |
 | T8 | GUI:库类型角标、剧详情页季/集展开、缺集角标、未识别目录视图 | T5,T6 | 截图验收;`av` 域界面零变化 |

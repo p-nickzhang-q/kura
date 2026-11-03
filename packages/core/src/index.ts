@@ -64,6 +64,8 @@ export { actorIndexDrift, setItemActors } from "./db/actors";
 export type { ItemRow, MediaFileRow } from "./db/rows";
 
 export { countFiles, filePhase, listFiles, scan } from "./tasks/scan";
+export { bindDirectory, countBindableDirs, listBindableDirs, setFileEpisode, unbindDirectory } from "./tasks/bind";
+export type { BindableDir, BindResult } from "./tasks/bind";
 export { hasNetworkSource, mergeNfoFields, syncNfo, syncNfoTask } from "./tasks/nfo-sync";
 export type { NfoSyncEntry, NfoSyncOptions, NfoSyncProgress, NfoSyncReport } from "./tasks/nfo-sync";
 export { nfoPathFor, nfoToMetadata, parseNfo, readNfo, updateNfoContent } from "./domain/nfo";

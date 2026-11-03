@@ -48,6 +48,10 @@ import {
   syncNfoTask,
   retryTask,
   actorIndexDrift,
+  bindDirectory,
+  listBindableDirs,
+  setFileEpisode,
+  unbindDirectory,
   cancelTask,
   taskLogFiles,
   deleteTask,
@@ -110,6 +114,22 @@ function requireLibrary(ctx: CommandContext, ref: string) {
     throw new AppError(`媒体库不存在: ${ref}`, EXIT.NOT_FOUND, { library: ref });
   }
   return library;
+}
+
+/**
+ * bind / unbind 需要一个明确的库: 目录名在两个库里都可能存在。
+ * 只有一个库时省掉 --library; 多个库就要求显式指定, 免得绑错库。
+ */
+function requireSingleLibrary(ctx: CommandContext) {
+  const libraries = listLibraries(ctx.rt!.db);
+  const first = libraries[0];
+  if (!first) throw new AppError("还没有媒体库", EXIT.USAGE, { hint: "kura library add <名称> <根目录>" });
+  if (libraries.length > 1) {
+    throw new AppError("有多个媒体库, 请用 --library 指定", EXIT.USAGE, {
+      libraries: libraries.map((library) => library.name),
+    });
+  }
+  return first;
 }
 
 function parseContentType(value: unknown): ContentType | null {
@@ -648,17 +668,64 @@ export const COMMANDS: Command[] = [
 
   {
     name: "file",
-    summary: "文件: list [--library 库] [--unparsed] [--limit N] | reveal <番号> —— 看索引里的文件, 或查某部片在磁盘上的路径",
+    summary:
+      "文件: list [--library 库] [--unparsed] | reveal <番号> | dirs [--library 库] | bind <目录> --tmdb <身份> | unbind <目录> | set-episode <路径> --episode N [--season N]",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "list | reveal", positional: true, default: "list" },
-      { name: "number", type: "string", description: "reveal: 番号", positional: true },
+      { name: "action", type: "string", description: "list | reveal | dirs | bind | unbind | set-episode", positional: true, default: "list" },
+      { name: "number", type: "string", description: "reveal: 番号; bind/unbind: 目录; set-episode: 文件路径", positional: true },
       { name: "library", type: "string", description: "只看某个库" },
       { name: "unparsed", type: "boolean", description: "只看认不出番号的文件", default: false },
       { name: "limit", type: "number", description: "条数", default: 200 },
+      { name: "tmdb", type: "string", description: "bind: TMDB 身份, 如 tmdb:tv:1399" },
+      { name: "episode", type: "number", description: "set-episode: 集号" },
+      { name: "season", type: "number", description: "set-episode: 季号 (默认沿用索引里的, 再不行第 1 季)" },
+      { name: "dry-run", type: "boolean", description: "bind: 只报告会绑多少文件", default: false },
     ],
     async run(ctx, args) {
       const action = args.positionals.action ?? "list";
+
+      // 影视域: 列出待绑定的目录 (一个目录 = 一部剧的候选)
+      if (action === "dirs") {
+        const libraryRef = typeof args.options.library === "string" ? args.options.library : null;
+        const library = libraryRef ? requireLibrary(ctx, libraryRef) : null;
+        const dirs = listBindableDirs(ctx.rt!, {
+          libraryId: library?.id,
+          limit: Number(args.options.limit ?? 200),
+        });
+        return { count: dirs.length, dirs };
+      }
+
+      if (action === "bind") {
+        const dir = args.positionals.number;
+        const key = typeof args.options.tmdb === "string" ? args.options.tmdb : "";
+        if (!dir) throw new AppError("用法: file bind <目录> --tmdb tmdb:tv:1399", EXIT.USAGE);
+        if (!key) throw new AppError("缺少 --tmdb tmdb:tv:1399", EXIT.USAGE);
+        const library = args.options.library
+          ? requireLibrary(ctx, String(args.options.library))
+          : requireSingleLibrary(ctx);
+        return { result: bindDirectory(ctx.rt!, { libraryId: library.id, dir, key, dryRun: Boolean(args.options["dry-run"]) }) };
+      }
+
+      if (action === "unbind") {
+        const dir = args.positionals.number;
+        if (!dir) throw new AppError("用法: file unbind <目录> [--library 库]", EXIT.USAGE);
+        const library = args.options.library
+          ? requireLibrary(ctx, String(args.options.library))
+          : requireSingleLibrary(ctx);
+        return { unbound: unbindDirectory(ctx.rt!, { libraryId: library.id, dir }) };
+      }
+
+      if (action === "set-episode") {
+        const path = args.positionals.number;
+        if (!path) throw new AppError("用法: file set-episode <路径> --episode 5 [--season 1]", EXIT.USAGE);
+        const episode = Number(args.options.episode);
+        if (!Number.isInteger(episode) || episode <= 0) {
+          throw new AppError("缺少 --episode <正整数>", EXIT.USAGE);
+        }
+        const season = args.options.season === undefined ? undefined : Number(args.options.season);
+        return { result: setFileEpisode(ctx.rt!, { path, season, episode }) };
+      }
 
       if (action === "reveal") {
         const number = args.positionals.number;
