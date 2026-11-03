@@ -148,6 +148,8 @@ const unparsedPage = ref(0);
 const unparsedPageSize = 100;
 const progress = ref<{ index: number; total: number; key: string; ok: boolean } | null>(null);
 const tasks = ref<KuraTask[]>([]);
+/** 有多少个条目的 .nfo 还没和库对齐 (扫描/刮削后算出来, 点一下就去同步) */
+const nfoHint = ref(0);
 
 const config = ref<KuraConfig | null>(null);
 const apiIdInput = ref("");
@@ -469,7 +471,9 @@ async function scanLibrary(force: boolean): Promise<void> {
   const report = await run("扫描", () => window.kura.scan(selectedId.value!, { force }));
   if (report) {
     const { counts } = report;
-    note.value = `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}${counts.nfoImported ? ` · 从 NFO 读回 ${counts.nfoImported} 条` : ""}${counts.retyped ? ` · 修正内容类型 ${counts.retyped} 条` : ""}`;
+    note.value = `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}${counts.retyped ? ` · 修正内容类型 ${counts.retyped} 条` : ""}`;
+    // 扫描不再读 nfo: 有 nfo 没读进来时明确告诉人下一步做什么, 别静默丢功能。
+    nfoHint.value = counts.nfoPending ?? 0;
     page.value = 0;
     await refreshAll();
     return;
@@ -499,6 +503,8 @@ async function doScrape(): Promise<void> {
     note.value = batch.cancelled
       ? `已取消: 完成 ${batch.reports.length}/${batch.total} 条`
       : `刮削 ${batch.reports.length} 条, 失败 ${failed.length} 条${failed[0]?.error ? ` (${failed[0].error})` : ""}`;
+    // 刮完不代表 Emby 看得到: nfo 还是旧的。数一下有多少条能写回, 给一条可点的提示。
+    nfoHint.value = batch.reports.filter((report) => report.ok).length;
     await refreshAll();
   }
 }
@@ -656,6 +662,51 @@ async function retypeDetect(): Promise<void> {
   if (applied) {
     note.value = `已修正 ${applied.changes.length} 条内容类型`;
     await refreshAll();
+  }
+}
+
+/**
+ * 回写 NFO: 先干跑拿到清单, 人确认了才写。
+ *
+ * 这个动作改的是用户磁盘上的文件, 所以绝不允许"点了就跑" —— 而且默认跳过
+ * 没联网刮过的条目(回写只是把旧值抄一遍)。
+ */
+async function writeNfoFiles(): Promise<void> {
+  if (!selected.value) return;
+  // 干跑: 两个方向都先算出来给人看。这一步不落库、不写盘。
+  const preview = await run("检查 NFO", () => window.kura.syncNfo({ libraryId: selected.value!.id }));
+  if (!preview) return;
+  const work = preview.created + preview.written + preview.imported;
+  if (work === 0) {
+    note.value = `NFO 已经同步: 扫了 ${preview.scanned} 个文件, 没有要改的${preview.skipped ? ` (跳过 ${preview.skipped})` : ""}`;
+    return;
+  }
+  const samples = preview.entries
+    .filter((entry) => entry.action !== "skip")
+    .slice(0, 4)
+    .map((entry) => `${entry.action === "import" ? "读入" : "写出"} ${entry.number}: ${entry.changed.slice(0, 2).join(", ")}`)
+    .join("\n");
+  const ok = window.confirm(
+    `«${selected.value.name}» 同步 NFO:\n` +
+      `· 写回视频旁的文件 ${preview.written} 个, 新建 ${preview.created} 个\n` +
+      `· 从文件读回库里 ${preview.imported} 条\n\n` +
+      `${samples}${work > 4 ? `\n… 共 ${work} 项` : ""}\n\n` +
+      "写回只改 Kura 认识的字段 (标题/演员/片商/标签…), 别的工具写的标签原样保留; **视频文件不动**。\n确定执行吗?",
+  );
+  if (!ok) {
+    note.value = `已取消, 未改动 (${work} 项待同步)`;
+    return;
+  }
+  const applied = await run("同步 NFO", () =>
+    window.kura.syncNfo({ libraryId: selected.value!.id, apply: true }),
+  );
+  if (applied) {
+    note.value =
+      `NFO 同步完成: 写回 ${applied.written} · 新建 ${applied.created} · 读入 ${applied.imported}` +
+      (applied.errors ? ` · 失败 ${applied.errors}` : "") +
+      " —— 到 Emby 里重新扫描媒体库";
+    nfoHint.value = 0;
+    if (applied.imported > 0) await refreshAll();
   }
 }
 
@@ -893,6 +944,14 @@ async function testDmm(): Promise<void> {
               >
                 修正内容类型
               </button>
+              <button
+                type="button"
+                :disabled="busy || !selected"
+                title="双向同步: 库里没数据的读 nfo 补进来, 有网络数据的把库写回 .nfo (Emby/Jellyfin 读的是它)。先列清单, 确认后才动"
+                @click="writeNfoFiles"
+              >
+                同步 NFO
+              </button>
               <button type="button" :disabled="busy" @click="doScrape">刮削待处理</button>
               <button
                 type="button"
@@ -951,6 +1010,13 @@ async function testDmm(): Promise<void> {
           </ul>
         </div>
         <p v-else-if="note" class="note">{{ note }}</p>
+
+        <!-- 刮削/扫描之后的一致性提醒: 不自动写盘, 但必须把人顶到那一步 -->
+        <div v-if="nfoHint > 0 && !busy" class="nfo-hint">
+          <span>有 {{ nfoHint }} 个条目的 NFO 还没和库对齐 —— Emby / Jellyfin 读的是文件, 不是这里。</span>
+          <button type="button" class="chip" @click="writeNfoFiles">同步 NFO</button>
+          <button type="button" class="ghost" aria-label="忽略提示" title="忽略" @click="nfoHint = 0">×</button>
+        </div>
 
         <!-- 条目 -->
         <div v-if="tab === 'items'" class="pane items">
@@ -1926,6 +1992,24 @@ button:disabled {
 
 .spacer {
   flex: 1;
+}
+
+/* 一致性提醒: 一条色条就够, 别跟错误提示抢注意力 */
+.nfo-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 16px 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-xs);
+  background: var(--panel-2);
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+}
+
+.nfo-hint .chip {
+  margin-left: auto;
 }
 
 .st-running,

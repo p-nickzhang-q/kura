@@ -48,6 +48,12 @@ export { createLibrary, findLibrary, listLibraries, pinnedFields, renameLibrary,
 export type { ItemRow, MediaFileRow } from "./db/rows";
 
 export { countFiles, filePhase, listFiles, scan } from "./tasks/scan";
+export { hasNetworkSource, writeNfo } from "./tasks/nfo-write";
+export type { NfoWriteEntry, NfoWriteOptions, NfoWriteReport } from "./tasks/nfo-write";
+export { importNfoFields, syncNfo } from "./tasks/nfo-sync";
+export type { NfoSyncEntry, NfoSyncOptions, NfoSyncReport } from "./tasks/nfo-sync";
+export { nfoPathFor, nfoToMetadata, parseNfo, readNfo, updateNfoContent } from "./domain/nfo";
+export type { NfoFields, NfoUpdate } from "./domain/nfo";
 export type { MediaFileView } from "./tasks/scan";
 export type { ScanEvent, ScanOptions, ScanReport } from "./tasks/scan";
 

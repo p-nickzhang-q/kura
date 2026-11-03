@@ -41,6 +41,8 @@ import {
   runTask,
   listTasks,
   getTask,
+  writeNfo,
+  syncNfo,
   retryTask,
   cancelTask,
   taskLogFiles,
@@ -236,7 +238,7 @@ export const COMMANDS: Command[] = [
       return [
         `扫描完成: ${data.root}${data.dryRun ? " (dry-run)" : ""}`,
         `  新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 移除 ${counts.removed} · 未识别 ${counts.unparsed}`,
-        ...(counts.nfoImported ? [`  从 NFO 读回 ${counts.nfoImported} 条的元数据 (未联网)`] : []),
+        ...(counts.nfoPending ? [`  有 ${counts.nfoPending} 个条目的 .nfo 还没读进库 —— 跑 \`kura nfo sync\` 补上`] : []),
         ...(counts.retyped ? [`  修正内容类型 ${counts.retyped} 条 (解析器升级, 只动还没刮到标题的条目)`] : []),
         `  耗时 ${data.durationMs}ms`,
       ].join("\n");
@@ -385,6 +387,74 @@ export const COMMANDS: Command[] = [
         `  取到字段: ${single.filled.join(", ") || "无"}`,
       ];
       for (const failure of single.failures) lines.push(`  ! ${failure.site}: ${failure.error}`);
+      return lines.join("\n");
+    },
+  },
+
+  {
+    name: "nfo",
+    summary: "NFO 同步: sync [库|番号] —— 没数据的读 nfo 入库, 有数据的把库写回 nfo (默认 dry-run)",
+    needsDb: true,
+    args: [
+      { name: "action", type: "string", description: "sync (双向) | write (只写) | import (只读)", positional: true, default: "sync" },
+      { name: "target", type: "string", description: "库名/id, 或番号 (省略 = 所有库)", positional: true },
+      { name: "apply", type: "boolean", description: "真的写文件 (默认只列清单)", default: false },
+      { name: "include-unscraped", type: "boolean", description: "连没联网刮过 (只有 nfo/manual 来源) 的条目也写", default: false },
+      { name: "limit", type: "number", description: "最多处理多少个文件", default: 5000 },
+    ],
+    async run(ctx, args) {
+      const target = args.positionals.target ?? "";
+      const options = {
+        apply: Boolean(args.options.apply),
+        includeUnscraped: Boolean(args.options["include-unscraped"]),
+        limit: Number(args.options.limit ?? 5000),
+      } as { libraryId?: number; number?: string; apply: boolean; includeUnscraped: boolean; limit: number };
+      if (target) {
+        // 先当库名找, 找不到再当番号 —— 番号不会是库名, 两个命名空间撞不了。
+        const library = findLibrary(ctx.rt!.db, target);
+        if (library) options.libraryId = library.id;
+        else options.number = target;
+      }
+      const action = args.positionals.action ?? "sync";
+      if (action === "write") return writeNfo(ctx.rt!, options);
+      if (action === "import") return { ...syncNfo(ctx.rt!, { ...options, writeOnly: false, readOnly: true }) };
+      if (action !== "sync") throw new AppError(`未知动作: ${action} (sync | write | import)`, EXIT.USAGE);
+      return syncNfo(ctx.rt!, options);
+    },
+    render(data: {
+      dryRun: boolean;
+      scanned: number;
+      created: number;
+      skipped: number;
+      errors: number;
+      imported?: number;
+      written?: number;
+      updated?: number;
+      entries: { number: string; nfoPath: string; status?: string; action?: string; reason?: string; changed: string[]; error?: string }[];
+      [key: string]: unknown;
+    }) {
+      const statusOf = (entry: { status?: string; action?: string }): string => entry.action ?? entry.status ?? "skip";
+      const written = data.written ?? data.updated ?? 0;
+      const imported = data.imported ?? 0;
+      const lines = [
+        `扫描 ${data.scanned} 个文件: 写回 ${written} · 新建 ${data.created} · 读入 ${imported} · 跳过 ${data.skipped}${data.errors ? ` · 失败 ${data.errors}` : ""}`,
+      ];
+      const done = data.entries.filter((item) => statusOf(item) !== "skip");
+      const ACTION_LABEL: Record<string, string> = { create: "新建", write: "写回", import: "读入" };
+      for (const entry of done.slice(0, 40)) {
+        lines.push(`  ${entry.number}  ${ACTION_LABEL[statusOf(entry)] ?? statusOf(entry)}  ${entry.nfoPath}`);
+        for (const change of entry.changed.slice(0, 6)) lines.push(`      ${change}`);
+        if (entry.changed.length > 6) lines.push(`      … 还有 ${entry.changed.length - 6} 项`);
+        if (entry.error) lines.push(`      ✗ ${entry.error}`);
+      }
+      const skips = new Map<string, number>();
+      for (const entry of data.entries.filter((item) => statusOf(item) === "skip")) {
+        const reason = entry.reason ?? "未知原因";
+        skips.set(reason, (skips.get(reason) ?? 0) + 1);
+      }
+      for (const [reason, count] of skips) lines.push(`  跳过 ${count} 个: ${reason}`);
+      if (done.length > 40) lines.push(`  … 还有 ${done.length - 40} 个文件`);
+      lines.push(data.dryRun ? "(dry-run, 没动任何文件; 加 --apply 写入)" : "已写入。Emby/Jellyfin 里重新扫描媒体库即可看到新元数据");
       return lines.join("\n");
     },
   },

@@ -2,7 +2,9 @@ import { readdir, stat } from "node:fs/promises";
 import { AppError, EXIT } from "../exit";
 import { extname, join } from "node:path";
 import { detectContentType, extractNumber, parseFileInfo } from "../domain/identify";
-import { nfoToMetadata, readNfo } from "../domain/nfo";
+import { existsSync } from "node:fs";
+import { nfoPathFor } from "../domain/nfo";
+import { hasNetworkSource } from "./nfo-sync";
 import type { Library } from "../domain/materialize";
 import { metadataColumns, parsePhase, stringify, type MediaFileRow } from "../db/rows";
 import type { FileInfo } from "../domain/types";
@@ -28,8 +30,13 @@ export interface ScanReport {
     unchanged: number;
     removed: number;
     unparsed: number;
-    /** 从视频旁边的 .nfo 捞回元数据的条目数 (换电脑/换硬盘场景)。 */
-    nfoImported: number;
+    /**
+     * 视频旁边有 .nfo、但库里该条目还没有网络来源的个数。
+     *
+     * scan 自己不再读 nfo 入库 —— 那是 `nfo sync` 的活(双向, 且共用一份实现)。
+     * 这里只报数, 免得"换电脑重扫"这条路上的人不知道下一步该做什么。
+     */
+    nfoPending: number;
     /**
      * 修正了内容类型的条数。
      *
@@ -89,7 +96,7 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
     known.set(row.path, row);
   }
 
-  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, nfoImported: 0, retyped: 0 };
+  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, nfoPending: 0, retyped: 0 };
   const seen = new Set<string>();
   // 同一个番号可能对应多个文件, nfo 只读一次。
   const nfoChecked = new Set<string>();
@@ -109,9 +116,10 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
       if (!number) counts.unparsed++;
 
       // 空条目的元数据可以从旁边的 nfo 捞回来 —— 换电脑时数据库是空的, 这一步能省掉全部刮削。
-      if (number && !dryRun && !nfoChecked.has(number)) {
+      // 只数, 不读: 读 nfo 是 `nfo sync` 的事。
+      if (number && !nfoChecked.has(number)) {
         nfoChecked.add(number);
-        if (importNfo(rt, number, file.path)) counts.nfoImported++;
+        if (existsSync(nfoPathFor(file.path)) && !hasNetworkSource(fieldSourcesOf(rt, number))) counts.nfoPending++;
       }
 
       // 类型自愈必须在 unchanged 短路之前: 文件没变, 但解析器修好了。
@@ -279,25 +287,19 @@ function retypeUntouched(rt: Runtime, number: string, detected: string): boolean
   return true;
 }
 
-function importNfo(rt: Runtime, number: string, videoPath: string): boolean {
-  const row = rt.db.get<{ title: string | null }>("select title from items where number = ?", [number]);
-  if (row?.title) return false;
+function fieldSourcesOf(rt: Runtime, number: string): Record<string, string> {
+  const row = rt.db.get<{ field_sources: string | null }>("select field_sources from items where number = ?", [number]);
+  return parseFieldSources(row?.field_sources);
+}
 
-  const fields = readNfo(videoPath);
-  if (!fields) return false;
-
-  const metadata = nfoToMetadata(fields, number);
-  const columns = metadataColumns(metadata);
-  const names = Object.keys(columns);
-  rt.db.run(
-    `insert into items (${names.join(", ")}, updated_at) values (${names.map(() => "?").join(", ")}, unixepoch())
-     on conflict(number) do update set ${names
-       .filter((name) => name !== "number")
-       .map((name) => `${name} = excluded.${name}`)
-       .join(", ")}, updated_at = unixepoch()`,
-    names.map((name) => columns[name]),
-  );
-  return true;
+function parseFieldSources(raw: string | null | undefined): Record<string, string> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
 }
 
 async function walk(dir: string, out: Found[]): Promise<void> {

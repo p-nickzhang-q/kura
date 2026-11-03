@@ -52,6 +52,8 @@ import {
   countFiles,
   listTasks,
   getTask,
+  writeNfo,
+  syncNfo,
   listLibraries,
   openRuntime,
   resolvePaths,
@@ -619,6 +621,27 @@ function registerIpc(): void {
     shell.showItemInFolder(path);
     return true;
   });
+
+  // NFO 双向同步: Emby/Jellyfin 读的是文件, 不是这个库。
+  // 一次过: 库里没网络数据的读 nfo 入库, 有数据的把库写回 nfo。
+  ipcMain.handle("nfo:sync", (_event, input: { libraryId?: number; number?: string; apply?: boolean; includeUnscraped?: boolean } = {}) =>
+    syncNfo(mustRuntime(), {
+      ...(input.libraryId !== undefined ? { libraryId: input.libraryId } : {}),
+      ...(input.number ? { number: input.number } : {}),
+      apply: input.apply === true,
+      includeUnscraped: input.includeUnscraped === true,
+    }),
+  );
+
+  // 只写不读, 给"我知道自己在干什么"的场景留个口子
+  ipcMain.handle("nfo:write", (_event, input: { libraryId?: number; number?: string; apply?: boolean; includeUnscraped?: boolean } = {}) =>
+    writeNfo(mustRuntime(), {
+      ...(input.libraryId !== undefined ? { libraryId: input.libraryId } : {}),
+      ...(input.number ? { number: input.number } : {}),
+      apply: input.apply === true,
+      includeUnscraped: input.includeUnscraped === true,
+    }),
+  );
 
   ipcMain.handle("tasks:list", (_event, input: { limit?: number } = {}) =>
     listTasks(mustRuntime(), { limit: input.limit ?? 20 }),

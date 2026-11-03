@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld("kura", {
   retypeItem: (key, contentType) => ipcRenderer.invoke("item:retype", { key, contentType }),
   retypeDetect: (apply = false) => ipcRenderer.invoke("item:retype-detect", { apply }),
   openDataDir: () => ipcRenderer.invoke("data:open"),
+  syncNfo: (input) => ipcRenderer.invoke("nfo:sync", input),
+  writeNfo: (input) => ipcRenderer.invoke("nfo:write", input),
   tasks: (limit) => ipcRenderer.invoke("tasks:list", { limit }),
   retryTask: (id) => ipcRenderer.invoke("tasks:retry", { id }),
   updateItem: (input) => ipcRenderer.invoke("item:update", input),

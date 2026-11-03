@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { load } from "cheerio";
+import { escapeXml } from "./materialize";
 import type { Metadata } from "./types";
 
 /**
@@ -126,4 +127,148 @@ export function nfoToMetadata(fields: NfoFields, number: string): Metadata {
 /** 只是为了导出给测试/调试用。 */
 export function nfoBaseName(videoPath: string): string {
   return basename(videoPath, extname(videoPath));
+}
+
+/**
+ * 就地更新一份已有 nfo 里 **Kura 认识的那些字段**, 其余原样保留。
+ *
+ * 为什么不整份重写(`buildNfo`): 用户的 nfo 多半是别的工具生成的, 里面有 Kura 完全不
+ * 认识的标签 —— `<outline>` `<originalplot>` `<sorttitle>` `<mpaa>` `<maker>`
+ * `<publisher>` `<poster>` `<cover>` `<website>` `<javdbsearchid>`、actor 里的 `<type>`…
+ * 整份重写会把这些统统删掉, 而 Emby 读的正是这些文件。所以这里的规矩是:
+ *
+ *  - 单值字段: Kura 有值才替换, Kura 没值就留着原样(别把对得上的抹掉);
+ *  - 演员: 按顺序就地改 `<name>`, 保留同一个 `<actor>` 里的其它子元素;
+ *  - 标签/导演: 取并集 —— 只追加 Kura 有、文件里没有的, 不删文件里多出来的;
+ *  - 其它标签: 一个字都不碰。
+ */
+export interface NfoUpdate {
+  content: string;
+  /** 人话的差异清单, 例如 `演员 吉根柚莉爱 → 吉根ゆりあ`; 空数组表示内容没变。 */
+  changed: string[];
+}
+
+function asText(value: string | number | undefined | null): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const text = String(value).trim();
+  return text.length > 0 ? text : undefined;
+}
+
+export function updateNfoContent(original: string, metadata: Metadata): NfoUpdate {
+  // decodeEntities: false —— 否则中文会被写成 &#x767d; 这种实体, 文件给人打开就没法看了。
+  // 代价是写入时要自己转义(`escapeXml`), 读取比较也按转义后的形态比, 否则每次都判"变了"。
+  const $ = load(original, { xmlMode: true, decodeEntities: false } as Parameters<typeof load>[1]);
+  const root = $("movie").length > 0 ? $("movie").first() : $("episodedetails").first();
+  const changed: string[] = [];
+  if (root.length === 0) return { content: original, changed };
+
+  const own = (tag: string) => root.children(tag);
+
+  const setSingle = (tag: string, value: string | undefined, label: string): void => {
+    if (!value) return;
+    const nodes = own(tag);
+    if (nodes.length === 0) {
+      root.append($(`<${tag}/>`).text(escapeXml(value)));
+      changed.push(`${label} 新增 ${value}`);
+      return;
+    }
+    const current = nodes.first().text().trim();
+    if (current === value || current === escapeXml(value)) {
+      if (nodes.length === 1) return;
+    }
+    nodes.first().text(escapeXml(value));
+    nodes.slice(1).remove();
+    changed.push(`${label} ${current || "(空)"} → ${value}`);
+  };
+
+  const series = asText(metadata.series);
+  const setBlock = (): void => {
+    if (!series) return;
+    const sets = own("set");
+    if (sets.length === 0) {
+      const block = $("<set/>");
+      block.append($("<name/>").text(escapeXml(series)));
+      root.append(block);
+      changed.push(`系列 (新增) ${series}`);
+      return;
+    }
+    const name = sets.first().children("name");
+    const current = name.length > 0 ? name.first().text().trim() : "";
+    if (current === series && sets.length === 1) return;
+    if (name.length > 0) name.first().text(escapeXml(series));
+    else sets.first().append($("<name/>").text(escapeXml(series)));
+    sets.slice(1).remove();
+    changed.push(`系列 ${current || "(无)"} → ${series}`);
+  };
+
+  /** 演员按序号就地改名: 保住 `<type>` `<role>` `<thumb>` 这些 Kura 不认识的子元素。 */
+  const setActors = (): void => {
+    const actors = (metadata.actors ?? []).map((name) => name.trim()).filter(Boolean);
+    if (actors.length === 0) return;
+    const blocks = own("actor");
+    const diffs: string[] = [];
+    blocks.each((index, element) => {
+      if (index >= actors.length) return;
+      const block = $(element);
+      const name = block.children("name");
+      const current = name.length > 0 ? name.first().text().trim() : "";
+      if (current !== actors[index]) diffs.push(`${current || "(无)"} → ${actors[index]!}`);
+      if (name.length > 0) name.first().text(escapeXml(actors[index]!));
+      else block.prepend($("<name/>").text(escapeXml(actors[index]!)));
+    });
+    if (blocks.length > actors.length) {
+      blocks.slice(actors.length).remove();
+      diffs.push(`删除多余演员 ${blocks.length - actors.length} 个`);
+    }
+    for (let index = blocks.length; index < actors.length; index++) {
+      const block = $("<actor/>");
+      block.append($("<name/>").text(escapeXml(actors[index]!)));
+      root.append(block);
+      diffs.push(`(新增) ${actors[index]!}`);
+    }
+    if (diffs.length > 0) changed.push(`演员 ${diffs.join("; ")}`);
+  };
+
+  /** 标签/导演取并集: 文件里多出来的(AVC1、480P、中文字幕…)是别的工具的产物, 不删。 */
+  const unionAppend = (tag: string, values: string[] | undefined, label: string): void => {
+    const items = (values ?? []).map((value) => value.trim()).filter(Boolean);
+    if (items.length === 0) return;
+    const existing = own(tag)
+      .map((_index, element) => $(element).text().trim())
+      .get();
+    const missing = items.filter((item) => !existing.includes(item));
+    for (const item of missing) root.append($(`<${tag}/>`).text(escapeXml(item)));
+    if (missing.length > 0) changed.push(`${label} 新增 ${missing.length} 个`);
+  };
+
+  const title = asText(metadata.title);
+  const originalTitle = asText(metadata.titleOriginal) ?? asText(metadata.number) ?? asText(metadata.key);
+  setSingle("title", title, "标题");
+  setSingle("originaltitle", originalTitle, "原名");
+  setSingle("plot", asText(metadata.plot), "简介");
+  setSingle("premiered", asText(metadata.release_date), "发行日期");
+  setSingle("runtime", asText(metadata.duration_min), "时长");
+  setSingle("num", asText(metadata.number), "番号");
+  setSingle("studio", asText(metadata.studio), "片商");
+  setSingle("label", asText(metadata.label), "厂牌");
+  setSingle("series", series, "系列字段");
+  setBlock();
+  setActors();
+  unionAppend("tag", metadata.tags, "标签");
+  unionAppend("director", metadata.directors, "导演");
+
+  // 自己的 id: Emby 不读, 但重扫时能认出这行是我们写的。
+  const ids = own("uniqueid").filter((_index, element) => ($(element).attr("type") ?? "").toLowerCase() === "kura");
+  if (ids.length === 0) {
+    const node = $('<uniqueid type="kura" default="true"/>');
+    root.append(node.text(escapeXml(metadata.key)));
+  } else if (ids.first().text().trim() !== metadata.key) {
+    ids.first().text(escapeXml(metadata.key));
+  }
+
+  // 没差异就原样返回: 调用方据此跳过写盘, 免得只是格式化就把文件的 mtime 抖一遍。
+  if (changed.length === 0) return { content: original, changed: [] };
+
+  const content = `${$.xml().trimEnd()}\n`;
+  return { content, changed };
 }

@@ -82,6 +82,14 @@ kura item retype --detect --json            # 只列, 不动数据
 kura item retype --detect --apply --json    # 真的改
 kura item retype SSIS-915 censored --json   # 单条
 
+# NFO 双向同步: 先看清单, 确认后写盘 (只改 Kura 认识的字段, 其它标签原样保留)
+kura nfo sync --json                  # 所有库, dry-run
+kura nfo sync 电影库 --json              # 单个库
+kura nfo sync BOBB-371 --json          # 单个番号
+kura nfo sync --apply --json           # 真的写
+kura nfo write --json                  # 只写不读
+kura nfo import --json                 # 只读不写
+
 # 手改字段并锁定: 锁定的字段重新刮削不覆盖
 kura item set ABC-123 --title "我改的标题" --json
 kura item lock ABC-123 title,plot --json

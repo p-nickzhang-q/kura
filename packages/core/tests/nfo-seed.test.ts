@@ -7,6 +7,7 @@ import { openRuntime } from "../src/runtime";
 import { nfoToMetadata, type NfoFields } from "../src/domain/nfo";
 import { defaultSources } from "../src/sources";
 import { scan } from "../src/tasks/scan";
+import { syncNfo } from "../src/tasks/nfo-sync";
 import { countPending, listItems, pendingKeys, scrape } from "../src/tasks/scrape";
 
 /**
@@ -64,6 +65,8 @@ describe("nfo 只是种子", () => {
     try {
       const library = createLibrary(rt.db, { name: "旧库", root: libraryRoot });
       await scan(rt, { library });
+      // nfo 只由 sync 读入(scan 不再读), 这条路径就是换机器/旧库的场景
+      syncNfo(rt, { libraryId: library.id, apply: true });
 
       // 标题已经被 NFO 种进去了 —— 但它一次网络请求都没发过
       expect(getItem(rt, "ABC-123")?.title).toContain("旧库标题");
@@ -86,6 +89,8 @@ describe("nfo 只是种子", () => {
     try {
       const library = createLibrary(rt.db, { name: "旧库", root: libraryRoot });
       await scan(rt, { library });
+      // nfo 只由 sync 读入(scan 不再读), 这条路径就是换机器/旧库的场景
+      syncNfo(rt, { libraryId: library.id, apply: true });
 
       await scrape(rt, {
         key: { value: "ABC-123", number: "ABC-123", contentType: "censored" },
@@ -112,6 +117,8 @@ describe("nfo 只是种子", () => {
     try {
       const library = createLibrary(rt.db, { name: "旧库", root: libraryRoot });
       await scan(rt, { library });
+      // nfo 只由 sync 读入(scan 不再读), 这条路径就是换机器/旧库的场景
+      syncNfo(rt, { libraryId: library.id, apply: true });
 
       await scrape(rt, {
         key: { value: "ABC-123", number: "ABC-123", contentType: "censored" },

@@ -76,6 +76,29 @@ NFO 里对得上的演员抹掉, 条目看起来"越刮越空"。
 手工改过的字段记成 `manual` —— 它和 `nfo` 一样不属于"网络来源", 但同样说明
 "这条不是还没刮", 所以手工改过的标题不会被下一轮批量刮削当成空条目重新抓。
 
+## NFO 同步: 读写是同一件事
+
+Emby / Jellyfin / Kodi 读的是**视频旁的 `.nfo` 文件**, 不是 Kura 的库。所以"读 nfo"和"写 nfo"
+必须成对出现, 否则两边永远对不上: 只读不写, 播放器里是旧演员; 只写不读, 换机器就丢元数据。
+
+`nfo sync` 一次过, 每个文件只做一个方向, 规则确定、没有需要人裁决的冲突:
+
+| 库里的状态 | 动作 |
+|---|---|
+| 没有网络来源(`field_sources` 只有 `nfo`/`manual`) | 读 nfo → 只补**空字段**, 并记 `nfo` 来源 |
+| 有网络来源 | 写回 nfo: 改 Kura 认识的字段, 其它标签原样保留 |
+| 旁边没有 nfo | 新建一份 `buildNfo` |
+
+`scan` **不再读 nfo 入库**(它只读磁盘元信息), 但会数出 `counts.nfoPending` 并提示跑 `nfo sync`。
+两个动作共用同一份 `importNfoFields()`, 不会出现"扫描读的是 A、同步读的是 B"。
+
+写回是**字段级**的(`updateNfoContent`), 不是整份重写: 用户的 nfo 多半由别的工具生成, 里面有
+`<outline>` `<originalplot>` `<sorttitle>` `<mpaa>` `<maker>` `<poster>` `<website>`、actor 里的
+`<type>` 等等 Kura 完全不认识的标签 —— 整份重写等于删掉它们, 而播放器读的正是这些。
+标签与导演取**并集**(只追加, 不删别的工具写的 `480P`/`中文字幕`), 值没变就不写盘(不抖 mtime)。
+
+与 `organize` 的边界: 同步**不动视频、不改名、不建目录**。新建 nfo、移动文件属于整理。
+
 ## 任务记录
 
 `tasks` 表只在走 `*Task` 版本时才写入:`scrapePendingTask` / `translatePendingTask`。

@@ -8,6 +8,7 @@ import { openRuntime } from "../src/runtime";
 import { createLibrary } from "../src/db/rows";
 import { scan } from "../src/tasks/scan";
 import { countItems, listItems } from "../src/tasks/scrape";
+import { syncNfo } from "../src/tasks/nfo-sync";
 import type { Metadata } from "../src/domain/types";
 
 const metadata: Metadata = {
@@ -57,7 +58,7 @@ describe("nfo 回读", () => {
     expect(parseNfo("随便一段文本")).toBeNull();
   });
 
-  test("换电脑场景: 空库 + 视频旁的 nfo, 重扫一次就把元数据捞回来", async () => {
+  test("换电脑场景: 扫一遍只报数, 元数据由 nfo sync 捞回来", async () => {
     const dir = tempDir("nfo-scan");
     const media = join(dir, "media");
     mkdirSync(media, { recursive: true });
@@ -68,16 +69,21 @@ describe("nfo 回读", () => {
     const library = createLibrary(rt.db, { name: "库", root: media });
     const report = await scan(rt, { library });
 
-    expect(report.counts.nfoImported).toBe(1);
+    // scan 不再读 nfo 入库, 但必须告诉人"有 nfo 还没读进来"
+    expect(report.counts.nfoPending).toBe(1);
+    expect(listItems(rt, { q: "SSIS-001" })[0]?.title).toBeFalsy();
+
+    const synced = syncNfo(rt, { libraryId: library.id, apply: true });
+    expect(synced.imported).toBe(1);
     const [item] = listItems(rt, { q: "SSIS-001" });
     expect(item?.title).toBe("被翻译过的标题");
     expect(item?.titleOriginal).toBe("翻訳前のタイトル");
     expect(item?.release_date).toBe("2024-05-01");
     expect(item?.actors).toEqual(["演员一", "演员二"]);
 
-    // 已经有标题的条目不该被 nfo 覆盖回去 (再扫一遍, 数量不变)
-    await scan(rt, { library });
-    expect(countItems(rt, {})).toBe(1);
+    // 再同步一次: 库里已经满了, 读方向没东西可补; 写方向默认不新建, 也不会动既有 nfo
+    const again = syncNfo(rt, { libraryId: library.id, apply: true });
+    expect(again.imported).toBe(0);
     expect(listItems(rt, { q: "SSIS-001" })[0]?.title).toBe("被翻译过的标题");
     rt.close();
     rmSync(dir, { recursive: true, force: true });
@@ -93,7 +99,7 @@ describe("nfo 回读", () => {
     const library = createLibrary(rt.db, { name: "库", root: media });
     const report = await scan(rt, { library });
 
-    expect(report.counts.nfoImported).toBe(0);
+    expect(report.counts.nfoPending).toBe(0);
     expect(readNfo(join(media, "SSIS-002.mkv"))).toBeNull();
     rt.close();
     rmSync(dir, { recursive: true, force: true });

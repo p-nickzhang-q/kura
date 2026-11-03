@@ -58,7 +58,7 @@ interface KuraScanReport {
     unchanged: number;
     removed: number;
     unparsed: number;
-    nfoImported: number;
+    nfoPending: number;
     retyped: number;
   };
   durationMs: number;
@@ -214,6 +214,25 @@ interface KuraBridge {
   openDataDir(): Promise<{ dir: string }>;
   tasks(limit?: number): Promise<KuraTask[]>;
   retryTask(id: number): Promise<{ taskId: number; type: string }>;
+  writeNfo(input?: { libraryId?: number; number?: string; apply?: boolean; includeUnscraped?: boolean }): Promise<{
+    dryRun: boolean;
+    scanned: number;
+    created: number;
+    updated: number;
+    skipped: number;
+    errors: number;
+    entries: { number: string; nfoPath: string; status: string; reason?: string; changed: string[]; error?: string }[];
+  }>;
+  syncNfo(input?: { libraryId?: number; number?: string; apply?: boolean; includeUnscraped?: boolean }): Promise<{
+    dryRun: boolean;
+    scanned: number;
+    created: number;
+    written: number;
+    imported: number;
+    skipped: number;
+    errors: number;
+    entries: { number: string; nfoPath: string; action: string; reason?: string; changed: string[]; error?: string }[];
+  }>;
   updateItem(input: { key: string; pin?: string[]; unpin?: string[] }): Promise<KuraItem>;
   scrapeKeys(keys: string[]): Promise<{ count: number; results: { key: string; ok: boolean; filled: number; error?: string }[] }>;
   fetchPoster(key: string): Promise<{
