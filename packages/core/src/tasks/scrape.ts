@@ -539,13 +539,14 @@ function itemFilters(options: Omit<ListItemOptions, "limit" | "offset">): { wher
     }
   }
 
-  // 列表筛选与 countPending/countExhausted 必须同一口径, 否则"未刮削 6"点进去是另一批。
+  // 列表筛选必须与 countPending / countExhausted **逐字一致**, 否则"未刮削 0"点进去却是 76 条。
+  // 三个状态现在是互斥的: 未刮削 = 还能自动跑的, 已达上限 = 试满次数需要人重试的。
   if (options.state === "unscraped") {
-    where.push(pendingWhere("items."));
+    where.push(`(${pendingWhere("items.")} and items.scrape_attempts < ${MAX_SCRAPE_ATTEMPTS})`);
   } else if (options.state === "scraped") {
     where.push(`not ${pendingWhere("items.")}`);
   } else if (options.state === "exhausted") {
-    where.push(`items.scrape_attempts >= ${MAX_SCRAPE_ATTEMPTS}`);
+    where.push(`(${pendingWhere("items.")} and items.scrape_attempts >= ${MAX_SCRAPE_ATTEMPTS})`);
   }
 
   if (options.q) {

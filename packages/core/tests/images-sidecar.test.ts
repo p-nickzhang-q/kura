@@ -88,11 +88,11 @@ describe("按刮削状态筛选", () => {
     expect(countItems(rt, { state: "unscraped" })).toBe(1);
     expect(listItems(rt, { state: "scraped" })).toEqual([]);
 
-    // 失败到上限的是"未刮削"的子集, 不是互斥的另一类 ——
-    // 用户视角是"这条还没有元数据", 至于会不会自动重试是另一件事。
+    // 试满次数的条目从"未刮削"移到"已达上限" —— 界面上两个数字必须和点进去的行数一致,
+    // 否则会出现"未刮削 0"却列出 76 条的自相矛盾。
     rt.db.run("update items set scrape_attempts = 3 where number = 'SSIS-100'");
     expect(countItems(rt, { state: "exhausted" })).toBe(1);
-    expect(countItems(rt, { state: "unscraped" })).toBe(1);
+    expect(countItems(rt, { state: "unscraped" })).toBe(0);
 
     rt.close();
     rmSync(dir, { recursive: true, force: true });

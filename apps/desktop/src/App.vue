@@ -1140,7 +1140,7 @@ async function testDmm(): Promise<void> {
                 type="button"
                 class="chip"
                 :class="{ on: filters.state === 'unscraped' }"
-                :title="`只看还没有元数据的条目 (共 ${pendingTotal} 条)`"
+                :title="`还没联网刮到过、且还能自动重试的条目 (共 ${pendingTotal} 条)`"
                 @click="applyFilter('state', 'unscraped')"
               >
                 未刮削 {{ pendingTotal }}
@@ -1171,9 +1171,14 @@ async function testDmm(): Promise<void> {
               <span class="muted nowrap">/ {{ pageCount }}</span>
               <button type="button" title="下一页" aria-label="下一页" :disabled="page >= pageCount - 1" @click="goPage(page + 1)">›</button>
               <span class="muted nowrap">
-                共 {{ itemTotal }} 条 · 待刮削 {{ pendingTotal }}
+                共 {{ itemTotal }} 条 ·
+                <button type="button" class="link" :class="{ on: filters.state === 'unscraped' }" @click="applyFilter('state', 'unscraped')">
+                  可自动刮削 {{ pendingTotal }}
+                </button>
                 <template v-if="exhaustedTotal > 0">
-                  · <span class="warn" title="失败的条目不再自动重试, 用 kura scrape --retry-failed 显式重试">已达上限 {{ exhaustedTotal }}</span>
+                  · <button type="button" class="link warn" :class="{ on: filters.state === 'exhausted' }" @click="applyFilter('state', 'exhausted')">
+                    需手动重试 {{ exhaustedTotal }}
+                  </button>
                 </template>
               </span>
               <span class="spacer" />
@@ -1194,6 +1199,11 @@ async function testDmm(): Promise<void> {
           <div v-if="taskProgress" class="task-bar" role="progressbar" :aria-valuenow="taskPercent" aria-valuemin="0" aria-valuemax="100">
             <span class="task-bar-fill" :style="{ width: `${taskPercent}%` }" />
           </div>
+
+          <p v-if="filters.state === 'exhausted'" class="muted exhausted-hint">
+            这 {{ exhaustedTotal }} 条有元数据（多半是从 nfo 读来的），但从没联网刮成功过，已试满 {{ 3 }} 次。
+            勾选后点「刮削选中」可以再试一次；网络拿到值会覆盖 nfo 带来的旧值。
+          </p>
 
           <div v-if="hasFilters" class="filter-bar">
             <span
@@ -2367,6 +2377,34 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 行内可点的统计数字: 比 chip 轻, 不跟主按钮抢注意力 */
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-faint);
+  font-size: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.link:hover {
+  color: var(--text);
+}
+
+.link.on {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+.exhausted-hint {
+  margin: 0 16px 8px;
+  font-size: var(--fs-label);
+  line-height: 1.6;
 }
 
 /* 一致性提醒: 一条色条就够, 别跟错误提示抢注意力 */

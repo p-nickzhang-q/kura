@@ -57,6 +57,17 @@ title 为空
 (界面徽标)、`itemFilters` 的 `state = unscraped`(列表筛选)。少一处就会出现
 "未刮削 76" 点进去是另一批。
 
+而且**三个列表状态的加总必须等于各自的计数**, 所以 `state` 是互斥的:
+
+| 状态 | 判据 | 对应计数 |
+|---|---|---|
+| `unscraped` | 待刮削 **且** `scrape_attempts < 3` | `countPending` |
+| `exhausted` | 待刮削 **且** `scrape_attempts >= 3` | `countExhausted` |
+| `scraped` | 不是待刮削 | 总数 − 上两者 |
+
+真事故: `unscraped` 只判"待刮削"、没判次数, 而徽标用的是 `countPending`(含次数) ——
+于是「未刮削 0」点进去躺着 76 条已经试满次数、带着 nfo 元数据的条目。
+
 `scrape_attempts` 上限仍然压在上面:试满次数的条目算"已达上限", 要显式重试
 (CLI `--include-failed`, 或界面里勾选后「刮削选中」)。
 
