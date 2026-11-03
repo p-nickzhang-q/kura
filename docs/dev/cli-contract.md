@@ -102,6 +102,8 @@ kura source test dmm --json
 kura doctor --json
 ```
 
+`doctor --json` 的 `actorDrift` 永远该是 0：非 0 说明有代码路径绕过 `setItemActors` 直接写了 `items.actors`，那批演员在筛选里点不到（升级时 v10 迁移会自愈一次）。
+
 `scan` 有一道**删除安全阀**: 一次扫描要移除的已登记文件超过 30%(且已知文件 ≥20 个)时中止,
 退出码 `4`, `details` 里给 `known` / `wouldRemove` / `sample`。这是为了防止"盘只挂了一半就扫"
 把索引清空 —— 那种情况下按库筛选的条目列表会突然变空, 下次扫描又"自己恢复", 最难排查。

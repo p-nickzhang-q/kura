@@ -1,5 +1,6 @@
 import type { ContentType, FieldKey, FileInfo, Metadata } from "../domain/types";
 import type { Library } from "../domain/materialize";
+import { sanitizeActorNames } from "../domain/actors";
 import type { Db } from "./driver";
 import { AppError, EXIT } from "../exit";
 
@@ -73,7 +74,8 @@ export function metadataColumns(metadata: Metadata): Record<string, unknown> {
     label: metadata.label ?? null,
     series: metadata.series ?? null,
     directors: stringify(metadata.directors),
-    actors: stringify(metadata.actors),
+    // 占位文本 (未知演员 / N/A) 在入库前就丢掉 —— 它进索引后会变成一个点不出结果的假演员。
+    actors: stringify(sanitizeActorNames(metadata.actors)),
     tags: stringify(metadata.tags),
     poster_urls: stringify(metadata.poster_urls),
     cover_urls: stringify(metadata.cover_urls),

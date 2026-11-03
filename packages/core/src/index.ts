@@ -45,6 +45,7 @@ export { HttpClient } from "./net/http";
 export type { FetchInit, FetchLike, HttpClientOptions, RequestOptions } from "./net/http";
 
 export { createLibrary, findLibrary, listLibraries, pinnedFields, renameLibrary, rowToMetadata, updateLibraryOrganize, updateLibraryTemplate } from "./db/rows";
+export { actorIndexDrift, setItemActors } from "./db/actors";
 export type { ItemRow, MediaFileRow } from "./db/rows";
 
 export { countFiles, filePhase, listFiles, scan } from "./tasks/scan";

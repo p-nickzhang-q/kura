@@ -12,3 +12,61 @@
 export function normalizeActorName(name: string): string {
   return name.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
 }
+
+/**
+ * 占位文本不是演员。
+ *
+ * 来源页面与别的刮削器写出的 nfo 里常见 `<name>未知演员</name>`、`N/A`、`---` 这类占位:
+ * 它们不是人名, 进索引后会变成一个能点、点了什么都没有的假演员 (真机库里 30 条这样)。
+ * 判定放在最靠近入库的地方, 让"占位符进不了库"成为一条规则而不是各处的 if。
+ */
+const PLACEHOLDER_ACTORS = new Set([
+  "未知演员",
+  "未知女优",
+  "未知女優",
+  "未知",
+  "不明",
+  "不详",
+  "不詳",
+  "佚名",
+  "无名",
+  "無名",
+  "无",
+  "無",
+  "n/a",
+  "n.a.",
+  "na",
+  "none",
+  "null",
+  "nil",
+  "unknown",
+  "tbd",
+  "-",
+  "--",
+  "---",
+  "—",
+  "——",
+  "?",
+  "??",
+  "???",
+]);
+
+export function isPlaceholderActor(name: string): boolean {
+  const trimmed = name.trim();
+  if (!trimmed) return true;
+  return PLACEHOLDER_ACTORS.has(trimmed.toLowerCase()) || PLACEHOLDER_ACTORS.has(trimmed);
+}
+
+/** 过滤占位符与空串, 顺带去空白。入库前统一走这里。 */
+export function sanitizeActorNames(names: readonly string[] | undefined | null): string[] {
+  if (!names) return [];
+  const out: string[] = [];
+  for (const raw of names) {
+    if (typeof raw !== "string") continue;
+    const name = raw.trim();
+    if (isPlaceholderActor(name)) continue;
+    if (out.includes(name)) continue;
+    out.push(name);
+  }
+  return out;
+}

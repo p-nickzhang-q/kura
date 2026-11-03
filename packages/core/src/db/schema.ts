@@ -1,5 +1,5 @@
 import type { Db } from "./driver";
-import { backfillActors } from "./actors";
+import { backfillActors, repairActorData } from "./actors";
 import { AppError, EXIT } from "../exit";
 
 /**
@@ -162,6 +162,13 @@ const MIGRATIONS: string[] = [
     primary key (number, season, episode)
   );
   `,
+
+  // v10 — 修演员索引的两处历史漂移 (纯数据修复, 不改表结构):
+  //  1. 占位文本 (未知演员 / N/A) 被当成演员存进了 items.actors
+  //  2. 0.6.11 从 nfo 读演员时只写了 JSON 没建索引, 那些条目的演员在筛选里不存在
+  // 升级即自愈, 不需要用户跑任何命令。
+  // 纯数据修复, 没有 SQL: 具体动作在 AFTER_MIGRATIONS[10]
+  ``,
 ];
 
 /**
@@ -170,6 +177,7 @@ const MIGRATIONS: string[] = [
  */
 const AFTER_MIGRATIONS: Record<number, (db: Db) => void> = {
   8: (db) => backfillActors(db),
+  10: (db) => repairActorData(db),
 };
 
 export function migrate(db: Db): number {
@@ -188,7 +196,9 @@ export function migrate(db: Db): number {
   for (let v = from; v < MIGRATIONS.length; v++) {
     db.exec("begin");
     try {
-      db.exec(MIGRATIONS[v]!);
+      // 只有代码动作的版本 (纯数据修复) 没有 SQL, 空串不能丢给 exec
+      const sql = MIGRATIONS[v] ?? "";
+      if (sql.trim() !== "") db.exec(sql);
       AFTER_MIGRATIONS[v + 1]?.(db);
       db.exec(`pragma user_version = ${v + 1}`);
       db.exec("commit");

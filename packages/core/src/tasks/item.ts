@@ -2,7 +2,7 @@ import { AppError, EXIT } from "../exit";
 import { CONTENT_TYPES, FIELD_KEYS, type FieldKey } from "../domain/types";
 import { detectContentType } from "../domain/identify";
 import { metadataColumns, parseJson, rowToMetadata, stringify, type ItemRow } from "../db/rows";
-import { pruneActors, syncItemActors } from "../db/actors";
+import { setItemActors } from "../db/actors";
 import type { Runtime } from "../runtime";
 import { getItem, type ItemView } from "./scrape";
 
@@ -52,9 +52,13 @@ export function updateItem(rt: Runtime, options: UpdateItemOptions): ItemView {
   );
 
   // 手动改过演员也要重建索引, 否则"点演员看全部"会漏掉这条。
+  // 走 setItemActors: 写 JSON 与建索引绑死, 不许分头做。
   if (options.patch?.actors !== undefined) {
-    syncItemActors(rt.db, options.key);
-    pruneActors(rt.db);
+    // patch 的值是 IPC 来的宽类型, 这里收窄成演员名数组
+    const actors = Array.isArray(options.patch.actors)
+      ? options.patch.actors.filter((name): name is string => typeof name === "string")
+      : [];
+    setItemActors(rt.db, options.key, actors);
   }
 
   return getItem(rt, options.key)!;

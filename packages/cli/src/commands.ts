@@ -44,6 +44,7 @@ import {
   syncNfo,
   syncNfoTask,
   retryTask,
+  actorIndexDrift,
   cancelTask,
   taskLogFiles,
   deleteTask,
@@ -1182,6 +1183,9 @@ export const COMMANDS: Command[] = [
         libraries: counts?.libraries ?? 0,
         items: counts?.items ?? 0,
         mediaFiles: counts?.files ?? 0,
+        // 永远该是 0。非 0 说明有代码路径绕过 setItemActors 直接写了 items.actors,
+        // 结果是那批演员"点不进去" —— 这种结构性漂移不该静默留在库里。
+        actorDrift: actorIndexDrift(ctx.rt!.db),
       };
     },
     render(data: Record<string, unknown>) {
@@ -1193,6 +1197,7 @@ export const COMMANDS: Command[] = [
         `  媒体库     ${data.libraries}`,
         `  条目       ${data.items}`,
         `  媒体文件   ${data.mediaFiles}`,
+        `  演员漂移   ${data.actorDrift}`,
       ].join("\n");
     },
   },
