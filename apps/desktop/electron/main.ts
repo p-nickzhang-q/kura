@@ -52,7 +52,6 @@ import {
   countFiles,
   listTasks,
   getTask,
-  writeNfo,
   syncNfo,
   listLibraries,
   openRuntime,
@@ -61,6 +60,10 @@ import {
   pendingKeys,
   scan,
   scrape,
+  scrapeKeysTask,
+  translateItemsTask,
+  taskFailures,
+  syncNfoTask,
   scrapePendingTask,
   type Library,
   type Runtime,
@@ -275,16 +278,30 @@ async function exclusive<T>(label: string, fn: (signal: AbortSignal) => Promise<
  * 这里必须真的跑起来: 没有守护进程, 没有人在消费 `queued` 行 —— 早先的实现
  * 只建了一行 queued, 界面说"已重新入队", 实际上什么都不会发生。
  */
-async function rerunTask(id: number): Promise<{ taskId: number; type: string }> {
+/**
+ * 重跑一条历史任务。
+ *
+ * 两个模式: 整批重跑 / **只重跑失败项**(默认给界面的那个按钮)。后者读任务的 jsonl,
+ * 拿到失败番号再跑 —— 21 个失败不该逼着人重扫 2641 个文件。
+ *
+ * 必须真的跑起来: 没有守护进程, 没有人在消费 `queued` 行。
+ */
+async function rerunTask(id: number, onlyFailed = false): Promise<{ taskId: number; type: string; count: number }> {
   const rt = mustRuntime();
   const task = getTask(rt, id);
   if (!task) throw new AppError(`任务不存在: ${id}`, EXIT.NOT_FOUND, { id });
   if (task.status === "running" || task.status === "queued") {
     throw new AppError(`任务 #${id} 还没结束 (${task.status})`, EXIT.RETRYABLE, { id, status: task.status });
   }
-  const payload = (task.payload ?? {}) as { limit?: number; includeFailed?: boolean };
 
-  if (task.type === "scrape.pending") {
+  const payload = (task.payload ?? {}) as { limit?: number; includeFailed?: boolean; keys?: string[]; libraryId?: number; number?: string };
+  const failures = onlyFailed ? taskFailures(rt, id) : [];
+  if (onlyFailed && failures.length === 0) {
+    throw new AppError(`任务 #${id} 没有失败项`, EXIT.USAGE, { id });
+  }
+  const failedKeys = failures.map((failure) => failure.key);
+
+  if (task.type === "scrape.pending" && !onlyFailed) {
     return exclusive("重跑刮削", async (signal) => {
       const { task: fresh } = await scrapePendingTask(
         rt,
@@ -300,33 +317,73 @@ async function rerunTask(id: number): Promise<{ taskId: number; type: string }> 
         },
         signal,
       );
-      return { taskId: fresh.id, type: fresh.type };
+      return { taskId: fresh.id, type: fresh.type, count: fresh.total };
     });
   }
 
-  if (task.type === "translate.pending") {
-    return exclusive("重跑翻译", async (signal) => {
-      const translator = await buildTranslator();
-      if (!translator) {
-        throw new AppError("未配置 LLM 或未开启翻译", EXIT.NEEDS_INPUT, {
-          hint: "到「设置」填 LLM 地址/Key/模型, 并打开翻译开关",
-        });
-      }
-      const { task: fresh } = await translatePendingTask(
+  if (task.type === "scrape.pending" || task.type === "scrape.keys") {
+    const keys = onlyFailed ? failedKeys : (payload.keys ?? []);
+    return exclusive("重跑刮削", async (signal) => {
+      const { task: fresh } = await scrapeKeysTask(
         rt,
         {
-          translator,
-          limit: payload.limit ?? 1000,
-          signal,
-          onProgress: (progress) => win?.webContents.send("translate:progress", progress),
+          keys,
+          registry: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) }),
+          fixturesDir,
+          sources: fixturesDir ? ["fixture"] : undefined,
+          translator: await buildTranslator(),
         },
         signal,
       );
-      return { taskId: fresh.id, type: fresh.type };
+      return { taskId: fresh.id, type: fresh.type, count: keys.length };
+    });
+  }
+
+  if (task.type === "translate.pending" && !onlyFailed) {
+    return exclusive("重跑翻译", async (signal) => {
+      const translator = await requireTranslator();
+      const { task: fresh } = await translatePendingTask(
+        rt,
+        { translator, limit: payload.limit ?? 1000, signal, onProgress: (progress) => win?.webContents.send("translate:progress", progress) },
+        signal,
+      );
+      return { taskId: fresh.id, type: fresh.type, count: fresh.total };
+    });
+  }
+
+  if (task.type === "translate.pending" || task.type === "translate.items") {
+    const keys = onlyFailed ? failedKeys : (payload.keys ?? []);
+    return exclusive("重跑翻译", async (signal) => {
+      const { task: fresh } = await translateItemsTask(rt, { keys, translator: await requireTranslator() }, signal);
+      return { taskId: fresh.id, type: fresh.type, count: keys.length };
+    });
+  }
+
+  if (task.type === "nfo.sync") {
+    return exclusive("重跑同步 NFO", async (signal) => {
+      const { task: fresh } = await syncNfoTask(
+        rt,
+        onlyFailed
+          ? { ...(payload.libraryId !== undefined ? { libraryId: payload.libraryId } : {}), numbers: failedKeys, apply: true }
+          : { ...(payload.libraryId !== undefined ? { libraryId: payload.libraryId } : {}), apply: true },
+        signal,
+        (progress) => win?.webContents.send("nfo:progress", progress),
+      );
+      return { taskId: fresh.id, type: fresh.type, count: onlyFailed ? failedKeys.length : fresh.total };
     });
   }
 
   throw new AppError(`这个任务不支持重跑: ${task.type}`, EXIT.USAGE, { type: task.type });
+}
+
+async function requireTranslator(): Promise<NonNullable<Awaited<ReturnType<typeof buildTranslator>>>> {
+  const translator = await buildTranslator();
+  if (!translator) {
+    throw new AppError("未配置 LLM 或未开启翻译", EXIT.NEEDS_INPUT, {
+      hint: "到「设置」填 LLM 地址/Key/模型, 并打开翻译开关",
+    });
+  }
+  return translator;
 }
 
 async function createWindow(): Promise<void> {
@@ -507,28 +564,15 @@ function registerIpc(): void {
   );
 
   ipcMain.handle("translate:items", (_event, input: { keys?: unknown }) =>
-    exclusive("翻译", async () => {
+    exclusive("翻译", async (signal) => {
       const rt = mustRuntime();
       const translator = await buildTranslator();
       if (!translator) throw new AppError("未配置 LLM 或未开启翻译", EXIT.NEEDS_INPUT);
-
       const keys = Array.isArray(input?.keys) ? input.keys.filter((key): key is string => typeof key === "string") : [];
-      const reports = [];
-      let translated = 0;
-      let failed = 0;
-      let skipped = 0;
-      for (const key of keys) {
-        try {
-          const report = await translateItem(rt, key, translator);
-          if (report.translated.length > 0) translated++;
-          else skipped++;
-          reports.push({ ...report, key });
-        } catch (err) {
-          failed++;
-          reports.push({ key, translated: [], error: err instanceof Error ? err.message : String(err) });
-        }
-      }
-      return { count: reports.length, cancelled: false, reports, translated, failed, skipped };
+      const { task, result } = await translateItemsTask(rt, { keys, translator }, signal);
+      return (
+        result ?? { taskId: task.id, count: 0, cancelled: true, reports: [], translated: 0, failed: 0, skipped: 0 }
+      );
     }),
   );
 
@@ -624,30 +668,40 @@ function registerIpc(): void {
 
   // NFO 双向同步: Emby/Jellyfin 读的是文件, 不是这个库。
   // 一次过: 库里没网络数据的读 nfo 入库, 有数据的把库写回 nfo。
-  ipcMain.handle("nfo:sync", (_event, input: { libraryId?: number; number?: string; apply?: boolean; includeUnscraped?: boolean } = {}) =>
-    syncNfo(mustRuntime(), {
-      ...(input.libraryId !== undefined ? { libraryId: input.libraryId } : {}),
-      ...(input.number ? { number: input.number } : {}),
-      apply: input.apply === true,
-      includeUnscraped: input.includeUnscraped === true,
-    }),
-  );
-
-  // 只写不读, 给"我知道自己在干什么"的场景留个口子
-  ipcMain.handle("nfo:write", (_event, input: { libraryId?: number; number?: string; apply?: boolean; includeUnscraped?: boolean } = {}) =>
-    writeNfo(mustRuntime(), {
-      ...(input.libraryId !== undefined ? { libraryId: input.libraryId } : {}),
-      ...(input.number ? { number: input.number } : {}),
-      apply: input.apply === true,
-      includeUnscraped: input.includeUnscraped === true,
-    }),
+  // 网络盘上 4000 个文件很慢, 所以任务是异步 + 并发 + 逐条回报进度, 并且能被「停止」打断。
+  ipcMain.handle(
+    "nfo:sync",
+    (
+      _event,
+      input: { libraryId?: number; number?: string; numbers?: string[]; apply?: boolean; includeUnscraped?: boolean; writeOnly?: boolean } = {},
+    ) =>
+      exclusive("同步 NFO", async (signal) => {
+        const rt = mustRuntime();
+        const { task, result } = await syncNfoTask(
+          rt,
+          {
+            ...(input.libraryId !== undefined ? { libraryId: input.libraryId } : {}),
+            ...(input.number ? { number: input.number } : {}),
+            ...(Array.isArray(input.numbers) ? { numbers: input.numbers.filter((key): key is string => typeof key === "string") } : {}),
+            apply: input.apply === true,
+            includeUnscraped: input.includeUnscraped === true,
+            writeOnly: input.writeOnly === true,
+          },
+          signal,
+          (progress) => win?.webContents.send("nfo:progress", progress),
+        );
+        return result ?? { dryRun: !input.apply, scanned: 0, imported: 0, written: 0, created: 0, skipped: 0, errors: 0, cancelled: true, entries: [], taskId: task.id };
+      }),
   );
 
   ipcMain.handle("tasks:list", (_event, input: { limit?: number } = {}) =>
     listTasks(mustRuntime(), { limit: input.limit ?? 20 }),
   );
 
-  ipcMain.handle("tasks:retry", (_event, input: { id: number }) => rerunTask(input.id));
+  ipcMain.handle("tasks:retry", (_event, input: { id: number; onlyFailed?: boolean }) => rerunTask(input.id, input.onlyFailed === true));
+
+  // 失败详情来自任务日志(jsonl), 不在数据库里: 它是"记录", 不是"状态"。
+  ipcMain.handle("tasks:failures", (_event, input: { id: number; limit?: number }) => taskFailures(mustRuntime(), input.id, input.limit ?? 200));
 
   ipcMain.handle("item:get", (_event, number: string) => {
     const rt = mustRuntime();
@@ -661,32 +715,20 @@ function registerIpc(): void {
   );
 
   ipcMain.handle("scrape:keys", (_event, input: { keys: string[] }) =>
-    exclusive("刮削", async () => {
+    exclusive("刮削", async (signal) => {
       const rt = mustRuntime();
-      const registry = defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) });
-      const translator = await buildTranslator();
-      const results: { key: string; ok: boolean; filled: number; error?: string }[] = [];
-
-      for (const key of input.keys) {
-        const item = getItem(rt, key);
-        if (!item) {
-          results.push({ key, ok: false, filled: 0, error: "条目不存在" });
-          continue;
-        }
-        try {
-          const report = await scrape(rt, {
-            key: { value: item.key, number: item.number, contentType: item.contentType },
-            registry,
-            fixturesDir,
-            sources: fixturesDir ? ["fixture"] : undefined,
-            translator,
-          });
-          results.push({ key, ok: true, filled: report.filled.length });
-        } catch (err) {
-          results.push({ key, ok: false, filled: 0, error: err instanceof Error ? err.message : String(err) });
-        }
-      }
-      return { count: results.length, results };
+      const { task, result } = await scrapeKeysTask(
+        rt,
+        {
+          keys: input.keys,
+          registry: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) }),
+          fixturesDir,
+          sources: fixturesDir ? ["fixture"] : undefined,
+          translator: await buildTranslator(),
+        },
+        signal,
+      );
+      return result ?? { taskId: task.id, total: input.keys.length, reports: [], cancelled: true };
     }),
   );
 

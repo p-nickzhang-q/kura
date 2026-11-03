@@ -48,17 +48,15 @@ export { createLibrary, findLibrary, listLibraries, pinnedFields, renameLibrary,
 export type { ItemRow, MediaFileRow } from "./db/rows";
 
 export { countFiles, filePhase, listFiles, scan } from "./tasks/scan";
-export { hasNetworkSource, writeNfo } from "./tasks/nfo-write";
-export type { NfoWriteEntry, NfoWriteOptions, NfoWriteReport } from "./tasks/nfo-write";
-export { importNfoFields, syncNfo } from "./tasks/nfo-sync";
-export type { NfoSyncEntry, NfoSyncOptions, NfoSyncReport } from "./tasks/nfo-sync";
+export { hasNetworkSource, mergeNfoFields, syncNfo, syncNfoTask } from "./tasks/nfo-sync";
+export type { NfoSyncEntry, NfoSyncOptions, NfoSyncProgress, NfoSyncReport } from "./tasks/nfo-sync";
 export { nfoPathFor, nfoToMetadata, parseNfo, readNfo, updateNfoContent } from "./domain/nfo";
 export type { NfoFields, NfoUpdate } from "./domain/nfo";
 export type { MediaFileView } from "./tasks/scan";
 export type { ScanEvent, ScanOptions, ScanReport } from "./tasks/scan";
 
-export { countExhausted, countItems, countPending, getItem, isItemSortField, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys, scrape, scrapePending, scrapePendingTask } from "./tasks/scrape";
-export { countPendingTranslation, pendingTranslationKeys, translationStats, translateItem, repairTranslations, translatePending, translatePendingTask, type RepairReport, type TranslateBatchResult, type TranslateProgress } from "./tasks/translate";
+export { countExhausted, countItems, countPending, getItem, isItemSortField, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys, scrape, scrapeKeysTask, scrapePending, scrapePendingTask } from "./tasks/scrape";
+export { countPendingTranslation, pendingTranslationKeys, translationStats, translateItem, repairTranslations, translateItemsTask, translatePending, translatePendingTask, type RepairReport, type TranslateBatchResult, type TranslateProgress } from "./tasks/translate";
 export type { TranslateReport } from "./tasks/translate";
 export { buildSystemPrompt, chatEndpoint, createTranslator, hasKana, needsTranslation, openTranslator, probeTranslator, TranslationCache } from "./llm/translate";
 export type { LlmConfig, Translator } from "./llm/translate";
@@ -80,8 +78,8 @@ export {
 } from "./tasks/resources";
 export type { LocalResource, PosterDownloadResult } from "./tasks/resources";
 
-export { cancelTask, createTask, finishTask, getTask, listTasks, markRunning, recoverInterrupted, retryTask, runTask, updateProgress } from "./tasks/queue";
-export type { TaskRow, TaskRun, TaskStatus } from "./tasks/queue";
+export { cancelTask, createTask, finishTask, getTask, listTasks, markRunning, pruneTasks, recoverInterrupted, retryTask, runTask, taskFailures, updateProgress, TASK_KEEP } from "./tasks/queue";
+export type { TaskFailure, TaskRow, TaskRun, TaskStatus } from "./tasks/queue";
 export { redact, TaskLog, taskLogFiles } from "./observability/task-log";
 
 export { organize } from "./tasks/organize";

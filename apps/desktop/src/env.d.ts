@@ -131,6 +131,35 @@ interface KuraDmmTest {
   error?: string;
 }
 
+interface KuraNfoSyncEntry {
+  number: string;
+  path: string;
+  nfoPath: string;
+  action: "import" | "write" | "create" | "skip";
+  reason?: string;
+  changed: string[];
+  ok?: boolean;
+  error?: string;
+}
+
+interface KuraTaskFailure {
+  key: string;
+  error: string;
+  index: number;
+}
+
+interface KuraNfoSyncReport {
+  dryRun: boolean;
+  scanned: number;
+  imported: number;
+  written: number;
+  created: number;
+  skipped: number;
+  errors: number;
+  cancelled: boolean;
+  entries: KuraNfoSyncEntry[];
+}
+
 interface KuraTask {
   id: number;
   type: string;
@@ -140,6 +169,8 @@ interface KuraTask {
   failed: number;
   error: string | null;
   createdAt: number;
+  startedAt: number | null;
+  finishedAt: number | null;
 }
 
 interface KuraBridge {
@@ -213,28 +244,24 @@ interface KuraBridge {
   ): Promise<{ applied: boolean; changes: { number: string; from: string; to: string; hasTitle: boolean }[] }>;
   openDataDir(): Promise<{ dir: string }>;
   tasks(limit?: number): Promise<KuraTask[]>;
-  retryTask(id: number): Promise<{ taskId: number; type: string }>;
-  writeNfo(input?: { libraryId?: number; number?: string; apply?: boolean; includeUnscraped?: boolean }): Promise<{
-    dryRun: boolean;
-    scanned: number;
-    created: number;
-    updated: number;
-    skipped: number;
-    errors: number;
-    entries: { number: string; nfoPath: string; status: string; reason?: string; changed: string[]; error?: string }[];
-  }>;
-  syncNfo(input?: { libraryId?: number; number?: string; apply?: boolean; includeUnscraped?: boolean }): Promise<{
-    dryRun: boolean;
-    scanned: number;
-    created: number;
-    written: number;
-    imported: number;
-    skipped: number;
-    errors: number;
-    entries: { number: string; nfoPath: string; action: string; reason?: string; changed: string[]; error?: string }[];
-  }>;
+  retryTask(id: number, onlyFailed?: boolean): Promise<{ taskId: number; type: string; count: number }>;
+  taskFailures(id: number, limit?: number): Promise<{ key: string; error: string; index: number }[]>;
+  syncNfo(input?: {
+    libraryId?: number;
+    number?: string;
+    numbers?: string[];
+    apply?: boolean;
+    includeUnscraped?: boolean;
+    writeOnly?: boolean;
+  }): Promise<KuraNfoSyncReport>;
+  onNfoProgress(callback: (progress: { index: number; total: number; key: string; action: string }) => void): () => void;
   updateItem(input: { key: string; pin?: string[]; unpin?: string[] }): Promise<KuraItem>;
-  scrapeKeys(keys: string[]): Promise<{ count: number; results: { key: string; ok: boolean; filled: number; error?: string }[] }>;
+  scrapeKeys(keys: string[]): Promise<{
+    taskId: number;
+    total: number;
+    cancelled: boolean;
+    reports: { key: string; ok: boolean; filled: number; error?: string }[];
+  }>;
   fetchPoster(key: string): Promise<{
     key: string;
     saved: string[];

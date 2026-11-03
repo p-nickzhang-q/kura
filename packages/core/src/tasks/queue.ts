@@ -1,6 +1,8 @@
 import { AppError, EXIT } from "../exit";
 import type { Runtime } from "../runtime";
 import { TaskLog } from "../observability/task-log";
+import { readFileSync, readdirSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 
 /**
  * 持久化任务队列。
@@ -72,6 +74,9 @@ function safeParse(value: string): Record<string, unknown> {
   }
 }
 
+/** 任务表只留最近这些条, 更老的连日志一起清 —— 一个库用一年会长出几千行。 */
+export const TASK_KEEP = 200;
+
 export function createTask(
   rt: Runtime,
   input: { type: string; payload?: Record<string, unknown>; total?: number },
@@ -82,7 +87,92 @@ export function createTask(
     input.total ?? 0,
   ]);
   const row = rt.db.get<RawRow>("select * from tasks where id = last_insert_rowid()");
+  pruneTasks(rt);
   return toTask(row!);
+}
+
+/** 超过 keep 条的旧任务与它们的 jsonl 一起删掉。 */
+export function pruneTasks(rt: Runtime, keep = TASK_KEEP): number {
+  const stale = rt.db.all<{ id: number }>("select id from tasks order by id desc limit -1 offset ?", [keep]);
+  if (stale.length === 0) return 0;
+  const dir = join(rt.paths.logDir, "tasks");
+  let files: string[] = [];
+  try {
+    files = readdirSync(dir);
+  } catch {
+    files = [];
+  }
+  for (const row of stale) {
+    const prefix = String(row.id).padStart(6, "0");
+    for (const name of files) {
+      if (name.startsWith(`${prefix}-`)) {
+        try {
+          unlinkSync(join(dir, name));
+        } catch {
+          // 日志删不掉不影响主流程
+        }
+      }
+    }
+    rt.db.run("delete from tasks where id = ?", [row.id]);
+  }
+  return stale.length;
+}
+
+export interface TaskFailure {
+  key: string;
+  error: string;
+  /** 失败发生在第几条, 便于对照 */
+  index: number;
+}
+
+/**
+ * 从任务日志里读出失败条目。
+ *
+ * 失败详情不进数据库: 一次刮削 3883 条里的失败项是"日志", 不是"状态"。
+ * jsonl 顺序写、能 tail、库坏了也还在, 所以放这里; 任务的 failed 计数是它的摘要。
+ */
+export function taskFailures(rt: Runtime, id: number, limit = 200): TaskFailure[] {
+  const dir = join(rt.paths.logDir, "tasks");
+  const prefix = String(id).padStart(6, "0");
+  let file: string | null = null;
+  try {
+    file = readdirSync(dir).find((name) => name.startsWith(`${prefix}-`) && name.endsWith(".jsonl")) ?? null;
+  } catch {
+    return [];
+  }
+  if (!file) return [];
+
+  let text = "";
+  try {
+    text = readFileSync(join(dir, file), "utf8");
+  } catch {
+    return [];
+  }
+
+  const failures: TaskFailure[] = [];
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (event.event !== "item") continue;
+    // 三种任务都写 {key, ok, error}; 老日志里 scrape 用 ok, translate 用 error 判定
+    const error = typeof event.error === "string" ? event.error : null;
+    const ok = event.ok === true;
+    if (ok && !error) continue;
+    const key = typeof event.key === "string" ? event.key : "";
+    if (!key) continue;
+    failures.push({
+      key,
+      error: error ?? "失败 (日志里没有原因)",
+      index: typeof event.index === "number" ? event.index : failures.length + 1,
+    });
+    if (failures.length >= limit) break;
+  }
+  return failures;
 }
 
 export function getTask(rt: Runtime, id: number): TaskRow | null {
@@ -191,11 +281,17 @@ export async function runTask<T>(
   const log = new TaskLog(rt.paths.logDir, task.id, task.type);
   log.write("start", { type: task.type, payload: task.payload, total: task.total });
 
+  // 进度节流: 3883 条每条都写库 = 3883 次 WAL 提交, 会把网络盘上的库拖垮。
+  // 界面上的进度走事件(不落库), 库里的 processed 每 500ms 对齐一次就够丢不掉。
+  let lastWrite = 0;
   const run: TaskRun = {
     id: task.id,
     log,
     signal,
     progress: (processed, failed, total) => {
+      const now = Date.now();
+      if (now - lastWrite < 500 && processed !== total) return;
+      lastWrite = now;
       updateProgress(rt, task.id, { processed, failed, total });
     },
     cancelled: () => signal.aborted,

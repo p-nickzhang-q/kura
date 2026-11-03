@@ -73,7 +73,7 @@ describe("nfo 回读", () => {
     expect(report.counts.nfoPending).toBe(1);
     expect(listItems(rt, { q: "SSIS-001" })[0]?.title).toBeFalsy();
 
-    const synced = syncNfo(rt, { libraryId: library.id, apply: true });
+    const synced = await syncNfo(rt, { libraryId: library.id, apply: true });
     expect(synced.imported).toBe(1);
     const [item] = listItems(rt, { q: "SSIS-001" });
     expect(item?.title).toBe("被翻译过的标题");
@@ -82,7 +82,7 @@ describe("nfo 回读", () => {
     expect(item?.actors).toEqual(["演员一", "演员二"]);
 
     // 再同步一次: 库里已经满了, 读方向没东西可补; 写方向默认不新建, 也不会动既有 nfo
-    const again = syncNfo(rt, { libraryId: library.id, apply: true });
+    const again = await syncNfo(rt, { libraryId: library.id, apply: true });
     expect(again.imported).toBe(0);
     expect(listItems(rt, { q: "SSIS-001" })[0]?.title).toBe("被翻译过的标题");
     rt.close();

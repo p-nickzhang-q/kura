@@ -1,9 +1,11 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { buildNfo } from "../domain/materialize";
-import { nfoPathFor, nfoToMetadata, readNfo, updateNfoContent } from "../domain/nfo";
+import { nfoPathFor, nfoToMetadata, parseNfo, updateNfoContent, type NfoFields } from "../domain/nfo";
 import { metadataColumns, rowToMetadata, stringify, type ItemRow } from "../db/rows";
 import { pruneActors, syncItemActors } from "../db/actors";
 import type { Metadata } from "../domain/types";
+import { createTask, runTask, type TaskRow } from "./queue";
 import type { Runtime } from "../runtime";
 
 /**
@@ -18,12 +20,20 @@ import type { Runtime } from "../runtime";
  *  - 两边已经一致 → 什么都不做。
  *
  * 与 `organize` 的边界: 这里**不动视频、不改名、不建目录**, 只碰旁路文件。
+ *
+ * 性能注意: 用户的库常常在**网络盘**(SMB/NAS)上, 一次 open+read+close 就是一次往返。
+ * 所以这里全是异步 IO + 有界并发, 并回报进度、响应取消 —— 同步 IO 串行跑 4000 个文件
+ * 会把 Electron 主进程锁死几分钟, 界面直接"未响应"。
  */
 
 export interface NfoSyncOptions {
+  /** 不传 = 所有库 */
   libraryId?: number;
+  /** 只处理这一条 */
   number?: string;
-  /** 只写不读(默认 false: 两个方向都做) */
+  /** 只处理这些番号 —— "重试失败项"用它, 免得整批再跑一遍 */
+  numbers?: string[];
+  /** 只写不读 */
   writeOnly?: boolean;
   /** 只读不写 */
   readOnly?: boolean;
@@ -31,6 +41,17 @@ export interface NfoSyncOptions {
   includeUnscraped?: boolean;
   apply?: boolean;
   limit?: number;
+  /** 并发文件数。网络盘上 8 路能明显缩短总时间, 再高对 SMB 没好处。 */
+  concurrency?: number;
+  signal?: AbortSignal;
+  onProgress?: (progress: NfoSyncProgress) => void;
+}
+
+export interface NfoSyncProgress {
+  index: number;
+  total: number;
+  key: string;
+  action: NfoSyncEntry["action"];
 }
 
 export interface NfoSyncEntry {
@@ -52,6 +73,7 @@ export interface NfoSyncReport {
   created: number;
   skipped: number;
   errors: number;
+  cancelled: boolean;
   entries: NfoSyncEntry[];
 }
 
@@ -75,62 +97,89 @@ const FIELD_LABELS: Record<string, string> = {
   tags: "标签",
 };
 
+function isFilled(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  return value !== undefined && value !== null && value !== "";
+}
+
 /**
- * 把 nfo 里**库中还空着**的字段补进去。已有的值不动 —— 这是"nfo 让步"的另一半:
- * 网络值不会被旧 nfo 覆盖回来, 但库里真没有的字段, 有 nfo 就该用起来。
+ * 把 nfo 里**库中还空着**的字段并进来(纯函数, 不碰数据库)。
+ * 已有的值不动 —— 这是"nfo 让步"的另一半: 网络值不会被旧 nfo 覆盖回来,
+ * 但库里真没有的字段, 有 nfo 就该用起来。
  */
-export function importNfoFields(
-  rt: Runtime,
-  number: string,
-  videoPath: string,
-  options: { apply?: boolean } = {},
-): string[] | null {
-  const fields = readNfo(videoPath);
-  if (!fields) return null;
-
-  const row = rt.db.get<ItemRow>("select * from items where number = ?", [number]);
-  if (!row) return null;
-
-  const current = rowToMetadata(row);
-  const seeded = nfoToMetadata(fields, number);
+export function mergeNfoFields(current: Metadata, fields: NfoFields): { merged: Metadata; changed: string[] } {
+  const seeded = nfoToMetadata(fields, current.key);
   const merged: Metadata = { ...current };
   const changed: string[] = [];
 
-  for (const key of Object.keys(FIELD_LABELS)) {
+  for (const [key, label] of Object.entries(FIELD_LABELS)) {
     const column = key as keyof Metadata & string;
-    const existing = merged[column];
-    const filled = Array.isArray(existing) ? existing.length > 0 : existing !== undefined && existing !== null && existing !== "";
-    if (filled) continue;
+    if (isFilled(merged[column])) continue;
     const incoming = seeded[column];
-    const incomingFilled = Array.isArray(incoming) ? incoming.length > 0 : incoming !== undefined && incoming !== null && incoming !== "";
-    if (!incomingFilled) continue;
+    if (!isFilled(incoming)) continue;
     (merged as unknown as Record<string, unknown>)[column] = incoming;
     merged.fieldSources[column] = "nfo";
-    changed.push(`${FIELD_LABELS[key]} ← ${Array.isArray(incoming) ? incoming.join("、") : incoming}`);
+    changed.push(`${label} ← ${Array.isArray(incoming) ? incoming.join("、") : String(incoming)}`);
   }
-
-  if (changed.length === 0) return [];
-  // dry-run 只算差异, 不落库 —— 否则"先看看"就把库改了。
-  if (options.apply === false) return changed;
-
-  const columns = metadataColumns(merged);
-  const names = Object.keys(columns);
-  rt.db.run(
-    `update items set ${names.map((name) => `${name} = ?`).join(", ")}, field_sources = ?, updated_at = unixepoch()
-     where number = ?`,
-    [...names.map((name) => columns[name]), stringify(merged.fieldSources), number],
-  );
-  // 演员换了就要重建索引, 否则"点演员看全部"会漏掉这条 (scan 的旧实现就漏了这一步)。
-  if (changed.some((item) => item.startsWith("演员"))) {
-    syncItemActors(rt.db, number);
-    pruneActors(rt.db);
-  }
-  return changed;
+  return { merged, changed };
 }
 
-export function syncNfo(rt: Runtime, options: NfoSyncOptions = {}): NfoSyncReport {
+/**
+ * 有界并发 + 定期让出事件循环。
+ *
+ * 并发解决的是"网络盘上一次只能挂几个读"(IO 等待重叠); 但 cheerio 解析是 CPU 活,
+ * 4000 个文件光解析就要几秒 —— 全跑在 Electron 主进程里, 期间 IPC 全部排队,
+ * 窗口仍然"未响应"。所以每 24ms 主动 `setImmediate` 让一次, 让界面和「停止」按钮
+ * 还能响应。总时长几乎不变, 但从"卡 5 秒"变成"每帧都能动"。
+ */
+async function forEachLimit<T>(items: T[], limit: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {
+  let cursor = 0;
+  let lastYield = Date.now();
+  const yieldIfNeeded = async (): Promise<void> => {
+    if (Date.now() - lastYield < 24) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    lastYield = Date.now();
+  };
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      await fn(items[index]!, index);
+      await yieldIfNeeded();
+    }
+  });
+  await Promise.all(workers);
+}
+
+/**
+ * 原子替换一个文件: 先写 `<name>.kura-tmp`, 再 rename 覆盖。
+ *
+ * 直接 writeFile 是"先截断再写" —— 写到一半失败(占用/掉盘/权限)会留下半截 nfo,
+ * 而 Emby 读的正是它。rename 在同一分区是原子的, 失败最多留下一个 .kura-tmp。
+ */
+async function writeFileAtomic(path: string, content: string): Promise<void> {
+  const tmp = `${path}.kura-tmp`;
+  try {
+    await writeFile(tmp, content, "utf8");
+    await rename(tmp, path);
+  } catch (err) {
+    await unlink(tmp).catch(() => undefined);
+    throw err;
+  }
+}
+
+async function readNfoText(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+export async function syncNfo(rt: Runtime, options: NfoSyncOptions = {}): Promise<NfoSyncReport> {
   const apply = options.apply === true;
   const limit = options.limit ?? 5000;
+  const concurrency = options.concurrency ?? 8;
   const where: string[] = ["m.number is not null"];
   const params: unknown[] = [];
   if (options.libraryId !== undefined) {
@@ -141,6 +190,13 @@ export function syncNfo(rt: Runtime, options: NfoSyncOptions = {}): NfoSyncRepor
     where.push("m.number = ?");
     params.push(options.number);
   }
+  if (options.numbers) {
+    if (options.numbers.length === 0) {
+      return { dryRun: !apply, scanned: 0, imported: 0, written: 0, created: 0, skipped: 0, errors: 0, cancelled: false, entries: [] };
+    }
+    where.push(`m.number in (${options.numbers.map(() => "?").join(", ")})`);
+    params.push(...options.numbers);
+  }
 
   const rows = rt.db.all<ItemRow & { path: string }>(
     `select m.path, i.* from media_files m join items i on i.number = m.number
@@ -150,67 +206,190 @@ export function syncNfo(rt: Runtime, options: NfoSyncOptions = {}): NfoSyncRepor
     [...params, limit],
   );
 
-  const report: NfoSyncReport = { dryRun: !apply, scanned: rows.length, imported: 0, written: 0, created: 0, skipped: 0, errors: 0, entries: [] };
+  const total = rows.length;
+  const indexOf = new Map(rows.map((row, index) => [row.path, index]));
+  const entries: (NfoSyncEntry | undefined)[] = new Array(total);
+  const report: NfoSyncReport = {
+    dryRun: !apply,
+    scanned: total,
+    imported: 0,
+    written: 0,
+    created: 0,
+    skipped: 0,
+    errors: 0,
+    cancelled: false,
+    entries: [],
+  };
 
-  for (const row of rows) {
+  let done = 0;
+  const finish = (index: number, entry: NfoSyncEntry): void => {
+    entries[index] = entry;
+    if (entry.error) report.errors++;
+    else if (entry.action === "import") report.imported++;
+    else if (entry.action === "write") report.written++;
+    else if (entry.action === "create") report.created++;
+    else report.skipped++;
+    done++;
+    options.onProgress?.({ index: done, total, key: entry.number, action: entry.action });
+  };
+
+  // ── 方向一: 库里没有网络来源 → 读 nfo 补空字段 ──
+  const importRows = options.writeOnly ? [] : rows.filter((row) => !hasNetworkSource(rowToMetadata(row).fieldSources));
+  const importPaths = new Set(importRows.map((row) => row.path));
+  const pendingUpdates: { number: string; merged: Metadata; changed: string[] }[] = [];
+
+  await forEachLimit(importRows, concurrency, async (row) => {
+    const index = indexOf.get(row.path)!;
+    if (options.signal?.aborted) return;
+    const current = rowToMetadata(row);
     const nfoPath = nfoPathFor(row.path);
-    const entry: NfoSyncEntry = { number: row.number ?? String(row["number"]), path: row.path, nfoPath, action: "skip", changed: [] };
-    const metadata = rowToMetadata(row);
+    const entry: NfoSyncEntry = { number: current.key, path: row.path, nfoPath, action: "skip", changed: [] };
 
-    try {
-      // 方向一: 库里没有网络来源 → 拿 nfo 当种子补空字段(只读磁盘)
-      if (!options.writeOnly && !hasNetworkSource(metadata.fieldSources)) {
-        const changed = importNfoFields(rt, metadata.key, row.path, { apply });
-        if (changed && changed.length > 0) {
-          report.imported++;
-          report.entries.push({ ...entry, action: "import", changed });
-          continue;
-        }
-      }
-
-      // 方向二: 库里有网络来源 → 用库里的值改 nfo
-      if (options.readOnly) {
-        entry.reason = "只读模式";
-        report.skipped++;
-        report.entries.push(entry);
-        continue;
-      }
-      if (!metadata.title) {
-        entry.reason = "还没有标题, 没有可写的内容";
-        report.skipped++;
-        report.entries.push(entry);
-        continue;
-      }
-      if (!options.includeUnscraped && !hasNetworkSource(metadata.fieldSources)) {
-        entry.reason = "没联网刮过 (只有 nfo/manual 来源), 回写只是抄旧值";
-        report.skipped++;
-        report.entries.push(entry);
-        continue;
-      }
-
-      if (!existsSync(nfoPath)) {
-        report.created++;
-        report.entries.push({ ...entry, action: "create", changed: ["(新建)"] });
-        if (apply) writeFileSync(nfoPath, buildNfo(metadata), "utf8");
-        continue;
-      }
-
-      const update = updateNfoContent(readFileSync(nfoPath, "utf8"), metadata);
-      if (update.changed.length === 0) {
-        entry.reason = "内容已经一致";
-        report.skipped++;
-        report.entries.push(entry);
-        continue;
-      }
-      report.written++;
-      report.entries.push({ ...entry, action: "write", changed: update.changed });
-      if (apply) writeFileSync(nfoPath, update.content, "utf8");
-    } catch (err) {
-      // 单条失败不中断整批: 一个只读盘不该让 3000 个文件全白跑。
-      report.errors++;
-      report.entries.push({ ...entry, ok: false, error: err instanceof Error ? err.message : String(err) });
+    const text = await readNfoText(nfoPath);
+    const fields = text ? parseNfo(text) : null;
+    if (!fields) {
+      entry.reason = "旁边没有 nfo";
+      finish(index, entry);
+      return;
     }
+    const { merged, changed } = mergeNfoFields(current, fields);
+    if (changed.length === 0) {
+      entry.reason = "库里的字段都齐了";
+      finish(index, entry);
+      return;
+    }
+    pendingUpdates.push({ number: current.key, merged, changed });
+    finish(index, { ...entry, action: "import", changed });
+  });
+
+  // 读方向的落库合成一个事务: 4000 条各自提交 = 4000 次 fsync。
+  if (apply && pendingUpdates.length > 0) {
+    const touchedActors: string[] = [];
+    rt.db.exec("begin");
+    try {
+      for (const update of pendingUpdates) {
+        const columns = metadataColumns(update.merged);
+        const names = Object.keys(columns);
+        rt.db.run(
+          `update items set ${names.map((name) => `${name} = ?`).join(", ")}, field_sources = ?, updated_at = unixepoch()
+           where number = ?`,
+          [...names.map((name) => columns[name]), stringify(update.merged.fieldSources), update.number],
+        );
+        if (update.changed.some((item) => item.startsWith("演员"))) touchedActors.push(update.number);
+      }
+      rt.db.exec("commit");
+    } catch (err) {
+      rt.db.exec("rollback");
+      throw err;
+    }
+    // 演员索引在事务外重建: 它自己有提交逻辑, 塞进去会让回滚边界变糊。
+    for (const number of touchedActors) syncItemActors(rt.db, number);
+    if (touchedActors.length > 0) pruneActors(rt.db);
   }
 
+  if (options.readOnly) {
+    report.entries = entries.filter((entry): entry is NfoSyncEntry => entry !== undefined);
+    return report;
+  }
+
+  // ── 方向二: 库里有网络来源 → 用库里的值改 nfo ──
+  const writeRows = rows.filter((row) => !importPaths.has(row.path));
+  await forEachLimit(writeRows, concurrency, async (row) => {
+    const index = indexOf.get(row.path)!;
+    if (options.signal?.aborted) return;
+    const metadata = rowToMetadata(row);
+    const nfoPath = nfoPathFor(row.path);
+    const entry: NfoSyncEntry = { number: metadata.key, path: row.path, nfoPath, action: "skip", changed: [] };
+
+    if (!metadata.title) {
+      entry.reason = "还没有标题, 没有可写的内容";
+      finish(index, entry);
+      return;
+    }
+    if (!options.includeUnscraped && !hasNetworkSource(metadata.fieldSources)) {
+      entry.reason = "没联网刮过 (只有 nfo/manual 来源), 回写只是抄旧值";
+      finish(index, entry);
+      return;
+    }
+
+    try {
+      if (!existsSync(nfoPath)) {
+        if (apply) await writeFileAtomic(nfoPath, buildNfo(metadata));
+        finish(index, { ...entry, action: "create", changed: ["(新建)"] });
+        return;
+      }
+
+      const original = await readNfoText(nfoPath);
+      // 存在却读不出来(权限/占用/EISDIR)是**失败**, 不能算"跳过": 人需要看到它。
+      if (original === null) throw new Error("nfo 存在但读不出来 (权限 / 被占用 / 不是文件)");
+      const update = updateNfoContent(original, metadata);
+      if (update.changed.length === 0) {
+        finish(index, { ...entry, reason: "内容已经一致" });
+        return;
+      }
+      if (apply) await writeFileAtomic(nfoPath, update.content);
+      finish(index, { ...entry, action: "write", changed: update.changed });
+    } catch (err) {
+      // 单条失败不中断整批: 一个只读文件不该让 3000 个文件全白跑。
+      finish(index, { ...entry, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  report.cancelled = options.signal?.aborted === true;
+  report.entries = entries.filter((entry): entry is NfoSyncEntry => entry !== undefined);
   return report;
+}
+
+/**
+ * 带任务记录的同步 —— 与刮削/翻译同构: 一条 tasks 行 + 一份 jsonl + 进度与取消。
+ *
+ * 网络盘上 4000 个文件要跑几十秒到几分钟, 没有任务行的话, 关掉软件就查不到
+ * "上次写回多少、哪几个失败"。
+ */
+export async function syncNfoTask(
+  rt: Runtime,
+  options: Omit<NfoSyncOptions, "signal" | "onProgress">,
+  signal: AbortSignal,
+  onProgress?: (progress: NfoSyncProgress) => void,
+): Promise<{ task: TaskRow; result: NfoSyncReport | null }> {
+  const task = createTask(rt, { type: "nfo.sync", payload: { ...describeOptions(options) }, total: 0 });
+
+  return runTask(rt, task, signal, async (run) => {
+    const report = await syncNfo(rt, {
+      ...options,
+      signal: run.signal,
+      onProgress: (progress) => {
+        // total 只有跑到 syncNfo 里才知道: 这里用 coalesce 补上。
+        run.progress(progress.index, 0, progress.total);
+        onProgress?.(progress);
+      },
+    });
+    // 逐条写日志, 失败的要留在 jsonl 里给「任务详情」与「重跑失败」用。
+    for (const entry of report.entries) {
+      if (entry.action === "skip" && !entry.error) continue;
+      run.log.write("item", {
+        key: entry.number,
+        ok: !entry.error,
+        action: entry.action,
+        changed: entry.changed.slice(0, 5),
+        error: entry.error ?? null,
+      });
+    }
+    return {
+      result: report,
+      // processed = 看过的文件数(含跳过的): 3883 个里跳过 3800 也说明"跑完了"。
+      processed: report.scanned,
+      failed: report.errors,
+    };
+  });
+}
+
+function describeOptions(options: NfoSyncOptions): Record<string, unknown> {
+  return {
+    ...(options.libraryId !== undefined ? { libraryId: options.libraryId } : {}),
+    ...(options.number ? { number: options.number } : {}),
+    ...(options.numbers ? { numbers: options.numbers } : {}),
+    ...(options.includeUnscraped ? { includeUnscraped: true } : {}),
+    ...(options.writeOnly ? { writeOnly: true } : {}),
+  };
 }

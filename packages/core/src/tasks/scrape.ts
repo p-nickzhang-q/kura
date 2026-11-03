@@ -287,6 +287,62 @@ export async function scrapePendingTask(
   });
 }
 
+/** 番号 → 刮削用的 key (类型来自库里, 不是猜的)。 */
+function keyFromValue(rt: Runtime, value: string): ItemKey {
+  const row = rt.db.get<{ number: string; content_type: string }>("select number, content_type from items where number = ?", [
+    value,
+  ]);
+  return row
+    ? { value: row.number, number: row.number, contentType: row.content_type as ItemKey["contentType"] }
+    : { value, number: value, contentType: "censored" };
+}
+
+export interface ScrapeKeysResult {
+  taskId: number;
+  total: number;
+  reports: { key: string; ok: boolean; filled: number; error?: string }[];
+  cancelled: boolean;
+}
+
+/**
+ * 勾选条目批量刮削。
+ *
+ * 早先这条路径(界面里的「刮削选中」)直接在主进程里 for 循环调 scrape, 不写任务 ——
+ * 于是"我刮过很多次, 任务页一直空"。现在与「刮削待处理」共用一套任务/日志/进度。
+ */
+export async function scrapeKeysTask(
+  rt: Runtime,
+  options: Omit<ScrapeOptions, "key"> & { keys: string[] },
+  signal: AbortSignal,
+): Promise<{ task: TaskRow; result: ScrapeKeysResult | null }> {
+  const { keys, ...rest } = options;
+  const task = createTask(rt, { type: "scrape.keys", payload: { keys, count: keys.length }, total: keys.length });
+
+  return runTask(rt, task, signal, async (run) => {
+    const reports: ScrapeKeysResult["reports"] = [];
+    let failed = 0;
+    for (const [index, key] of keys.entries()) {
+      if (run.signal.aborted) break;
+      let report: ScrapeKeysResult["reports"][number];
+      try {
+        const result = await scrape(rt, { ...rest, key: keyFromValue(rt, key) });
+        report = { key, ok: true, filled: result.filled.length };
+      } catch (err) {
+        report = { key, ok: false, filled: 0, error: err instanceof Error ? err.message : String(err) };
+      }
+      if (!report.ok) failed++;
+      reports.push(report);
+      run.log.write("item", { index: index + 1, total: keys.length, key, ok: report.ok, filled: report.filled, error: report.error ?? null });
+      run.progress(index + 1, failed, keys.length);
+    }
+    return {
+      result: { taskId: task.id, total: keys.length, reports, cancelled: run.signal.aborted },
+      processed: reports.length,
+      failed,
+    };
+  });
+}
+
 export interface ScrapePendingResult {
   total: number;
   reports: ScrapeProgress[];

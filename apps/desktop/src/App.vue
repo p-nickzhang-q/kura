@@ -13,8 +13,11 @@ const TYPE_LABEL: Record<string, string> = {
 
 /** 任务类型/状态的中文名。库里的值是英文枚举, 不该直接印给人看。 */
 const TASK_TYPE_LABEL: Record<string, string> = {
-  "scrape.pending": "刮削",
-  "translate.pending": "翻译",
+  "scrape.pending": "刮削 (待处理)",
+  "scrape.keys": "刮削 (选中)",
+  "translate.pending": "翻译 (待处理)",
+  "translate.items": "翻译 (选中)",
+  "nfo.sync": "同步 NFO",
 };
 
 const TASK_STATUS_LABEL: Record<string, string> = {
@@ -118,7 +121,7 @@ const hasFilters = computed(() => Object.keys(filters.value).length > 0);
 const firstLoad = ref(true);
 /** 长任务进度: 刮削与翻译共用一个进度条位置。 */
 const taskProgress = computed(() => {
-  const active = progress.value ?? translateProgress.value;
+  const active = progress.value ?? translateProgress.value ?? nfoProgress.value;
   if (!active || !active.total) return null;
   return { index: active.index, total: active.total };
 });
@@ -148,6 +151,18 @@ const unparsedPage = ref(0);
 const unparsedPageSize = 100;
 const progress = ref<{ index: number; total: number; key: string; ok: boolean } | null>(null);
 const tasks = ref<KuraTask[]>([]);
+/** 展开的那条任务的失败清单: 只有点开时才去读 jsonl */
+const openTaskId = ref<number | null>(null);
+const taskFailureList = ref<KuraTaskFailure[]>([]);
+/** 正在跑的任务叫什么 —— 任务页顶部那张"当前任务"卡片用它 */
+const runningLabel = ref<string>("");
+const nfoProgress = ref<{ index: number; total: number; key: string } | null>(null);
+const nfoDialog = ref<{
+  open: boolean;
+  phase: "preview" | "running" | "done";
+  report: KuraNfoSyncReport | null;
+  errorsOnly: boolean;
+}>({ open: false, phase: "preview", report: null, errorsOnly: false });
 /** 有多少个条目的 .nfo 还没和库对齐 (扫描/刮削后算出来, 点一下就去同步) */
 const nfoHint = ref(0);
 
@@ -164,6 +179,7 @@ const dmmTest = ref<KuraDmmTest | null>(null);
 let unsubscribe: (() => void) | null = null;
 let unsubscribeProgress: (() => void) | null = null;
 let unsubscribeTranslate: (() => void) | null = null;
+let unsubscribeNfo: (() => void) | null = null;
 
 const selected = computed(() => libraries.value.find((library) => library.id === selectedId.value) ?? null);
 
@@ -180,6 +196,9 @@ onMounted(async () => {
   unsubscribeTranslate = window.kura.onTranslateProgress((update) => {
     translateProgress.value = { index: update.index, total: update.total, key: update.key, error: update.error };
   });
+  unsubscribeNfo = window.kura.onNfoProgress((update) => {
+    nfoProgress.value = { index: update.index, total: update.total, key: update.key };
+  });
   unsubscribeProgress = window.kura.onScrapeProgress((update) => {
     progress.value = update;
     // 每 5 条刷一次当前页: 刮到的结果立刻可见, 又不会每条都去查库。
@@ -192,6 +211,7 @@ onUnmounted(() => {
   unsubscribe?.();
   unsubscribeProgress?.();
   unsubscribeTranslate?.();
+  unsubscribeNfo?.();
 });
 
 /**
@@ -494,10 +514,14 @@ async function forceScan(): Promise<void> {
 }
 
 async function doScrape(): Promise<void> {
+  // 有任务行就会出现在「任务」页, 所以直接把视图切过去 —— 否则人不知道进度去哪看。
+  tab.value = "tasks";
+  runningLabel.value = `刮削 · ${selected.value?.name ?? "全部库"}`;
   progress.value = { index: 0, total: 0, key: "准备中", ok: true };
   // 不再固定 20 条: 待刮削多少就跑多少(进度与停止已有)
   const batch = await run("刮削", () => window.kura.scrapePending(pendingTotal.value || 1000));
   progress.value = null;
+  runningLabel.value = "";
   if (batch) {
     const failed = batch.reports.filter((report) => !report.ok);
     note.value = batch.cancelled
@@ -514,9 +538,12 @@ async function translateAll(): Promise<void> {
     note.value = "先在「设置」里配置 LLM 并打开翻译开关";
     return;
   }
+  tab.value = "tasks";
+  runningLabel.value = "翻译 · 待处理";
   translateProgress.value = { index: 0, total: 0, key: "准备中" };
   const result = await run("批量翻译", () => window.kura.translatePending(1000));
   translateProgress.value = null;
+  runningLabel.value = "";
   if (result) {
     await refreshAll();
     note.value = describeTranslate(result);
@@ -541,12 +568,15 @@ function describeTranslate(result: { count: number; cancelled: boolean; translat
 
 async function translateSelected(): Promise<void> {
   if (picked.value.length === 0) return;
+  tab.value = "tasks";
+  runningLabel.value = `翻译选中 · ${picked.value.length} 条`;
   translateProgress.value = { index: 0, total: picked.value.length, key: "准备中" };
   // 必须传普通数组: picked 是 Vue 的响应式代理, IPC 的结构化克隆克隆不了它
   // (报错是 "An object could not be cloned")。
   const keys = [...picked.value];
   const result = await run("翻译选中", () => window.kura.translateItems(keys));
   translateProgress.value = null;
+  runningLabel.value = "";
   if (result) {
     note.value = describeTranslate(result);
     await refreshAll();
@@ -573,6 +603,30 @@ function toggleAll(): void {
   picked.value = picked.value.length === items.value.length ? [] : items.value.map((item) => item.key);
 }
 
+/** 展开一条任务的失败清单(从 jsonl 读, 不查库)。 */
+async function toggleTaskFailures(task: KuraTask): Promise<void> {
+  if (openTaskId.value === task.id) {
+    openTaskId.value = null;
+    taskFailureList.value = [];
+    return;
+  }
+  openTaskId.value = task.id;
+  taskFailureList.value = (await window.kura.taskFailures(task.id)) ?? [];
+}
+
+function formatTime(seconds: number | null): string {
+  if (!seconds) return "—";
+  const date = new Date(seconds * 1000);
+  const hh = String(date.getHours()).padStart(2, "0");
+  const mm = String(date.getMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+/** 「停止」按钮按当前在跑的东西分派 —— 三者共用一个 AbortController。 */
+async function cancelRunning(): Promise<void> {
+  await window.kura.cancelScrape();
+}
+
 /** 任务类型与状态在库里是英文枚举, 界面上必须说人话。 */
 function taskTypeLabel(type: string): string {
   const label = TASK_TYPE_LABEL[type];
@@ -583,11 +637,16 @@ function taskStatusLabel(status: string): string {
   return TASK_STATUS_LABEL[status] ?? status;
 }
 
-/** 重跑 = 立刻再跑一遍同一批。没有守护进程, 光建一行 queued 是骗人的。 */
-async function retryTask(task: KuraTask): Promise<void> {
-  const rerun = await run("重跑任务", () => window.kura.retryTask(task.id));
+/** 重跑 = 立刻再跑一遍。onlyFailed 时只跑那条任务里失败的番号。 */
+async function retryTask(task: KuraTask, onlyFailed: boolean): Promise<void> {
+  runningLabel.value = `${taskTypeLabel(task.type)} · ${onlyFailed ? "重跑失败项" : "整批重跑"}`;
+  tab.value = "tasks";
+  const rerun = await run("重跑任务", () => window.kura.retryTask(task.id, onlyFailed));
+  runningLabel.value = "";
+  openTaskId.value = null;
+  taskFailureList.value = [];
   await refreshAll();
-  if (rerun) note.value = `已重跑 #${task.id} → 新任务 #${rerun.taskId}`;
+  if (rerun) note.value = `已重跑 #${task.id} → 新任务 #${rerun.taskId} (${rerun.count} 条)`;
 }
 
 async function openDetail(item: KuraItem): Promise<void> {
@@ -611,10 +670,13 @@ async function scrapePicked(): Promise<void> {
   if (picked.value.length === 0) return;
   // 必须展开成普通数组: Vue 的 ref 背后是 Proxy, 结构化克隆(IPC)会直接抛
   // "An object could not be cloned"。
+  tab.value = "tasks";
+  runningLabel.value = `刮削选中 · ${picked.value.length} 条`;
   const result = await run("刮削", () => window.kura.scrapeKeys([...picked.value]));
+  runningLabel.value = "";
   if (result) {
-    const failed = result.results.filter((entry) => !entry.ok);
-    note.value = `刮削 ${result.count} 条, 失败 ${failed.length} 条${failed[0]?.error ? ` (${failed[0].error})` : ""}`;
+    const failed = result.reports.filter((entry) => !entry.ok);
+    note.value = `刮削 ${result.reports.length} 条, 失败 ${failed.length} 条${failed[0]?.error ? ` (${failed[0].error})` : ""}`;
     await refreshAll();
   }
 }
@@ -671,43 +733,84 @@ async function retypeDetect(): Promise<void> {
  * 这个动作改的是用户磁盘上的文件, 所以绝不允许"点了就跑" —— 而且默认跳过
  * 没联网刮过的条目(回写只是把旧值抄一遍)。
  */
-async function writeNfoFiles(): Promise<void> {
+/**
+ * 同步 NFO: 先干跑, 把清单放进模态面板给人看, 确认后才写。
+ *
+ * 不能用 window.confirm —— 它只能塞纯文本: 2641 个文件的清单放不下、失败项标不红、
+ * 也没法复制。面板里能滚动、能按原因看失败、失败项还能单独重跑。
+ */
+async function writeNfoFiles(numbers?: string[]): Promise<void> {
   if (!selected.value) return;
-  // 干跑: 两个方向都先算出来给人看。这一步不落库、不写盘。
-  const preview = await run("检查 NFO", () => window.kura.syncNfo({ libraryId: selected.value!.id }));
-  if (!preview) return;
-  const work = preview.created + preview.written + preview.imported;
-  if (work === 0) {
-    note.value = `NFO 已经同步: 扫了 ${preview.scanned} 个文件, 没有要改的${preview.skipped ? ` (跳过 ${preview.skipped})` : ""}`;
+  nfoDialog.value = { open: true, phase: "preview", report: null, errorsOnly: false };
+  nfoProgress.value = { index: 0, total: 0, key: "准备中" };
+  const report = await run(
+    "检查 NFO",
+    () =>
+      window.kura.syncNfo({
+        libraryId: selected.value!.id,
+        ...(numbers ? { numbers } : {}),
+      }),
+  );
+  nfoProgress.value = null;
+  if (!report) {
+    nfoDialog.value = { open: false, phase: "preview", report: null, errorsOnly: false };
     return;
   }
-  const samples = preview.entries
-    .filter((entry) => entry.action !== "skip")
-    .slice(0, 4)
-    .map((entry) => `${entry.action === "import" ? "读入" : "写出"} ${entry.number}: ${entry.changed.slice(0, 2).join(", ")}`)
-    .join("\n");
-  const ok = window.confirm(
-    `«${selected.value.name}» 同步 NFO:\n` +
-      `· 写回视频旁的文件 ${preview.written} 个, 新建 ${preview.created} 个\n` +
-      `· 从文件读回库里 ${preview.imported} 条\n\n` +
-      `${samples}${work > 4 ? `\n… 共 ${work} 项` : ""}\n\n` +
-      "写回只改 Kura 认识的字段 (标题/演员/片商/标签…), 别的工具写的标签原样保留; **视频文件不动**。\n确定执行吗?",
-  );
-  if (!ok) {
-    note.value = `已取消, 未改动 (${work} 项待同步)`;
-    return;
+  nfoDialog.value = { open: true, phase: "preview", report: slimNfoReport(report), errorsOnly: false };
+  if (report.created + report.written + report.imported === 0) {
+    // 没有任何要改的: 不需要人再点一次"写入"
+    nfoDialog.value.phase = "done";
   }
-  const applied = await run("同步 NFO", () =>
-    window.kura.syncNfo({ libraryId: selected.value!.id, apply: true }),
+}
+
+/** 面板里点「写入」/「重试失败项」。 */
+async function applyNfoSync(): Promise<void> {
+  const report = nfoDialog.value.report;
+  if (!selected.value || !report) return;
+  const failed = report.entries.filter((entry) => entry.error).map((entry) => entry.number);
+  const numbers = nfoDialog.value.errorsOnly ? failed : undefined;
+  nfoDialog.value.phase = "running";
+  nfoProgress.value = { index: 0, total: 0, key: "准备中" };
+  runningLabel.value = `同步 NFO · ${selected.value.name}${numbers ? " (重试失败项)" : ""}`;
+  const applied = await run(
+    "同步 NFO",
+    () =>
+      window.kura.syncNfo({
+        libraryId: selected.value!.id,
+        apply: true,
+        ...(numbers ? { numbers } : {}),
+      }),
   );
+  nfoProgress.value = null;
+  runningLabel.value = "";
   if (applied) {
-    note.value =
-      `NFO 同步完成: 写回 ${applied.written} · 新建 ${applied.created} · 读入 ${applied.imported}` +
-      (applied.errors ? ` · 失败 ${applied.errors}` : "") +
-      " —— 到 Emby 里重新扫描媒体库";
+    nfoDialog.value = { open: true, phase: "done", report: slimNfoReport(applied), errorsOnly: false };
     nfoHint.value = 0;
     if (applied.imported > 0) await refreshAll();
+    note.value = `NFO 同步完成: 写回 ${applied.written} · 新建 ${applied.created} · 读入 ${applied.imported}${applied.errors ? ` · 失败 ${applied.errors}` : ""}`;
+  } else {
+    nfoDialog.value.phase = "preview";
   }
+}
+
+/**
+ * 面板只需要"有变化 + 失败"的条目 —— 把 4000 条 skip 塞进响应式状态会被 Vue 全量代理,
+ * 渲染直接卡几秒(实测主进程探活往返 2.4s)。这里先瘦身: 丢掉 skip, 截断、砍掉长字段。
+ */
+function slimNfoReport(report: KuraNfoSyncReport): KuraNfoSyncReport {
+  const keep = report.entries.filter((entry) => entry.action !== "skip" || entry.error);
+  const limited = keep.slice(0, 500).map((entry) => ({
+    ...entry,
+    changed: entry.changed.slice(0, 3).map((text) => (text.length > 120 ? `${text.slice(0, 120)}…` : text)),
+  }));
+  return { ...report, entries: limited };
+}
+
+/** 面板里"只看失败"。 */
+function nfoEntries(report: KuraNfoSyncReport): KuraNfoSyncEntry[] {
+  const list = report.entries.filter((entry) => entry.action !== "skip");
+  if (!nfoDialog.value.errorsOnly) return list;
+  return report.entries.filter((entry) => entry.error);
 }
 
 async function togglePin(field: string): Promise<void> {
@@ -948,7 +1051,7 @@ async function testDmm(): Promise<void> {
                 type="button"
                 :disabled="busy || !selected"
                 title="双向同步: 库里没数据的读 nfo 补进来, 有网络数据的把库写回 .nfo (Emby/Jellyfin 读的是它)。先列清单, 确认后才动"
-                @click="writeNfoFiles"
+                @click="writeNfoFiles()"
               >
                 同步 NFO
               </button>
@@ -1014,7 +1117,7 @@ async function testDmm(): Promise<void> {
         <!-- 刮削/扫描之后的一致性提醒: 不自动写盘, 但必须把人顶到那一步 -->
         <div v-if="nfoHint > 0 && !busy" class="nfo-hint">
           <span>有 {{ nfoHint }} 个条目的 NFO 还没和库对齐 —— Emby / Jellyfin 读的是文件, 不是这里。</span>
-          <button type="button" class="chip" @click="writeNfoFiles">同步 NFO</button>
+          <button type="button" class="chip" @click="writeNfoFiles()">同步 NFO</button>
           <button type="button" class="ghost" aria-label="忽略提示" title="忽略" @click="nfoHint = 0">×</button>
         </div>
 
@@ -1394,34 +1497,83 @@ async function testDmm(): Promise<void> {
           </template>
         </div>
 
-        <!-- 任务 -->
-        <div v-else-if="tab === 'tasks'" class="pane">
-          <p class="muted">批量操作会留下记录；关掉软件后仍能看到跑到哪、并重试。</p>
+        <!-- 任务: 现在在干什么 + 干过什么 + 失败详情 -->
+        <div v-else-if="tab === 'tasks'" class="pane tasks-pane">
+          <div v-if="busy" class="running-card">
+            <div class="running-head">
+              <strong>{{ runningLabel || "进行中" }}</strong>
+              <span class="spacer" />
+              <span v-if="taskProgress" class="progress">{{ taskProgress.index }}/{{ taskProgress.total }}</span>
+              <button type="button" class="danger" @click="cancelRunning">停止</button>
+            </div>
+            <div v-if="taskProgress" class="task-bar" role="progressbar" :aria-valuenow="taskPercent" aria-valuemin="0" aria-valuemax="100">
+              <span class="task-bar-fill" :style="{ width: `${taskPercent}%` }" />
+            </div>
+            <p v-else class="muted">正在准备…</p>
+          </div>
+
+          <p class="muted">
+            刮削、翻译、同步 NFO 都会留下记录 —— 关掉软件后仍能看到跑到哪、哪几条失败、并只重跑失败的那些。
+            扫描与修正内容类型是秒级动作，不记任务。
+          </p>
+
           <table>
             <thead>
-              <tr><th>#</th><th>类型</th><th>状态</th><th>进度</th><th>失败</th><th>备注</th><th /></tr>
+              <tr><th>#</th><th>类型</th><th>状态</th><th>进度</th><th>失败</th><th>结束时间</th><th /></tr>
             </thead>
             <tbody>
-              <tr v-for="task in tasks" :key="task.id">
-                <td class="mono">{{ task.id }}</td>
-                <td>{{ taskTypeLabel(task.type) }}</td>
-                <td :class="`st-${task.status}`">{{ taskStatusLabel(task.status) }}</td>
-                <td class="mono">{{ task.processed }}/{{ task.total }}</td>
-                <td class="mono">{{ task.failed }}</td>
-                <td class="muted">{{ task.error ?? "—" }}</td>
-                <td>
-                  <button
-                    v-if="['interrupted', 'failed', 'cancelled', 'done'].includes(task.status)"
-                    type="button"
-                    :disabled="busy"
-                    @click="retryTask(task)"
-                  >
-                    重跑
-                  </button>
-                </td>
-              </tr>
+              <template v-for="task in tasks" :key="task.id">
+                <tr :class="{ 'task-open': openTaskId === task.id }">
+                  <td class="mono">{{ task.id }}</td>
+                  <td>{{ taskTypeLabel(task.type) }}</td>
+                  <td :class="`st-${task.status}`">{{ taskStatusLabel(task.status) }}</td>
+                  <td class="mono">{{ task.processed }}/{{ task.total }}</td>
+                  <td class="mono" :class="{ warn: task.failed > 0 }">{{ task.failed }}</td>
+                  <td class="mono muted">{{ formatTime(task.finishedAt ?? task.startedAt) }}</td>
+                  <td class="row-actions">
+                    <button
+                      v-if="task.failed > 0"
+                      type="button"
+                      :disabled="busy"
+                      title="只重跑这条任务里失败的番号"
+                      @click="toggleTaskFailures(task)"
+                    >
+                      {{ openTaskId === task.id ? "收起" : `失败 ${task.failed}` }}
+                    </button>
+                    <button
+                      v-if="['interrupted', 'failed', 'cancelled', 'done'].includes(task.status)"
+                      type="button"
+                      :disabled="busy"
+                      title="按同样的参数再跑一遍整批"
+                      @click="retryTask(task, false)"
+                    >
+                      整批重跑
+                    </button>
+                    <button
+                      v-if="task.failed > 0 && ['interrupted', 'failed', 'cancelled', 'done'].includes(task.status)"
+                      type="button"
+                      class="primary"
+                      :disabled="busy"
+                      @click="retryTask(task, true)"
+                    >
+                      重跑失败
+                    </button>
+                  </td>
+                </tr>
+                <tr v-if="openTaskId === task.id" class="task-detail">
+                  <td colspan="7">
+                    <p v-if="taskFailureList.length === 0" class="muted">这条任务的日志里没有失败记录。</p>
+                    <ul v-else class="failure-list">
+                      <li v-for="failure in taskFailureList" :key="`${failure.key}-${failure.index}`">
+                        <span class="mono">{{ failure.key }}</span>
+                        <span class="fail-reason">{{ failure.error }}</span>
+                      </li>
+                    </ul>
+                  </td>
+                </tr>
+              </template>
               <tr v-if="tasks.length === 0">
-                <td colspan="7" class="muted">还没有任务记录。</td>
+                <td colspan="7" class="muted">还没有任务记录。跑一次刮削、翻译或同步 NFO 就会出现。</td>
               </tr>
             </tbody>
           </table>
@@ -1567,6 +1719,91 @@ async function testDmm(): Promise<void> {
       <img :src="zoom" alt="" />
       <button type="button" class="ghost lightbox-close" aria-label="关闭大图" @click.stop="zoom = null">×</button>
     </div>
+  <!-- 同步 NFO 的结果/预览面板: 原生 confirm 塞不下 2641 条清单, 失败也标不红 -->
+    <div
+      v-if="nfoDialog.open && nfoDialog.report"
+      class="nfo-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="同步 NFO"
+      @keydown.esc="nfoDialog.open = false"
+    >
+      <div class="nfo-modal-body">
+        <header>
+          <strong>同步 NFO · «{{ selected?.name }}»</strong>
+          <button type="button" class="ghost" aria-label="关闭" @click="nfoDialog.open = false">×</button>
+        </header>
+
+        <p class="summary">
+          写回 {{ nfoDialog.report.written }} · 新建 {{ nfoDialog.report.created }} · 读入 {{ nfoDialog.report.imported }} ·
+          跳过 {{ nfoDialog.report.skipped }}
+          <span v-if="nfoDialog.report.errors" class="fail"> · 失败 {{ nfoDialog.report.errors }}</span>
+        </p>
+
+        <div class="nfo-filters">
+          <button type="button" class="chip" :class="{ on: !nfoDialog.errorsOnly }" @click="nfoDialog.errorsOnly = false">
+            有变化 ({{ nfoDialog.report.entries.filter((entry) => entry.action !== "skip").length }})
+          </button>
+          <button
+            type="button"
+            class="chip"
+            :class="{ on: nfoDialog.errorsOnly }"
+            :disabled="nfoDialog.report.errors === 0"
+            @click="nfoDialog.errorsOnly = true"
+          >
+            只看失败 ({{ nfoDialog.report.errors }})
+          </button>
+        </div>
+
+        <ul class="nfo-list">
+          <li v-for="entry in nfoEntries(nfoDialog.report).slice(0, 300)" :key="entry.nfoPath">
+            <div class="nfo-line">
+              <span class="mono">{{ entry.number }}</span>
+              <span class="nfo-action">{{
+                entry.error ? "失败" : entry.action === "create" ? "新建" : entry.action === "import" ? "读入" : "写回"
+              }}</span>
+              <span v-if="entry.error" class="fail-reason">{{ entry.error }}</span>
+              <span v-else class="muted nfo-changes">{{ entry.changed.slice(0, 3).join(" · ") }}</span>
+            </div>
+            <div class="mono nfo-path" :title="entry.nfoPath">{{ entry.nfoPath }}</div>
+          </li>
+        </ul>
+        <p v-if="nfoEntries(nfoDialog.report).length > 300" class="muted">
+          只列前 300 条，共 {{ nfoEntries(nfoDialog.report).length }} 条。
+        </p>
+
+        <footer>
+          <template v-if="nfoDialog.phase === 'preview'">
+            <button type="button" @click="nfoDialog.open = false">取消</button>
+            <button
+              type="button"
+              class="primary"
+              :disabled="busy || nfoDialog.report.written + nfoDialog.report.created + nfoDialog.report.imported === 0"
+              @click="applyNfoSync"
+            >
+              写入
+            </button>
+          </template>
+          <template v-else-if="nfoDialog.phase === 'running'">
+            <span class="muted">正在写… {{ nfoProgress?.index ?? 0 }}/{{ nfoProgress?.total ?? "?" }}</span>
+          </template>
+          <template v-else>
+            <button type="button" class="chip" @click="nfoDialog.open = false; tab = 'tasks'">在任务里查看</button>
+            <button type="button" @click="nfoDialog.open = false">完成</button>
+            <button
+              v-if="nfoDialog.report.errors > 0"
+              type="button"
+              class="primary"
+              :disabled="busy"
+              @click="nfoDialog.errorsOnly = true; applyNfoSync()"
+            >
+              只重试失败的 {{ nfoDialog.report.errors }} 个
+            </button>
+          </template>
+        </footer>
+      </div>
+    </div>
+
   </main>
 </template>
 
@@ -1992,6 +2229,144 @@ button:disabled {
 
 .spacer {
   flex: 1;
+}
+
+/* 任务页: 当前任务卡片 + 失败清单 */
+.running-card {
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+
+.running-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.running-card .task-bar {
+  margin: 0;
+}
+
+.task-open {
+  background: var(--panel-2);
+}
+
+.task-detail td {
+  padding: 0 12px 12px;
+  background: var(--panel-2);
+}
+
+.failure-list {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs-label);
+}
+
+.failure-list li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.fail-reason {
+  color: var(--danger);
+}
+
+/* 同步 NFO 面板: 清单要能滚, 失败要能标红 */
+.nfo-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgba(8, 10, 14, 0.86);
+}
+
+.nfo-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(760px, 100%);
+  max-height: min(80vh, 720px);
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 16px 48px rgba(0, 0, 0, 0.42);
+}
+
+.nfo-modal-body header,
+.nfo-modal-body footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nfo-modal-body footer {
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.nfo-modal-body .summary {
+  margin: 0;
+  font-size: var(--fs-body);
+}
+
+.nfo-filters {
+  display: flex;
+  gap: 8px;
+}
+
+.nfo-list {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.nfo-list li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.nfo-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: var(--fs-label);
+}
+
+.nfo-action {
+  color: var(--text-faint);
+}
+
+.nfo-changes {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 420px;
+}
+
+.nfo-path {
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 一致性提醒: 一条色条就够, 别跟错误提示抢注意力 */

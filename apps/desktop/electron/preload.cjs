@@ -30,9 +30,14 @@ contextBridge.exposeInMainWorld("kura", {
   retypeDetect: (apply = false) => ipcRenderer.invoke("item:retype-detect", { apply }),
   openDataDir: () => ipcRenderer.invoke("data:open"),
   syncNfo: (input) => ipcRenderer.invoke("nfo:sync", input),
-  writeNfo: (input) => ipcRenderer.invoke("nfo:write", input),
+  onNfoProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on("nfo:progress", listener);
+    return () => ipcRenderer.removeListener("nfo:progress", listener);
+  },
   tasks: (limit) => ipcRenderer.invoke("tasks:list", { limit }),
-  retryTask: (id) => ipcRenderer.invoke("tasks:retry", { id }),
+  retryTask: (id, onlyFailed) => ipcRenderer.invoke("tasks:retry", { id, onlyFailed: onlyFailed === true }),
+  taskFailures: (id, limit) => ipcRenderer.invoke("tasks:failures", { id, limit }),
   updateItem: (input) => ipcRenderer.invoke("item:update", input),
   scrapeKeys: (keys) => ipcRenderer.invoke("scrape:keys", { keys }),
   fetchPoster: (key) => ipcRenderer.invoke("resource:fetch", { key }),

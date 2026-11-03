@@ -253,6 +253,62 @@ export async function translatePending(
   return { count: reports.length, cancelled: false, reports, translated, failed, skipped };
 }
 
+export interface TranslateItemsResult extends TranslateBatchResult {
+  taskId: number;
+}
+
+/** 勾选条目批量翻译 —— 与「翻译待处理」共用任务/日志/进度。 */
+export async function translateItemsTask(
+  rt: Runtime,
+  options: { keys: string[]; translator: Translator },
+  signal: AbortSignal,
+): Promise<{ task: TaskRow; result: TranslateItemsResult | null }> {
+  const task = createTask(rt, {
+    type: "translate.items",
+    payload: { keys: options.keys, count: options.keys.length },
+    total: options.keys.length,
+  });
+
+  return runTask(rt, task, signal, async (run) => {
+    const reports: TranslateProgress[] = [];
+    let translated = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    for (const [index, key] of options.keys.entries()) {
+      if (run.signal.aborted) break;
+      let progress: TranslateProgress;
+      try {
+        const errorsBefore = options.translator.errors.length;
+        const report = await translateItem(rt, key, options.translator);
+        const newErrors = options.translator.errors.slice(errorsBefore);
+        if (report.translated.length > 0) translated++;
+        else if (newErrors.length > 0) failed++;
+        else skipped++;
+        progress = {
+          index: index + 1,
+          total: options.keys.length,
+          key,
+          translated: report.translated,
+          ...(newErrors.length > 0 && report.translated.length === 0 ? { error: newErrors.at(-1) } : {}),
+        };
+      } catch (err) {
+        failed++;
+        progress = { index: index + 1, total: options.keys.length, key, translated: [], error: err instanceof Error ? err.message : String(err) };
+      }
+      reports.push(progress);
+      run.log.write("item", { ...progress, ok: progress.translated.length > 0, error: progress.error ?? null });
+      run.progress(index + 1, failed, options.keys.length);
+    }
+
+    return {
+      result: { taskId: task.id, count: reports.length, cancelled: run.signal.aborted, reports, translated, failed, skipped },
+      processed: reports.length,
+      failed,
+    };
+  });
+}
+
 export interface TaskTranslateResult extends TranslateBatchResult {
   taskId: number;
 }

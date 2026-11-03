@@ -41,8 +41,7 @@ import {
   runTask,
   listTasks,
   getTask,
-  writeNfo,
-  syncNfo,
+  syncNfoTask,
   retryTask,
   cancelTask,
   taskLogFiles,
@@ -416,10 +415,15 @@ export const COMMANDS: Command[] = [
         else options.number = target;
       }
       const action = args.positionals.action ?? "sync";
-      if (action === "write") return writeNfo(ctx.rt!, options);
-      if (action === "import") return { ...syncNfo(ctx.rt!, { ...options, writeOnly: false, readOnly: true }) };
-      if (action !== "sync") throw new AppError(`未知动作: ${action} (sync | write | import)`, EXIT.USAGE);
-      return syncNfo(ctx.rt!, options);
+      if (!["sync", "write", "import"].includes(action)) {
+        throw new AppError(`未知动作: ${action} (sync | write | import)`, EXIT.USAGE);
+      }
+      const variant = action === "write" ? { ...options, writeOnly: true } : action === "import" ? { ...options, readOnly: true } : options;
+      // 与刮削/翻译一样走任务版: CLI 跑完也要能在 `task list` / 界面里查到失败项
+      const controller = new AbortController();
+      const { task, result } = await syncNfoTask(ctx.rt!, variant, controller.signal);
+      if (!result) throw new AppError(`任务 #${task.id} 没有结果`, EXIT.INTERNAL);
+      return { ...result, taskId: task.id };
     },
     render(data: {
       dryRun: boolean;
