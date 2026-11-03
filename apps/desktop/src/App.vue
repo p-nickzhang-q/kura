@@ -491,7 +491,7 @@ async function scanLibrary(force: boolean): Promise<void> {
   const report = await run("扫描", () => window.kura.scan(selectedId.value!, { force }));
   if (report) {
     const { counts } = report;
-    note.value = `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}${counts.retyped ? ` · 修正内容类型 ${counts.retyped} 条` : ""}`;
+    note.value = `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}${counts.auxiliary ? ` · 跳过辅助媒体 ${counts.auxiliary}` : ""}${counts.retyped ? ` · 修正内容类型 ${counts.retyped} 条` : ""}`;
     // 扫描不再读 nfo: 有 nfo 没读进来时明确告诉人下一步做什么, 别静默丢功能。
     nfoHint.value = counts.nfoPending ?? 0;
     page.value = 0;

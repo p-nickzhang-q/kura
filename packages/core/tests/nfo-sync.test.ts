@@ -230,3 +230,90 @@ describe("任务记录", () => {
     }
   });
 });
+
+describe("Emby 辅助文件不是影片", () => {
+  test("识别主题视频/预告片/样片 (目录与文件名两种约定)", async () => {
+    const { isAuxiliaryMedia } = await import("../src/domain/identify");
+    expect(isAuxiliaryMedia("Z:\\库\\ABC-123 未知演员\\backdrops\\theme_video.mp4")).toBe(true);
+    expect(isAuxiliaryMedia("Z:\\库\\ABC-123\\trailers\\trailer.mp4")).toBe(true);
+    expect(isAuxiliaryMedia("Z:\\库\\ABC-123\\extras\\clip.mkv")).toBe(true);
+    expect(isAuxiliaryMedia("/media/ABC-123/movie-trailer.mp4")).toBe(true);
+    expect(isAuxiliaryMedia("/media/ABC-123/sample.mp4")).toBe(true);
+    // 正片不能被误杀
+    expect(isAuxiliaryMedia("Z:\\库\\ABC-123\\ABC-123.mp4")).toBe(false);
+    expect(isAuxiliaryMedia("Z:\\库\\ABC-123\\ABC-123-cd2.mkv")).toBe(false);
+    expect(isAuxiliaryMedia("/media/ABC-123/sample 女教师.mp4")).toBe(false);
+  });
+
+  test("扫描不登记辅助媒体, 同步也不去改它们的 nfo", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kura-aux-"));
+    const dataDir = join(root, "data");
+    const media = join(root, "media");
+    await mkdir(join(media, "backdrops"), { recursive: true });
+    await mkdir(join(media, "trailers"), { recursive: true });
+    await writeFile(join(media, "ABC-123.mp4"), "video", "utf8");
+    await writeFile(join(media, "backdrops", "theme_video.mp4"), "video", "utf8");
+    await writeFile(join(media, "trailers", "trailer.mp4"), "video", "utf8");
+    // Emby 自己的元数据文件
+    await writeFile(join(media, "backdrops", "theme_video.nfo"), "<movie><title>Emby 主题视频</title></movie>", "utf8");
+    await writeFile(join(media, "trailers", "trailer.nfo"), "<movie><title>Emby 预告片</title></movie>", "utf8");
+
+    const rt = await openRuntime({ dataDir });
+    try {
+      const library = createLibrary(rt.db, { name: "库", root: media, organizeEnabled: false });
+      const report = await scan(rt, { library });
+      expect(report.counts.added).toBe(1);
+      expect(report.counts.auxiliary).toBe(2);
+      const files = rt.db.all<{ path: string }>("select path from media_files");
+      expect(files.map((row) => row.path)).toEqual([join(media, "ABC-123.mp4")]);
+
+      rt.db.run("update items set title = '新标题', field_sources = ? ", [JSON.stringify({ title: "javbus" })]);
+      await syncNfo(rt, { libraryId: library.id, apply: true });
+
+      // Emby 的两个 nfo 一个字都不能变
+      expect(await readFile(join(media, "backdrops", "theme_video.nfo"), "utf8")).toContain("Emby 主题视频");
+      expect(await readFile(join(media, "trailers", "trailer.nfo"), "utf8")).toContain("Emby 预告片");
+      // 正片的 nfo 照常写
+      expect(await readFile(join(media, "ABC-123.nfo"), "utf8")).toContain("新标题");
+    } finally {
+      rt.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("老库里残留的辅助文件行: 同步跳过且说明原因, 同一 nfo 路径只处理一次", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kura-aux2-"));
+    const dataDir = join(root, "data");
+    const media = join(root, "media");
+    await mkdir(join(media, "trailers"), { recursive: true });
+    await writeFile(join(media, "ABC-123.mp4"), "video", "utf8");
+    await writeFile(join(media, "trailers", "trailer.mp4"), "video", "utf8");
+    await writeFile(join(media, "ABC-123.nfo"), EXISTING, "utf8");
+
+    const rt = await openRuntime({ dataDir });
+    try {
+      const library = createLibrary(rt.db, { name: "库", root: media, organizeEnabled: false });
+      await scan(rt, { library });
+      // 模拟老库: 手工把辅助文件登记进来 (path 是主键, 同一路径只能一行)
+      rt.db.run(
+        "insert into media_files (path, library_id, number, size, mtime_ms, phase, seen_at) values (?, ?, 'ABC-123', 1, 1, ?, unixepoch())",
+        [
+          join(media, "trailers", "trailer.mp4"),
+          library.id,
+          JSON.stringify({ part: null, cd: null, hasSubtitle: false, mosaic: null, quality: null }),
+        ],
+      );
+      rt.db.run("update items set title = '新标题', field_sources = ? ", [JSON.stringify({ title: "javbus" })]);
+
+      const report = await syncNfo(rt, { libraryId: library.id });
+      const aux = report.entries.filter((entry) => entry.reason?.includes("辅助文件"));
+      expect(aux.length).toBe(1);
+      expect(aux.every((entry) => entry.action === "skip")).toBe(true);
+      // 正片只处理一次
+      expect(report.entries.filter((entry) => entry.path === join(media, "ABC-123.mp4")).length).toBe(1);
+    } finally {
+      rt.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

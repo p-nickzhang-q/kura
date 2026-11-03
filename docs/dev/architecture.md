@@ -76,6 +76,20 @@ NFO 里对得上的演员抹掉, 条目看起来"越刮越空"。
 手工改过的字段记成 `manual` —— 它和 `nfo` 一样不属于"网络来源", 但同样说明
 "这条不是还没刮", 所以手工改过的标题不会被下一轮批量刮削当成空条目重新抓。
 
+## 辅助媒体不算影片
+
+Emby / Jellyfin 会在影片目录里放 `backdrops\theme_video.mp4`(主题视频)与 `trailers\trailer.mp4`(预告片)。
+番号是从**目录名**解析出来的, 所以这些文件会被当成"同一番号的另一个文件":
+
+- 扫描时:不登记(`isAuxiliaryMedia` 跳过, 计入 `counts.auxiliary`)
+- 同步 NFO 时:跳过, 否则会去改写 Emby 自己的 `theme_video.nfo` / `trailer.nfo`,
+  把影片元数据塞进辅助媒体的元数据里
+
+目录约定:`backdrops` `trailers` `extras` `featurettes` `sample(s)` `behind the scenes` `deleted scenes` `interviews` `scenes`;
+文件名约定:`theme(_video)` `trailer` `movie-trailer` `sample`。目录判断不含文件名本身 —— 影片叫 "sample 女教师" 是合法的。
+
+同一份 nfo 路径只处理一次(多段 `-cd1`/`-cd2` 路径不同, 各自写)。
+
 ## NFO 同步: 读写是同一件事
 
 Emby / Jellyfin / Kodi 读的是**视频旁的 `.nfo` 文件**, 不是 Kura 的库。所以"读 nfo"和"写 nfo"

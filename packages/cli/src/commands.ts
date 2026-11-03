@@ -237,6 +237,7 @@ export const COMMANDS: Command[] = [
       return [
         `扫描完成: ${data.root}${data.dryRun ? " (dry-run)" : ""}`,
         `  新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 移除 ${counts.removed} · 未识别 ${counts.unparsed}`,
+        ...(counts.auxiliary ? [`  跳过 ${counts.auxiliary} 个 Emby 辅助媒体 (主题视频/预告片/样片)`] : []),
         ...(counts.nfoPending ? [`  有 ${counts.nfoPending} 个条目的 .nfo 还没读进库 —— 跑 \`kura nfo sync\` 补上`] : []),
         ...(counts.retyped ? [`  修正内容类型 ${counts.retyped} 条 (解析器升级, 只动还没刮到标题的条目)`] : []),
         `  耗时 ${data.durationMs}ms`,

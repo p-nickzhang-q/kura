@@ -139,3 +139,26 @@ export function parseFileInfo(fileName: string): FileInfo {
     definition,
   };
 }
+
+/** Emby / Jellyfin / Kodi 放"辅助媒体"的目录: 里面是主题视频、预告片、样片, 不是影片。 */
+const AUXILIARY_DIRS = new Set(["backdrops", "trailers", "trailer", "extras", "featurettes", "sample", "samples", "behind the scenes", "deleted scenes", "interviews", "scenes"]);
+
+/** 这类文件名固定是辅助媒体, 与番号无关。 */
+const AUXILIARY_NAMES = /^(?:theme_video|theme|trailer|movie-trailer|sample|trailer-[a-z0-9]+|-[a-z0-9]+-trailer)$/i;
+
+/**
+ * 这个文件是不是媒体库的"辅助媒体"(Emby/Jellyfin 的主题视频、预告片、样片)。
+ *
+ * 必须排除, 否则会闯祸: 影片目录里常有 `backdrops\theme_video.mp4` 与
+ * `trailers\trailer.mp4`, 番号从**目录名**解析出来, 于是它们被当成同一部片的文件;
+ * 同步 NFO 时按"视频名.nfo"去写, 就会去改写 Emby 自己的 `theme_video.nfo` / `trailer.nfo`,
+ * 把影片元数据塞进辅助媒体的元数据里。
+ */
+export function isAuxiliaryMedia(path: string): boolean {
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  if (parts.length === 0) return false;
+  const fileName = parts[parts.length - 1]!;
+  if (AUXILIARY_NAMES.test(fileName.replace(/\.[^.]+$/, ""))) return true;
+  // 目录判断不含文件名本身: 影片也可能叫 sample 之类的, 那是目录约定才可信。
+  return parts.slice(0, -1).some((part) => AUXILIARY_DIRS.has(part.toLowerCase()));
+}

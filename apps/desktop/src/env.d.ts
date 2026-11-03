@@ -58,6 +58,7 @@ interface KuraScanReport {
     unchanged: number;
     removed: number;
     unparsed: number;
+    auxiliary: number;
     nfoPending: number;
     retyped: number;
   };

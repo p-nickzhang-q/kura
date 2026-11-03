@@ -1,7 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { AppError, EXIT } from "../exit";
 import { extname, join } from "node:path";
-import { detectContentType, extractNumber, parseFileInfo } from "../domain/identify";
+import { detectContentType, extractNumber, isAuxiliaryMedia, parseFileInfo } from "../domain/identify";
 import { existsSync } from "node:fs";
 import { nfoPathFor } from "../domain/nfo";
 import { hasNetworkSource } from "./nfo-sync";
@@ -30,6 +30,8 @@ export interface ScanReport {
     unchanged: number;
     removed: number;
     unparsed: number;
+    /** 被跳过的辅助媒体 (Emby 主题视频 / 预告片 / 样片) 个数。 */
+    auxiliary: number;
     /**
      * 视频旁边有 .nfo、但库里该条目还没有网络来源的个数。
      *
@@ -85,8 +87,11 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
     throw new Error(`媒体库目录不存在: ${library.root}`);
   }
 
+  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, auxiliary: 0, nfoPending: 0, retyped: 0 };
   const found: Found[] = [];
-  await walk(library.root, found);
+  const auxiliary = { count: 0 };
+  await walk(library.root, found, auxiliary);
+  counts.auxiliary = auxiliary.count;
 
   const known = new Map<string, MediaFileRow>();
   for (const row of rt.db.all<MediaFileRow>(
@@ -96,7 +101,6 @@ export async function scan(rt: Runtime, opts: ScanOptions): Promise<ScanReport> 
     known.set(row.path, row);
   }
 
-  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, nfoPending: 0, retyped: 0 };
   const seen = new Set<string>();
   // 同一个番号可能对应多个文件, nfo 只读一次。
   const nfoChecked = new Set<string>();
@@ -302,15 +306,21 @@ function parseFieldSources(raw: string | null | undefined): Record<string, strin
   }
 }
 
-async function walk(dir: string, out: Found[]): Promise<void> {
+async function walk(dir: string, out: Found[], auxiliary: { count: number }): Promise<void> {
   const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
-      await walk(path, out);
+      await walk(path, out, auxiliary);
     } else if (entry.isFile()) {
       if (!VIDEO_EXTENSIONS.has(extname(entry.name).toLowerCase())) continue;
+      // Emby/Jellyfin 的主题视频与预告片不是影片: 登记了就会被当成同一番号的另一个"文件",
+      // 同步 NFO 时还会去写它们的 theme_video.nfo / trailer.nfo。 (见 isAuxiliaryMedia)
+      if (isAuxiliaryMedia(path)) {
+        auxiliary.count++;
+        continue;
+      }
       const info = await stat(path);
       out.push({ path, size: info.size, mtimeMs: Math.round(info.mtimeMs) });
     }

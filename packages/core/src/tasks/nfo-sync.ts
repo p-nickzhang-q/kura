@@ -1,6 +1,7 @@
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { buildNfo } from "../domain/materialize";
+import { isAuxiliaryMedia } from "../domain/identify";
 import { nfoPathFor, nfoToMetadata, parseNfo, updateNfoContent, type NfoFields } from "../domain/nfo";
 import { metadataColumns, rowToMetadata, stringify, type ItemRow } from "../db/rows";
 import { pruneActors, syncItemActors } from "../db/actors";
@@ -206,8 +207,34 @@ export async function syncNfo(rt: Runtime, options: NfoSyncOptions = {}): Promis
     [...params, limit],
   );
 
-  const total = rows.length;
-  const indexOf = new Map(rows.map((row, index) => [row.path, index]));
+  // 双保险: 扫描已经不再登记 Emby 的 theme_video / trailer, 但老库里还有 45 行,
+  // 直接写会去改 Emby 自己的 .nfo。另外同一个 nfo 路径只处理一次(同番号多文件会重复)。
+  const seenNfo = new Set<string>();
+  const workRows: { row: ItemRow & { path: string }; nfoPath: string }[] = [];
+  const preSkipped: NfoSyncEntry[] = [];
+  for (const row of rows) {
+    const nfoPath = nfoPathFor(row.path);
+    if (isAuxiliaryMedia(row.path)) {
+      preSkipped.push({
+        number: row.number ?? row.path,
+        path: row.path,
+        nfoPath,
+        action: "skip",
+        reason: "Emby 辅助文件 (主题视频/预告片/样片), 不是影片",
+        changed: [],
+      });
+      continue;
+    }
+    if (seenNfo.has(nfoPath)) {
+      preSkipped.push({ number: row.number ?? row.path, path: row.path, nfoPath, action: "skip", reason: "同一份 nfo 已处理过", changed: [] });
+      continue;
+    }
+    seenNfo.add(nfoPath);
+    workRows.push({ row, nfoPath });
+  }
+
+  const total = workRows.length + preSkipped.length;
+  const indexOf = new Map(workRows.map((item, index) => [item.row.path, index]));
   const entries: (NfoSyncEntry | undefined)[] = new Array(total);
   const report: NfoSyncReport = {
     dryRun: !apply,
@@ -234,15 +261,14 @@ export async function syncNfo(rt: Runtime, options: NfoSyncOptions = {}): Promis
   };
 
   // ── 方向一: 库里没有网络来源 → 读 nfo 补空字段 ──
-  const importRows = options.writeOnly ? [] : rows.filter((row) => !hasNetworkSource(rowToMetadata(row).fieldSources));
-  const importPaths = new Set(importRows.map((row) => row.path));
+  const importRows = options.writeOnly ? [] : workRows.filter((item) => !hasNetworkSource(rowToMetadata(item.row).fieldSources));
+  const importPaths = new Set(importRows.map((item) => item.row.path));
   const pendingUpdates: { number: string; merged: Metadata; changed: string[] }[] = [];
 
-  await forEachLimit(importRows, concurrency, async (row) => {
+  await forEachLimit(importRows, concurrency, async ({ row, nfoPath }) => {
     const index = indexOf.get(row.path)!;
     if (options.signal?.aborted) return;
     const current = rowToMetadata(row);
-    const nfoPath = nfoPathFor(row.path);
     const entry: NfoSyncEntry = { number: current.key, path: row.path, nfoPath, action: "skip", changed: [] };
 
     const text = await readNfoText(nfoPath);
@@ -288,17 +314,17 @@ export async function syncNfo(rt: Runtime, options: NfoSyncOptions = {}): Promis
   }
 
   if (options.readOnly) {
-    report.entries = entries.filter((entry): entry is NfoSyncEntry => entry !== undefined);
+    report.skipped += preSkipped.length;
+    report.entries = [...preSkipped, ...entries.filter((entry): entry is NfoSyncEntry => entry !== undefined)];
     return report;
   }
 
   // ── 方向二: 库里有网络来源 → 用库里的值改 nfo ──
-  const writeRows = rows.filter((row) => !importPaths.has(row.path));
-  await forEachLimit(writeRows, concurrency, async (row) => {
+  const writeRows = workRows.filter((item) => !importPaths.has(item.row.path));
+  await forEachLimit(writeRows, concurrency, async ({ row, nfoPath }) => {
     const index = indexOf.get(row.path)!;
     if (options.signal?.aborted) return;
     const metadata = rowToMetadata(row);
-    const nfoPath = nfoPathFor(row.path);
     const entry: NfoSyncEntry = { number: metadata.key, path: row.path, nfoPath, action: "skip", changed: [] };
 
     if (!metadata.title) {
@@ -336,7 +362,8 @@ export async function syncNfo(rt: Runtime, options: NfoSyncOptions = {}): Promis
   });
 
   report.cancelled = options.signal?.aborted === true;
-  report.entries = entries.filter((entry): entry is NfoSyncEntry => entry !== undefined);
+  report.skipped += preSkipped.length;
+  report.entries = [...preSkipped, ...entries.filter((entry): entry is NfoSyncEntry => entry !== undefined)];
   return report;
 }
 
