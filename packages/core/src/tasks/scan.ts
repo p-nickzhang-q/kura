@@ -1,6 +1,6 @@
 import { readdir, stat } from "node:fs/promises";
 import { AppError, EXIT } from "../exit";
-import { extname, join } from "node:path";
+import { basename, extname, join } from "node:path";
 import { detectContentType, extractNumber, isAuxiliaryMedia, parseFileInfo } from "../domain/identify";
 import { existsSync } from "node:fs";
 import { locateEpisode, locateMovie } from "../domain/episodes";
@@ -127,7 +127,11 @@ async function scanAv(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
 
       // 解析本身是纯函数、不花 IO, 所以每次都重算, 不跟着 size/mtime 一起跳过。
       // 这样解析器升级后, 旧库里"以前认不出"的文件重扫一次就能自愈。
-      const number = extractNumber(file.path);
+      //
+      // 先看文件名, 认不出再拿整条路径兜底: 目录名里的数字常常不是番号
+      // (临时目录 kura-scanvideo-wtyk17 会被认成 WTYK-17, 真实世界里的 `4K-2024`
+      // 同理)。文件名里没有时仍然靠路径 —— 目录名带番号、文件名是 video.mp4 的库很常见。
+      const number = extractNumber(basename(file.path)) ?? extractNumber(file.path);
       const phase = parseFileInfo(file.path);
       if (!number) counts.unparsed++;
 

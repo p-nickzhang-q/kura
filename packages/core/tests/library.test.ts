@@ -149,3 +149,43 @@ describe("按库计数的口径", () => {
     expect(countExhausted(rt, { libraryId: libA.id })).toBe(0);
   });
 });
+
+describe("域 (ADR 0008)", () => {
+  test("建库时定域, 默认 av", () => {
+    const av = createLibrary(rt.db, { name: "番号库", root: join(root, "a") });
+    const tv = createLibrary(rt.db, { name: "剧库", root: join(root, "b"), domain: "tv" });
+    expect(av.domain).toBe("av");
+    expect(tv.domain).toBe("tv");
+    // 域不同, 默认模板也不同: 影视照抄 av 模板会生成叫 censored 的目录
+    expect(av.template).toBe("{content_type}/{studio}/{number}");
+    expect(tv.template).toBe("{series}/Season {season}");
+  });
+
+  test("域没有修改入口 —— 建库时落定, 不可改", () => {
+    const tv = createLibrary(rt.db, { name: "剧库", root: join(root, "b"), domain: "tv" });
+    // 改名、换模板、切整理开关都不许碰域
+    renameLibrary(rt.db, tv.id, "剧库改名");
+    const after = rt.db.get<{ domain: string }>("select domain from libraries where id = ?", [tv.id]);
+    expect(after?.domain).toBe("tv");
+  });
+
+  test("跨域目录重叠直接拒绝 (相等 / 父子 / 尾斜杠)", async () => {
+    createLibrary(rt.db, { name: "剧库", root: join(root, "a"), domain: "tv" });
+
+    // 同一个目录
+    expect(() => createLibrary(rt.db, { name: "电影库", root: join(root, "a"), domain: "movie" })).toThrow(/重叠|已经是媒体库/);
+    // 新库在旧库里面
+    await mkdir(join(root, "a", "子目录"), { recursive: true });
+    expect(() => createLibrary(rt.db, { name: "电影库", root: join(root, "a", "子目录"), domain: "movie" })).toThrow(/重叠/);
+    // 新库包含旧库
+    expect(() => createLibrary(rt.db, { name: "电影库", root: root, domain: "movie" })).toThrow(/重叠/);
+    // 尾斜杠不影响判断
+    expect(() => createLibrary(rt.db, { name: "电影库2", root: `${join(root, "a")}/`, domain: "movie" })).toThrow(/重叠/);
+  });
+
+  test("同域重叠只放行(不拦), 免得老用户升级后建不了库", async () => {
+    createLibrary(rt.db, { name: "番号库", root: join(root, "a") });
+    await mkdir(join(root, "a", "子目录"), { recursive: true });
+    expect(() => createLibrary(rt.db, { name: "番号库2", root: join(root, "a", "子目录") })).not.toThrow();
+  });
+});

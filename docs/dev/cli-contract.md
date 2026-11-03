@@ -139,3 +139,15 @@ stdout 仍只有最后那一个结果信封。Ctrl-C 会中断在途请求并提
 - **输出字段改名** → 已经是对外契约,需要同步升 `version` 并在 `schema` 里标注。当前阶段(0.x)直接改,但要同步文档。
 - **加交互式确认** → 必须同时实现 `--yes` 与"无 TTY 直接退出 4",否则 agent 会挂死。
 - **加长任务** → 必须提供 `--stream` 事件 + 终态信封,不要让 agent 靠超时判断失败。
+
+## 媒体库的域（ADR 0008）
+
+```bash
+kura library add 剧库 /media/tv --domain tv          # av | movie | tv, 默认 av
+kura library list                                    # 每行带 domain 与模板
+```
+
+- **域建库时落定，不可改**：它决定识别方式、刮削来源与整理模板。选错只能删库重建（只索引库删掉不丢磁盘数据）。
+- **跨域目录重叠直接拒绝**（USAGE 退出码）：同一个物理目录不能同时属于两个域，否则两个域的整理模板会互相搬家。同域重叠只放行 —— 老用户可能真有父子目录两个番号库。
+- 默认模板按域给：`av` → `{content_type}/{studio}/{number}`，`tv` → `{series}/Season {season}`，`movie` → `{series}`。
+- `scan` / `scrape` / `organize` **不接受** `--domain`：它们按库执行，库自带域。给两个口径等于给 agent 两个可能矛盾的输入。

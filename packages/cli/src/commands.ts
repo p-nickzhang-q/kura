@@ -17,6 +17,9 @@ import {
   countExhausted,
   MAX_SCRAPE_ATTEMPTS,
   listFiles,
+  DOMAINS,
+  DOMAIN_LABEL,
+  isDomain,
   listLibraries,
   organize,
   parseFieldList,
@@ -119,7 +122,7 @@ function parseContentType(value: unknown): ContentType | null {
 export const COMMANDS: Command[] = [
   {
     name: "library",
-    summary: "媒体库: list | add <名称> <根目录> [--no-organize] | rename <库> --to <新名> | set-template | set-organize",
+    summary: "媒体库: list | add <名称> <根目录> [--domain av|movie|tv] [--no-organize] | rename <库> --to <新名> | set-template | set-organize",
     needsDb: true,
     args: [
       { name: "action", type: "string", description: "list | add | rename | set-template | set-organize", positional: true, required: true },
@@ -129,6 +132,12 @@ export const COMMANDS: Command[] = [
       { name: "dimension", type: "string", description: `整理维度: ${DIMENSIONS.map((d) => d.id).join(" | ")}` },
       { name: "organize", type: "boolean", description: "允许整理 (--no-organize 表示只索引的旧成品库)", default: true },
       { name: "to", type: "string", description: "rename: 新库名" },
+      {
+        name: "domain",
+        type: "string",
+        description: "add: 域 av(番号制) | movie(电影) | tv(剧集/动画/综艺), 建库时落定不可改",
+        default: "av",
+      },
     ],
     async run(ctx, args) {
       const action = args.positionals.action;
@@ -163,9 +172,15 @@ export const COMMANDS: Command[] = [
         const name = args.positionals.name;
         const root = args.positionals.root;
         if (!name || !root) throw new AppError("用法: library add <名称> <根目录>", EXIT.USAGE);
+        const rawDomain = typeof args.options.domain === "string" ? args.options.domain : "av";
+        if (!isDomain(rawDomain)) {
+          throw new AppError(`未知的域: ${rawDomain}`, EXIT.USAGE, {
+            allowed: DOMAINS.map((domain) => ({ id: domain, label: DOMAIN_LABEL[domain] })),
+          });
+        }
         const template = args.options.dimension || args.options.template ? resolveTemplate() : undefined;
         const organizeEnabled = args.options.organize !== false;
-        return { library: createLibrary(ctx.rt!.db, { name, root, template, organizeEnabled }) };
+        return { library: createLibrary(ctx.rt!.db, { name, root, template, organizeEnabled, domain: rawDomain }) };
       }
 
       if (action === "rename") {

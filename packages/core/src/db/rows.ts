@@ -1,6 +1,7 @@
 import { isDomain, type ContentType, type Domain, type FieldKey, type FileInfo, type Metadata } from "../domain/types";
 import type { Library } from "../domain/materialize";
 import { sanitizeActorNames } from "../domain/actors";
+import { resolve, sep } from "node:path";
 import type { Db } from "./driver";
 import { AppError, EXIT } from "../exit";
 
@@ -182,6 +183,25 @@ export function defaultTemplateFor(domain: Domain): string {
   }
 }
 
+/**
+ * 两个目录是否重叠(相等, 或一个在另一个里面)。
+ *
+ * 用 `resolve` 归一化再比前缀: 用户输入常带尾斜杠、`..`、大小写差异,
+ * 直接字符串比会让 `D:\lib` 与 `D:\lib\` 看起来毫无关系。
+ */
+function overlaps(a: string, b: string): boolean {
+  const left = resolveForCompare(a);
+  const right = resolveForCompare(b);
+  if (left === right) return true;
+  return left.startsWith(`${right}${sep}`) || right.startsWith(`${left}${sep}`);
+}
+
+function resolveForCompare(path: string): string {
+  const normalized = resolve(path).replace(/[\\/]+$/, "");
+  // Windows 盘符不区分大小写
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
 export function createLibrary(
   db: Db,
   input: { name: string; root: string; template?: string; organizeEnabled?: boolean; domain?: Domain },
@@ -193,6 +213,19 @@ export function createLibrary(
       root: input.root,
       library: existing.name,
     });
+  }
+
+  // 跨域的目录重叠必须拒(ADR 0008 决策 2): 两个域的整理模板互相冲突, 重叠会互相搬家。
+  // 同域重叠只警告不拦 —— 老用户可能真有父子目录两个番号库, 不该因为升级就建不了库。
+  const domain = input.domain ?? "av";
+  for (const other of listLibraries(db)) {
+    if (other.domain === domain) continue;
+    if (!overlaps(input.root, other.root)) continue;
+    throw new AppError(
+      `目录与「${other.name}」(${other.domain} 域)重叠, 同一个目录不能同时属于两个域`,
+      EXIT.USAGE,
+      { root: input.root, conflictsWith: other.name, otherRoot: other.root, otherDomain: other.domain },
+    );
   }
 
   const name = uniqueLibraryName(db, input.name);

@@ -15,7 +15,10 @@ export type { Settings } from "./config";
 export type { Paths } from "./paths";
 export type { Db, DbInfo } from "./db/driver";
 
-export { CONTENT_TYPES, CONTENT_TYPE_LABEL } from "./domain/types";
+export { CONTENT_TYPES, CONTENT_TYPE_LABEL, DOMAINS, DOMAIN_LABEL, isDomain } from "./domain/types";
+export type { Domain } from "./domain/types";
+export { chineseNumber, locateEpisode, locateMovie, parseEpisode, seasonFromDir, showDirOf } from "./domain/episodes";
+export type { EpisodeInfo, EpisodeLocation } from "./domain/episodes";
 export type {
   ContentType,
   FieldKey,
@@ -44,7 +47,7 @@ export type { DefaultSourcesOptions, Registry, Source, SourceConfig, SourceConte
 export { HttpClient } from "./net/http";
 export type { FetchInit, FetchLike, HttpClientOptions, RequestOptions } from "./net/http";
 
-export { createLibrary, findLibrary, listLibraries, pinnedFields, renameLibrary, rowToMetadata, updateLibraryOrganize, updateLibraryTemplate } from "./db/rows";
+export { createLibrary, defaultTemplateFor, findLibrary, listLibraries, pinnedFields, renameLibrary, rowToMetadata, updateLibraryOrganize, updateLibraryTemplate } from "./db/rows";
 export { actorIndexDrift, setItemActors } from "./db/actors";
 export type { ItemRow, MediaFileRow } from "./db/rows";
 

@@ -150,3 +150,26 @@ describe("番号制库不受影响", () => {
     expect(files.map((file) => file.path)).toEqual([join(dir, "某剧 - S01E02.mkv")]);
   });
 });
+
+describe("番号识别的误报", () => {
+  test("文件名里有番号就以文件名为准, 不被目录名带偏", async () => {
+    const dir = join(media, "kura-wtyk17");
+    await makeShow(dir, "x", ["SSIS-915.mkv"]);
+    const library = createLibrary(rt.db, { name: "番号库", root: media, domain: "av" });
+
+    await scan(rt, { library });
+    const row = rt.db.get<{ number: string | null }>("select number from media_files");
+    expect(row?.number).toBe("SSIS-915");
+  });
+
+  test("文件名里没有番号时才回头看路径 (目录名带番号的老库照旧能认)", async () => {
+    const dir = join(media, "SSIS-915-C");
+    await makeShow(dir, "x", ["video.mp4"]);
+    const library = createLibrary(rt.db, { name: "番号库", root: media, domain: "av" });
+
+    await scan(rt, { library });
+    const row = rt.db.get<{ number: string | null }>("select number from media_files");
+    // 目录里的 -C 是"分集/中字"相位标记, 番号是 SSIS-915
+    expect(row?.number).toBe("SSIS-915");
+  });
+});
