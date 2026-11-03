@@ -47,11 +47,11 @@ import {
   countPendingTranslation,
   translationStats,
   repairTranslations,
-  translatePending,
+  translatePendingTask,
   listFiles,
   countFiles,
   listTasks,
-  retryTask,
+  getTask,
   listLibraries,
   openRuntime,
   resolvePaths,
@@ -59,7 +59,7 @@ import {
   pendingKeys,
   scan,
   scrape,
-  scrapePending,
+  scrapePendingTask,
   type Library,
   type Runtime,
   type ScanEvent,
@@ -267,6 +267,66 @@ async function exclusive<T>(label: string, fn: (signal: AbortSignal) => Promise<
   }
 }
 
+/**
+ * 重跑一条历史任务。
+ *
+ * 这里必须真的跑起来: 没有守护进程, 没有人在消费 `queued` 行 —— 早先的实现
+ * 只建了一行 queued, 界面说"已重新入队", 实际上什么都不会发生。
+ */
+async function rerunTask(id: number): Promise<{ taskId: number; type: string }> {
+  const rt = mustRuntime();
+  const task = getTask(rt, id);
+  if (!task) throw new AppError(`任务不存在: ${id}`, EXIT.NOT_FOUND, { id });
+  if (task.status === "running" || task.status === "queued") {
+    throw new AppError(`任务 #${id} 还没结束 (${task.status})`, EXIT.RETRYABLE, { id, status: task.status });
+  }
+  const payload = (task.payload ?? {}) as { limit?: number; includeFailed?: boolean };
+
+  if (task.type === "scrape.pending") {
+    return exclusive("重跑刮削", async (signal) => {
+      const { task: fresh } = await scrapePendingTask(
+        rt,
+        {
+          registry: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) }),
+          fixturesDir,
+          sources: fixturesDir ? ["fixture"] : undefined,
+          translator: await buildTranslator(),
+          limit: payload.limit ?? 20,
+          includeFailed: payload.includeFailed === true,
+          signal,
+          onProgress: (progress) => win?.webContents.send("scrape:progress", progress),
+        },
+        signal,
+      );
+      return { taskId: fresh.id, type: fresh.type };
+    });
+  }
+
+  if (task.type === "translate.pending") {
+    return exclusive("重跑翻译", async (signal) => {
+      const translator = await buildTranslator();
+      if (!translator) {
+        throw new AppError("未配置 LLM 或未开启翻译", EXIT.NEEDS_INPUT, {
+          hint: "到「设置」填 LLM 地址/Key/模型, 并打开翻译开关",
+        });
+      }
+      const { task: fresh } = await translatePendingTask(
+        rt,
+        {
+          translator,
+          limit: payload.limit ?? 1000,
+          signal,
+          onProgress: (progress) => win?.webContents.send("translate:progress", progress),
+        },
+        signal,
+      );
+      return { taskId: fresh.id, type: fresh.type };
+    });
+  }
+
+  throw new AppError(`这个任务不支持重跑: ${task.type}`, EXIT.USAGE, { type: task.type });
+}
+
 async function createWindow(): Promise<void> {
   win = new BrowserWindow({
     width: 1180,
@@ -387,16 +447,21 @@ function registerIpc(): void {
   ipcMain.handle("scrape:pending", (_event, input: { limit?: number }) =>
     exclusive("刮削", async (signal) => {
       const rt = mustRuntime();
-      const result = await scrapePending(rt, {
-        registry: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) }),
-        fixturesDir,
-        sources: fixturesDir ? ["fixture"] : undefined,
-        translator: await buildTranslator(),
-        limit: input.limit ?? 20,
+      // 走 *Task 版本: 它会在 tasks 表里留一行, 「任务」页才不是空的。
+      const { task, result } = await scrapePendingTask(
+        rt,
+        {
+          registry: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) }),
+          fixturesDir,
+          sources: fixturesDir ? ["fixture"] : undefined,
+          translator: await buildTranslator(),
+          limit: input.limit ?? 20,
+          signal,
+          onProgress: (progress) => win?.webContents.send("scrape:progress", progress),
+        },
         signal,
-        onProgress: (progress) => win?.webContents.send("scrape:progress", progress),
-      });
-      return result;
+      );
+      return result ?? { total: 0, reports: [], cancelled: true, taskId: task.id };
     }),
   );
 
@@ -422,13 +487,20 @@ function registerIpc(): void {
       }
       // 先白嫖一次本地缓存: 早期版本把 title_original 冲掉的条目可以零成本恢复
       const repaired = repairTranslations(rt, translator);
-      const result = await translatePending(rt, {
-        translator,
-        limit: input.limit ?? 1000,
+      const { task, result } = await translatePendingTask(
+        rt,
+        {
+          translator,
+          limit: input.limit ?? 1000,
+          signal,
+          onProgress: (progress) => win?.webContents.send("translate:progress", progress),
+        },
         signal,
-        onProgress: (progress) => win?.webContents.send("translate:progress", progress),
-      });
-      return { ...result, repaired: repaired.repaired };
+      );
+      return {
+        ...(result ?? { count: 0, cancelled: true, reports: [], translated: 0, failed: 0, skipped: 0, taskId: task.id }),
+        repaired: repaired.repaired,
+      };
     }),
   );
 
@@ -552,7 +624,7 @@ function registerIpc(): void {
     listTasks(mustRuntime(), { limit: input.limit ?? 20 }),
   );
 
-  ipcMain.handle("tasks:retry", (_event, input: { id: number }) => retryTask(mustRuntime(), input.id));
+  ipcMain.handle("tasks:retry", (_event, input: { id: number }) => rerunTask(input.id));
 
   ipcMain.handle("item:get", (_event, number: string) => {
     const rt = mustRuntime();

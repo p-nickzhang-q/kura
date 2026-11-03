@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { updateItem } from "../src/tasks/item";
 import { openRuntime } from "../src/runtime";
 import { createLibrary } from "../src/db/rows";
 import { scan } from "../src/tasks/scan";
@@ -76,13 +77,14 @@ describe("按刮削状态筛选", () => {
     const rt = await openRuntime({ dataDir: join(dir, "data") });
     const library = createLibrary(rt.db, { name: "库", root: media });
     await scan(rt, { library });
-    rt.db.run("update items set title = '有标题了' where number = 'SSIS-100'");
+    // 用 updateItem 而不是裸 SQL: 手工填的字段会记成 manual 来源, 这才算"刮过"。
+    updateItem(rt, { key: "SSIS-100", patch: { title: "有标题了" } });
 
     expect(countItems(rt, { state: "unscraped" })).toBe(0);
     expect(countItems(rt, { state: "scraped" })).toBe(1);
     expect(countItems(rt, {})).toBe(1);
 
-    rt.db.run("update items set title = null where number = 'SSIS-100'");
+    updateItem(rt, { key: "SSIS-100", patch: { title: "" } });
     expect(countItems(rt, { state: "unscraped" })).toBe(1);
     expect(listItems(rt, { state: "scraped" })).toEqual([]);
 

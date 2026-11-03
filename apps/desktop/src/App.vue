@@ -11,6 +11,21 @@ const TYPE_LABEL: Record<string, string> = {
   anime: "动漫",
 };
 
+/** 任务类型/状态的中文名。库里的值是英文枚举, 不该直接印给人看。 */
+const TASK_TYPE_LABEL: Record<string, string> = {
+  "scrape.pending": "刮削",
+  "translate.pending": "翻译",
+};
+
+const TASK_STATUS_LABEL: Record<string, string> = {
+  queued: "排队",
+  running: "进行中",
+  done: "完成",
+  failed: "失败",
+  cancelled: "已取消",
+  interrupted: "中断",
+};
+
 const FIELD_LABEL: Record<string, string> = {
   title: "标题",
   plot: "简介",
@@ -210,6 +225,15 @@ async function refreshAll(): Promise<void> {
   picked.value = picked.value.filter((key) => items.value.some((item) => item.key === key));
   if (detail.value) detail.value = await window.kura.item(detail.value.key);
 }
+
+/** 任务页随时反映库里的状态: 切过去就读一次, 别等刷新整页。 */
+async function refreshTasks(): Promise<void> {
+  tasks.value = (await window.kura.tasks(20)) ?? tasks.value;
+}
+
+watch(tab, (value) => {
+  if (value === "tasks") void refreshTasks();
+});
 
 async function refreshUnparsed(): Promise<void> {
   const result = await window.kura.unparsedFiles({
@@ -543,12 +567,21 @@ function toggleAll(): void {
   picked.value = picked.value.length === items.value.length ? [] : items.value.map((item) => item.key);
 }
 
+/** 任务类型与状态在库里是英文枚举, 界面上必须说人话。 */
+function taskTypeLabel(type: string): string {
+  const label = TASK_TYPE_LABEL[type];
+  return label ?? type;
+}
+
+function taskStatusLabel(status: string): string {
+  return TASK_STATUS_LABEL[status] ?? status;
+}
+
+/** 重跑 = 立刻再跑一遍同一批。没有守护进程, 光建一行 queued 是骗人的。 */
 async function retryTask(task: KuraTask): Promise<void> {
-  const created = await run("重试任务", () => window.kura.retryTask(task.id));
-  if (created) {
-    await refreshAll();
-    note.value = `已重新入队 #${created.id} —— 用「刮削待处理」继续`;
-  }
+  const rerun = await run("重跑任务", () => window.kura.retryTask(task.id));
+  await refreshAll();
+  if (rerun) note.value = `已重跑 #${task.id} → 新任务 #${rerun.taskId}`;
 }
 
 async function openDetail(item: KuraItem): Promise<void> {
@@ -1083,7 +1116,7 @@ async function testDmm(): Promise<void> {
                 <span v-for="n in 8" :key="n" class="skeleton-row" :style="{ opacity: 1 - n * 0.06 }" />
                 <p class="skeleton-hint">{{ busy ? "正在扫描…" : "正在读取条目…" }}</p>
               </div>
-              <div v-else class="empty">
+              <div v-else-if="items.length === 0" class="empty">
                 <template v-if="hasFilters">
                   <p>没有符合当前筛选条件的条目。</p>
                   <button type="button" class="chip" @click="clearFilters">清空筛选</button>
@@ -1305,8 +1338,8 @@ async function testDmm(): Promise<void> {
             <tbody>
               <tr v-for="task in tasks" :key="task.id">
                 <td class="mono">{{ task.id }}</td>
-                <td>{{ task.type }}</td>
-                <td :class="`st-${task.status}`">{{ task.status }}</td>
+                <td>{{ taskTypeLabel(task.type) }}</td>
+                <td :class="`st-${task.status}`">{{ taskStatusLabel(task.status) }}</td>
                 <td class="mono">{{ task.processed }}/{{ task.total }}</td>
                 <td class="mono">{{ task.failed }}</td>
                 <td class="muted">{{ task.error ?? "—" }}</td>
@@ -1317,7 +1350,7 @@ async function testDmm(): Promise<void> {
                     :disabled="busy"
                     @click="retryTask(task)"
                   >
-                    重试
+                    重跑
                   </button>
                 </td>
               </tr>
@@ -1895,8 +1928,12 @@ button:disabled {
   flex: 1;
 }
 
-.st-running {
+.st-running,
+.st-queued {
   color: var(--warn);
+}
+.st-cancelled {
+  color: var(--text-faint);
 }
 .st-done {
   color: var(--ok);

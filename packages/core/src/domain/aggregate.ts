@@ -37,7 +37,12 @@ export function aggregate(records: SourceRecord[], routing: string[]): Aggregate
 
   for (const key of LIST_FIELDS) {
     const hit = ordered.find((record) => Array.isArray(record.fields[key]) && (record.fields[key] as string[]).length > 0);
-    if (hit) (fields as Record<string, unknown>)[key] = dedupe((hit.fields[key] as string[]).map(clean));
+    if (hit) {
+      (fields as Record<string, unknown>)[key] = dedupe((hit.fields[key] as string[]).map(clean));
+      // 多值字段也要记来源: 否则"演员是刮来的还是 NFO 种下的"分不清,
+      // 兜底规则就会拿旧值盖掉新值。
+      fieldSources[key] = hit.site;
+    }
   }
 
   for (const key of URL_FIELDS) {
@@ -53,14 +58,33 @@ export function aggregate(records: SourceRecord[], routing: string[]): Aggregate
   return { fields, fieldSources };
 }
 
-/** 重新聚合时保留用户锁定字段(见 CONTEXT.md 字段锁定)。 */
+/**
+ * 重新聚合时的覆盖规则, 依次是:
+ *  1. 网络来源永远覆盖已有值 —— 包括 NFO 种下的值;
+ *  2. 用户锁定的字段保留原值(见 CONTEXT.md 字段锁定);
+ *  3. 网络这次没给的字段, 用 NFO 种下的值兜底。
+ *
+ * 第 3 条是必需的: 有的来源不给演员, 若只按"incoming 有什么就写什么",
+ * 重刮一次就会把 NFO 里对得上的演员抹掉, 条目看起来"越刮越空"。
+ */
 export function mergeWithPinned(
   incoming: AggregateResult,
   existing: RawFields,
   pinned: FieldKey[],
+  existingSources: Record<string, string> = {},
 ): AggregateResult {
   const fields: RawFields = { ...incoming.fields };
   const fieldSources = { ...incoming.fieldSources };
+
+  for (const [key, source] of Object.entries(existingSources)) {
+    if (source !== "nfo") continue;
+    if (isPresent((fields as Record<string, unknown>)[key])) continue;
+    if (Array.isArray((fields as Record<string, unknown>)[key])) continue;
+    const value = (existing as Record<string, unknown>)[key];
+    if (value === undefined) continue;
+    (fields as Record<string, unknown>)[key] = value;
+    fieldSources[key] = "nfo";
+  }
 
   for (const key of pinned) {
     const value = existing[key];

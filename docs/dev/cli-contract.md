@@ -102,7 +102,7 @@ kura doctor --json
 `item list` 的筛选与排序(都可组合):
 `--q` 关键词(番号/标题/原名/片商/厂牌/系列/演员/标签/导演)、`--type`、
 `--actor` `--studio` `--label` `--series` `--director` `--tag` `--library`、
-`--state unscraped|scraped|exhausted`、
+`--state unscraped|scraped|exhausted`(unscraped = 标题为空**或**只被 NFO 种过、从没联网刮过)、
 `--sort number|title|release|studio|duration|updated`(默认 updated)+ `--desc`。
 排序字段走**白名单**, 未知字段是退出码 2; 文本列的空值永远排最后。
 

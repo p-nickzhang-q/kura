@@ -92,8 +92,13 @@ export function readNfo(videoPath: string): NfoFields | null {
 }
 
 /** nfo 里的字段 → 元数据补丁 (只填库里还空着的字段)。 */
+/**
+ * NFO 只是一颗**种子**: 每个真填了的字段都记 `nfo` 来源, 网络来源可以随时盖掉它
+ * (见 aggregate.ts 的 mergeWithPinned)。只记 title/plot 的话, 界面上分不清
+ * "这条的演员是刮来的" 和 "这条的演员来自旧库的 nfo", 重刮时也判不出该不该兜底。
+ */
 export function nfoToMetadata(fields: NfoFields, number: string): Metadata {
-  return {
+  const metadata: Metadata = {
     key: number,
     number,
     contentType: "censored",
@@ -108,8 +113,14 @@ export function nfoToMetadata(fields: NfoFields, number: string): Metadata {
     actors: fields.actors,
     directors: fields.directors,
     tags: fields.tags,
-    fieldSources: { title: "nfo", plot: "nfo" },
+    fieldSources: {},
   };
+  for (const key of ["title", "plot", "release_date", "duration_min", "studio", "label", "series", "actors", "directors", "tags"] as const) {
+    const value = metadata[key];
+    const filled = Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && value !== "";
+    if (filled) metadata.fieldSources[key] = "nfo";
+  }
+  return metadata;
 }
 
 /** 只是为了导出给测试/调试用。 */

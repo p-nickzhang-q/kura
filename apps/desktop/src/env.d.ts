@@ -213,7 +213,7 @@ interface KuraBridge {
   ): Promise<{ applied: boolean; changes: { number: string; from: string; to: string; hasTitle: boolean }[] }>;
   openDataDir(): Promise<{ dir: string }>;
   tasks(limit?: number): Promise<KuraTask[]>;
-  retryTask(id: number): Promise<KuraTask>;
+  retryTask(id: number): Promise<{ taskId: number; type: string }>;
   updateItem(input: { key: string; pin?: string[]; unpin?: string[] }): Promise<KuraItem>;
   scrapeKeys(keys: string[]): Promise<{ count: number; results: { key: string; ok: boolean; filled: number; error?: string }[] }>;
   fetchPoster(key: string): Promise<{

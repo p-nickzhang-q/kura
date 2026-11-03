@@ -1,6 +1,7 @@
 import { AppError, EXIT } from "../exit";
 import { needsTranslation, type Translator } from "../llm/translate";
 import { metadataColumns, rowToMetadata, type ItemRow } from "../db/rows";
+import { createTask, runTask, type TaskRow } from "./queue";
 import type { Metadata } from "../domain/types";
 import type { Runtime } from "../runtime";
 
@@ -250,4 +251,44 @@ export async function translatePending(
   }
 
   return { count: reports.length, cancelled: false, reports, translated, failed, skipped };
+}
+
+export interface TaskTranslateResult extends TranslateBatchResult {
+  taskId: number;
+}
+
+/**
+ * 把批量翻译跑成一条可追溯的任务 —— 与 scrapePendingTask 同构。
+ *
+ * 这里存在的理由不是"记录好看": 翻译 3000 条是几十分钟的事, 软件重开之后
+ * 「任务」页得能说清上一次跑到第几条、失败了几条。
+ */
+export async function translatePendingTask(
+  rt: Runtime,
+  options: TranslateBatchOptions,
+  signal: AbortSignal,
+): Promise<{ task: TaskRow; result: TaskTranslateResult | null }> {
+  const total = pendingTranslationKeys(rt, options.limit ?? 1000).length;
+  const task = createTask(rt, {
+    type: "translate.pending",
+    payload: { limit: options.limit ?? 1000 },
+    total,
+  });
+
+  return runTask(rt, task, signal, async (run) => {
+    const result = await translatePending(rt, {
+      ...options,
+      signal: run.signal,
+      onProgress: (progress) => {
+        run.progress(progress.index, progress.translated.length === 0 && progress.error ? 1 : 0, progress.total);
+        run.log.write("item", progress as unknown as Record<string, unknown>);
+        options.onProgress?.(progress);
+      },
+    });
+    return {
+      result: { ...result, taskId: task.id },
+      processed: result.count,
+      failed: result.failed,
+    };
+  });
 }

@@ -129,7 +129,7 @@ async function scrapeOnce(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRepor
   const existingRow = rt.db.get<ItemRow>("select * from items where number = ?", [opts.key.value]);
   const existing = existingRow ? rowToMetadata(existingRow) : null;
   const pinned = existing ? pinnedFields(rt.db, opts.key.value) : [];
-  const merged = mergeWithPinned(incoming, existing ?? {}, pinned);
+  const merged = mergeWithPinned(incoming, existing ?? {}, pinned, existing?.fieldSources ?? {});
 
   const metadata: Metadata = {
     key: opts.key.value,
@@ -329,6 +329,21 @@ export async function scrapePending(
 
   return { total: keys.length, reports, cancelled: false };
 }
+/**
+ * "还没从网络刮过"的判据。
+ *
+ * 不能只看 `title` 是否为空: 从旧库回读的 NFO 会先把标题种进去, 这些条目一次网络请求
+ * 都没发过, 却被当成"已刮削", 于是永远显示 NFO 里的旧演员 —— 而这正是不该发生的:
+ * NFO 只是种子, 网络来源应该盖掉它。
+ *
+ * `field_sources` 里除了 `nfo` 再没有别的来源, 就算没刮过。
+ */
+function pendingWhere(prefix = ""): string {
+  return `(${prefix}title is null or ${prefix}title = '' or not exists (
+    select 1 from json_each(${prefix}field_sources) where json_each.value <> 'nfo'
+  ))`;
+}
+
 export function pendingKeys(
   rt: Runtime,
   limit = 50,
@@ -336,7 +351,7 @@ export function pendingKeys(
 ): ItemKey[] {
   const exhausted = options.includeFailed ? "" : ` and scrape_attempts < ${MAX_SCRAPE_ATTEMPTS}`;
   const rows = rt.db.all<{ number: string; content_type: string }>(
-    `select number, content_type from items where (title is null or title = '')${exhausted} order by number limit ?`,
+    `select number, content_type from items where ${pendingWhere()}${exhausted} order by number limit ?`,
     [limit],
   );
   return rows.map((row) => ({
@@ -468,10 +483,11 @@ function itemFilters(options: Omit<ListItemOptions, "limit" | "offset">): { wher
     }
   }
 
+  // 列表筛选与 countPending/countExhausted 必须同一口径, 否则"未刮削 6"点进去是另一批。
   if (options.state === "unscraped") {
-    where.push("(items.title is null or items.title = '')");
+    where.push(pendingWhere("items."));
   } else if (options.state === "scraped") {
-    where.push("(items.title is not null and items.title <> '')");
+    where.push(`not ${pendingWhere("items.")}`);
   } else if (options.state === "exhausted") {
     where.push(`items.scrape_attempts >= ${MAX_SCRAPE_ATTEMPTS}`);
   }
@@ -528,7 +544,7 @@ function libraryClause(libraryId: number | undefined): { sql: string; params: un
 export function countPending(rt: Runtime, options: { libraryId?: number } = {}): number {
   const scope = libraryClause(options.libraryId);
   const row = rt.db.get<{ c: number }>(
-    `select count(*) c from items where (title is null or title = '') and scrape_attempts < ${MAX_SCRAPE_ATTEMPTS}${scope.sql}`,
+    `select count(*) c from items where ${pendingWhere()} and scrape_attempts < ${MAX_SCRAPE_ATTEMPTS}${scope.sql}`,
     scope.params,
   );
   return row?.c ?? 0;
@@ -538,7 +554,7 @@ export function countPending(rt: Runtime, options: { libraryId?: number } = {}):
 export function countExhausted(rt: Runtime, options: { libraryId?: number } = {}): number {
   const scope = libraryClause(options.libraryId);
   const row = rt.db.get<{ c: number }>(
-    `select count(*) c from items where (title is null or title = '') and scrape_attempts >= ${MAX_SCRAPE_ATTEMPTS}${scope.sql}`,
+    `select count(*) c from items where ${pendingWhere()} and scrape_attempts >= ${MAX_SCRAPE_ATTEMPTS}${scope.sql}`,
     scope.params,
   );
   return row?.c ?? 0;

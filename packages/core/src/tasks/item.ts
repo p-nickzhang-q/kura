@@ -31,6 +31,9 @@ export function updateItem(rt: Runtime, options: UpdateItemOptions): ItemView {
       throw new AppError(`不可写的字段: ${field}`, EXIT.USAGE, { field, allowed: FIELD_KEYS as unknown as string[] });
     }
     (metadata as unknown as Record<string, unknown>)[field] = value;
+    // 手工填的字段也要记来源: `field_sources` 只看 `nfo` 之外的来源来判"刮过没有",
+    // 不记的话人手写的标题会被当成"还没刮", 下次批量刮削直接从头上盖掉。
+    metadata.fieldSources[field] = "manual";
   }
 
   const current = new Set(parseJson<FieldKey[]>(row.pinned) ?? []);

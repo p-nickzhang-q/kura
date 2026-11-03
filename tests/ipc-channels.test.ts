@@ -34,6 +34,7 @@ describe("IPC 通道契约", () => {
   test("推送类通道(preload 订阅 / 主进程发送)成对出现", () => {
     const listened = channels(preload, /ipcRenderer\.on\("([^"]+)"/g);
     const sent = channels(main, /webContents\.send\("([^"]+)"/g);
-    expect(listened.sort()).toEqual(sent.sort());
+    // 同一通道可以在多处发送(例如「重跑」也推进度), 所以比的是集合而不是出现次数。
+    expect([...new Set(listened)]).toEqual([...new Set(sent)]);
   });
 });
