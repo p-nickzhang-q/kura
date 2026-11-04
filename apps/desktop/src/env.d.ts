@@ -70,6 +70,31 @@ interface KuraBindableDir {
   kind: "tv" | "movie";
 }
 
+interface KuraBindingSuggestion {
+  dir: string;
+  name: string;
+  files: number;
+  parsed: number;
+  kind: "tv" | "movie";
+  query: string;
+  year: string | null;
+  hit: { key: string; title: string; year: string | null; id: number } | null;
+  confidence: "high" | "medium" | "low" | "none";
+  error?: string;
+}
+
+interface KuraBindManyResult {
+  dir: string;
+  key: string;
+  ok: boolean;
+  bound?: number;
+  episodes?: number;
+  stillUnparsed?: number;
+  declared?: number;
+  missing?: number;
+  error?: string;
+}
+
 interface KuraTmdbHit {
   id: number;
   key: string;
@@ -236,6 +261,8 @@ interface KuraBridge {
   bindableDirs(libraryId?: number): Promise<KuraBindableDir[]>;
   tmdbSearch(kind: "tv" | "movie", query: string): Promise<KuraTmdbHit[]>;
   tmdbTest(probeId?: number): Promise<KuraTmdbTest>;
+  tmdbSuggest(libraryId?: number): Promise<{ suggestions: KuraBindingSuggestion[]; error: string | null }>;
+  bindMany(libraryId: number, items: { dir: string; key: string }[]): Promise<{ results: KuraBindManyResult[] }>;
   bindDir(libraryId: number, dir: string, key: string): Promise<{ key: string; dir: string; bound: number; episodes: number; stillUnparsed: string[] }>;
   itemEpisodes(key: string): Promise<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats }>;
   scrapeShow(key: string): Promise<{ key: string; ok: boolean; fields: string[]; episodes: number; declared: number; bound: number; missing: number; error?: string }>;

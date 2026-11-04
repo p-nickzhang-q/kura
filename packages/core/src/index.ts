@@ -77,7 +77,11 @@ export { countPendingShows, episodeStats, listEpisodes, pendingShowKeys, scrapeS
 export type { EpisodeStats } from "./tasks/scrape-show";
 export type { ScrapeShowOptions, ScrapeShowReport, ScrapeShowsOptions, ScrapeShowsResult } from "./tasks/scrape-show";
 export { bindDirectory, countBindableDirs, listBindableDirs, setFileEpisode, unbindDirectory } from "./tasks/bind";
-export type { BindableDir, BindResult } from "./tasks/bind";
+export type { BindableDir, BindResult, BindingSuggestion } from "./tasks/bind";
+export { suggestBindings } from "./tasks/suggest";
+export type { SuggestOptions } from "./tasks/suggest";
+export { guessTitleFromDir, matchConfidence, normalizeTitle, searchableGuess } from "./domain/title-guess";
+export type { MatchConfidence, TitleGuess } from "./domain/title-guess";
 export { hasNetworkSource, mergeNfoFields, syncNfo, syncNfoTask } from "./tasks/nfo-sync";
 export type { NfoSyncEntry, NfoSyncOptions, NfoSyncProgress, NfoSyncReport } from "./tasks/nfo-sync";
 export { exportTvNfo, exportTvNfoTask, listTvShows } from "./tasks/nfo-tv";

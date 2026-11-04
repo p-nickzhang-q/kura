@@ -89,6 +89,22 @@ export function countBindableDirs(rt: Runtime, options: { libraryId?: number } =
   return listBindableDirs(rt, { ...options, limit: Number.MAX_SAFE_INTEGER }).length;
 }
 
+export interface BindingSuggestion {
+  dir: string;
+  name: string;
+  files: number;
+  parsed: number;
+  kind: "tv" | "movie";
+  /** 实际发出去的搜索词 (剥掉了年份/发布标记)。 */
+  query: string;
+  year: string | null;
+  /** 最匹配的那条; null = 没搜到, 或把握太低不值得建议。 */
+  hit: { key: string; title: string; year: string | null; id: number } | null;
+  confidence: "high" | "medium" | "low" | "none";
+  /** 搜索出错了(网络/限速): 与"没搜到"分开报。 */
+  error?: string;
+}
+
 export interface BindResult {
   key: string;
   dir: string;

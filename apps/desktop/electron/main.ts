@@ -69,6 +69,7 @@ import {
   listEpisodes,
   createTmdbClient,
   scrapeShow,
+  suggestBindings,
   scan,
   scrape,
   scrapeKeysTask,
@@ -533,6 +534,59 @@ function registerIpc(): void {
       };
     }
   });
+
+  // 批量建议: 只搜不写库 —— 绑哪个由人确认 (ADR 0008 决策 4)
+  ipcMain.handle("tmdb:suggest", async (_event, input: { libraryId?: number } = {}) => {
+    const rt = mustRuntime();
+    const tmdb = await tmdbClient(rt);
+    if (!tmdb) return { suggestions: [], error: "未配置 TMDB API key（设置页填写）" };
+    const suggestions = await suggestBindings(rt, { tmdb, libraryId: input.libraryId ?? undefined, limit: 40 });
+    return { suggestions, error: null };
+  });
+
+  // 一次绑多个目录: 逐个绑 + 顺手刮, 一个失败不中断整批
+  ipcMain.handle(
+    "file:bind-many",
+    async (_event, input: { libraryId: number; items: { dir: string; key: string }[] }) => {
+      const rt = mustRuntime();
+      const tmdb = await tmdbClient(rt);
+      const results: {
+        dir: string;
+        key: string;
+        ok: boolean;
+        bound?: number;
+        episodes?: number;
+        stillUnparsed?: number;
+        declared?: number;
+        missing?: number;
+        error?: string;
+      }[] = [];
+
+      for (const item of input.items) {
+        try {
+          const bound = bindDirectory(rt, { libraryId: input.libraryId, dir: item.dir, key: item.key });
+          const scraped = tmdb ? await scrapeShow(rt, { key: bound.key, tmdb }) : null;
+          results.push({
+            dir: item.dir,
+            key: item.key,
+            ok: true,
+            bound: bound.bound,
+            episodes: bound.episodes,
+            stillUnparsed: bound.stillUnparsed.length,
+            ...(scraped ? { declared: scraped.declared, missing: scraped.missing } : {}),
+          });
+        } catch (err) {
+          results.push({
+            dir: item.dir,
+            key: item.key,
+            ok: false,
+            error: err instanceof AppError ? err.message : err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      return { results };
+    },
+  );
 
   ipcMain.handle("tmdb:search", async (_event, input: { kind: "tv" | "movie"; query: string }) => {
     const rt = mustRuntime();

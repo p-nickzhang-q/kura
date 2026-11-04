@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld("kura", {
   bindableDirs: (libraryId) => ipcRenderer.invoke("file:dirs", libraryId === undefined ? {} : { libraryId }),
   tmdbSearch: (kind, query) => ipcRenderer.invoke("tmdb:search", { kind, query }),
   tmdbTest: (probeId) => ipcRenderer.invoke("tmdb:test", probeId),
+  tmdbSuggest: (libraryId) => ipcRenderer.invoke("tmdb:suggest", libraryId === undefined ? {} : { libraryId }),
+  bindMany: (libraryId, items) => ipcRenderer.invoke("file:bind-many", { libraryId, items }),
   bindDir: (libraryId, dir, key) => ipcRenderer.invoke("file:bind", { libraryId, dir, key }),
   itemEpisodes: (key) => ipcRenderer.invoke("item:episodes", { key }),
   scrapeShow: (key) => ipcRenderer.invoke("scrape:show", { key }),

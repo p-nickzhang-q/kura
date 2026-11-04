@@ -196,6 +196,11 @@ const bindDialog = ref<{
   hits: KuraTmdbHit[];
   busy: boolean;
 } | null>(null);
+/** 待绑定目录的搜索建议 (dir → 建议)。批量找建议的结果, 不是决定。 */
+const suggestions = ref<Record<string, KuraBindingSuggestion>>({});
+/** 勾选要绑的建议 (dir 列表)。 */
+const suggestPicked = ref<string[]>([]);
+const suggestBusy = ref(false);
 /** 打开中的剧的集列表 (影视条目才有)。 */
 const episodeView = ref<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats } | null>(null);
 const unparsedCount = ref(0);
@@ -373,6 +378,70 @@ async function loadEpisodes(key: string, domain: string | undefined): Promise<vo
     episodeView.value = await window.kura.itemEpisodes(key);
   } catch {
     episodeView.value = null;
+  }
+}
+
+/**
+ * 批量找建议: 把"待绑定目录"逐个拿去搜 TMDB, 给出建议并默认勾上高把握的。
+ * 只是把搜索这一步自动化 —— 绑哪个仍然要人看一眼。
+ */
+async function findSuggestions(): Promise<void> {
+  if (selectedId.value === null) return;
+  suggestBusy.value = true;
+  try {
+    const result = await window.kura.tmdbSuggest(selectedId.value);
+    if (result.error) {
+      errors.value.push(result.error);
+      return;
+    }
+    suggestions.value = Object.fromEntries(result.suggestions.map((item) => [item.dir, item]));
+    // 默认只勾"片名与年份都对上"的: 中等把握也要人点, 免得一次误绑一整批
+    suggestPicked.value = result.suggestions
+      .filter((item) => item.confidence === "high" && item.hit)
+      .map((item) => item.dir);
+    const total = result.suggestions.length;
+    const hit = result.suggestions.filter((item) => item.hit).length;
+    note.value = `找到 ${hit}/${total} 个建议 · 已勾选 ${suggestPicked.value.length} 个高把握的, 确认后一次绑完`;
+  } catch (err) {
+    errors.value.push(`批量找建议: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    suggestBusy.value = false;
+  }
+}
+
+function toggleSuggest(dir: string): void {
+  suggestPicked.value = suggestPicked.value.includes(dir)
+    ? suggestPicked.value.filter((item) => item !== dir)
+    : [...suggestPicked.value, dir];
+}
+
+/** 把勾选的建议一次绑完(逐个绑 + 顺手刮)。 */
+async function bindPicked(): Promise<void> {
+  if (selectedId.value === null || suggestPicked.value.length === 0) return;
+  const items = suggestPicked.value
+    .map((dir) => suggestions.value[dir])
+    .filter((item): item is KuraBindingSuggestion => Boolean(item?.hit))
+    .map((item) => ({ dir: item.dir, key: item.hit!.key }));
+  if (items.length === 0) return;
+
+  suggestBusy.value = true;
+  try {
+    const { results } = await window.kura.bindMany(selectedId.value, items);
+    const ok = results.filter((item) => item.ok);
+    const failed = results.filter((item) => !item.ok);
+    const episodes = ok.reduce((sum, item) => sum + (item.declared ?? 0), 0);
+    const missing = ok.reduce((sum, item) => sum + (item.missing ?? 0), 0);
+    note.value = `已绑定 ${ok.length} 个${failed.length > 0 ? `, 失败 ${failed.length} 个` : ""} · 声明 ${episodes} 集 · 缺 ${missing} 集`;
+    if (failed.length > 0) {
+      errors.value.push(...failed.map((item) => `${item.dir.split(/[\\/]/).pop()}: ${item.error ?? "未知原因"}`));
+    }
+    suggestions.value = {};
+    suggestPicked.value = [];
+    await refreshAll();
+  } catch (err) {
+    errors.value.push(`绑定: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    suggestBusy.value = false;
   }
 }
 
@@ -1244,9 +1313,13 @@ async function testDmm(): Promise<void> {
                 <strong>
                   {{ library.name }}
                   <span v-if="library.domain === 'video'" class="badge accent">影视</span>
-                  <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
                 </strong>
-                <small v-if="showRoot(library)" :title="library.root">{{ library.root }}</small>
+                <!-- 「只索引」放第二行: 第一行留给名字, 悬停时的动作按钮会盖住行尾,
+                     角标放第一行会被切成半个空胶囊 -->
+                <small v-if="showRoot(library)" :title="library.root">
+                  <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
+                  {{ library.root }}
+                </small>
               </button>
               <!-- 悬停/键盘聚焦才出现: 常驻两个图标会让整列看起来像工具栏 -->
               <div class="lib-actions">
@@ -1709,30 +1782,66 @@ async function testDmm(): Promise<void> {
             <span class="muted">
               待绑定的目录: {{ bindableDirs.length }} 个（影视没有番号，要先绑到 TMDB 才知道是哪一部）
             </span>
+            <span class="spacer" />
+            <button type="button" :disabled="busy || suggestBusy || bindableDirs.length === 0" @click="findSuggestions">
+              {{ suggestBusy ? "搜索中…" : "批量找建议" }}
+            </button>
           </div>
           <table>
             <thead>
-              <tr><th>目录</th><th>文件</th><th>已解析集号</th><th>季</th><th /></tr>
+              <tr>
+                <th v-if="Object.keys(suggestions).length > 0" class="pick" />
+                <th>目录</th><th>情况</th><th>建议</th><th />
+              </tr>
             </thead>
             <tbody>
               <tr v-for="dir in bindableDirs" :key="dir.dir">
-                <td class="path-cell mono" :title="dir.dir">{{ dir.name }}</td>
-                <td class="mono">{{ dir.files }}</td>
-                <!-- 电影没有集号可解析: 这一列只对剧集有意义, 否则会误报"认不出" -->
-                <td v-if="dir.kind === 'tv'" class="mono" :class="{ warn: dir.parsed < dir.files }">
-                  {{ dir.parsed }}{{ dir.parsed < dir.files ? ` (${dir.files - dir.parsed} 个认不出集号)` : "" }}
+                <td v-if="Object.keys(suggestions).length > 0" class="pick" @click.stop>
+                  <input
+                    v-if="suggestions[dir.dir]?.hit"
+                    type="checkbox"
+                    :checked="suggestPicked.includes(dir.dir)"
+                    :aria-label="`绑定 ${dir.name}`"
+                    @change="toggleSuggest(dir.dir)"
+                  />
                 </td>
-                <td v-else class="mono muted">—</td>
-                <td class="mono">{{ dir.seasons.length > 0 ? dir.seasons.join(", ") : "—" }}</td>
+                <td class="path-cell mono" :title="dir.dir">
+                  {{ dir.name }}
+                  <span class="badge">{{ dir.kind === "tv" ? "剧集" : "电影" }}</span>
+                </td>
+                <!-- 三列压成一列: 7 列会把表格撑到动作按钮换行, 每行变成两行高 -->
+                <td class="mono nowrap" :class="{ warn: dir.kind === 'tv' && dir.parsed < dir.files }">
+                  <template v-if="dir.kind === 'tv'">
+                    {{ dir.parsed }}/{{ dir.files }} 集
+                    <span v-if="dir.seasons.length > 0" class="muted"> · 季 {{ dir.seasons.join(",") }}</span>
+                    <span v-if="dir.parsed < dir.files" class="muted"> · {{ dir.files - dir.parsed }} 个认不出</span>
+                  </template>
+                  <template v-else>{{ dir.files }} 个文件</template>
+                </td>
+                <td class="suggest-cell">
+                  <div class="suggest-line">
+                  <template v-if="suggestions[dir.dir]">
+                    <template v-if="suggestions[dir.dir]!.hit">
+                      <strong>{{ suggestions[dir.dir]!.hit!.title }}</strong>
+                      <span class="muted">{{ suggestions[dir.dir]!.hit!.year ?? "年份未知" }}</span>
+                      <span class="badge" :class="{ accent: suggestions[dir.dir]!.confidence === 'high', warn: suggestions[dir.dir]!.confidence !== 'high' }">
+                        {{ suggestions[dir.dir]!.confidence === "high" ? "很可能是" : "可能是" }}
+                      </span>
+                    </template>
+                    <span v-else-if="suggestions[dir.dir]!.error" class="warn">搜索失败: {{ suggestions[dir.dir]!.error }}</span>
+                    <span v-else class="muted">没搜到，手动搜一次</span>
+                  </template>
+                  <span v-else class="muted">—</span>
+                  </div>
+                </td>
                 <td class="row-actions">
                   <button
                     type="button"
                     :disabled="busy || selectedId === null"
-                    @click="bindDialog = { dir, kind: dir.kind, query: dir.name, hits: [], busy: false }"
+                    @click="bindDialog = { dir, kind: dir.kind, query: suggestions[dir.dir]?.query || dir.name, hits: [], busy: false }"
                   >
-                    绑定到 TMDB
+                    {{ suggestions[dir.dir]?.hit ? "换一个" : "绑定到 TMDB" }}
                   </button>
-                  <button type="button" @click="copyPath(dir.dir)">复制路径</button>
                   <button type="button" @click="reveal(dir.dir)">定位</button>
                 </td>
               </tr>
@@ -1741,6 +1850,15 @@ async function testDmm(): Promise<void> {
               </tr>
             </tbody>
           </table>
+          <!-- 勾选后才出现的动作条: 没勾选时不占位置, 也不制造"这里有东西等着点"的错觉 -->
+          <div v-if="suggestPicked.length > 0" class="bind-bar">
+            <span>已勾选 {{ suggestPicked.length }} 个</span>
+            <span class="spacer" />
+            <button type="button" :disabled="suggestBusy" @click="suggestPicked = []">取消勾选</button>
+            <button type="button" class="primary" :disabled="suggestBusy" @click="bindPicked">
+              {{ suggestBusy ? "绑定中…" : `绑定这 ${suggestPicked.length} 个并刮削` }}
+            </button>
+          </div>
         </div>
 
         <!-- 未识别 -->
@@ -2331,16 +2449,16 @@ h1 {
   display: flex;
   gap: 4px;
   align-items: center;
-  padding-left: 16px;
+  padding-left: 20px;
   transform: translateY(-50%);
-  background: var(--panel);
-  border-radius: var(--radius-sm);
+  /* 用渐变而不是一块实心背景: 实心块会把行尾的「只索引」角标切成半个空胶囊 */
+  background: linear-gradient(to right, transparent, var(--bg) 20px);
   opacity: 0;
   transition: opacity 120ms var(--ease);
 }
 
 .libs li.active .lib-actions {
-  background: var(--panel-2);
+  background: linear-gradient(to right, transparent, var(--panel-2) 20px);
 }
 
 .libs li:hover .lib-actions,
@@ -3046,6 +3164,62 @@ button:disabled {
   flex: none;
   white-space: nowrap;
   font-size: var(--fs-label);
+}
+
+/* 建议列: 片名 + 年份 + 把握标签, 一行放得下就一行 */
+.nowrap {
+  white-space: nowrap;
+}
+
+/* 影视目录名可能很长 (发布组前缀 + 季 + 画质), 限宽 + 省略号, 完整路径走 title */
+.pane td.path-cell {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* td 不能当 flex 容器: 会让整行变成两行高。内层用 inline-flex 就够 */
+td.suggest-cell {
+  white-space: nowrap;
+  font-size: var(--fs-label);
+}
+
+.suggest-line {
+  display: inline-flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.suggest-cell .badge {
+  margin-left: 0;
+  padding: 2px 8px;
+}
+
+/* 勾选后的动作条: 贴在表格下方, 不浮在内容上遮挡 */
+.bind-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+  padding: 12px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  font-size: var(--fs-label);
+  box-shadow: 0 -8px 24px rgb(0 0 0 / 32%), 0 2px 8px rgb(0 0 0 / 24%);
+}
+
+.bind-bar .primary {
+  min-height: 44px;
+  padding: 8px 16px;
+}
+
+.bind-bar button:not(.primary) {
+  min-height: 44px;
+  padding: 8px 12px;
 }
 
 /* 绑定面板: 借 lightbox 的遮罩, 自己是一张宽卡片 */
