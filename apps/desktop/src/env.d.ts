@@ -98,6 +98,8 @@ interface KuraScanReport {
     auxiliary: number;
     nfoPending: number;
     retyped: number;
+    /** 影视库的"候选目录"数 (一个目录 = 一部剧/电影)。av 库恒为 0。 */
+    shows: number;
   };
   durationMs: number;
 }

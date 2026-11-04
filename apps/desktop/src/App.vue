@@ -673,7 +673,13 @@ async function scanLibrary(force: boolean): Promise<void> {
   const report = await run("扫描", () => window.kura.scan(selectedId.value!, { force }));
   if (report) {
     const { counts } = report;
-    note.value = `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}${counts.auxiliary ? ` · 跳过辅助媒体 ${counts.auxiliary}` : ""}${counts.retyped ? ` · 修正内容类型 ${counts.retyped} 条` : ""}`;
+    // 影视库的"未识别"是**目录级**的(一个目录 = 一部剧/电影), av 库是文件级的。
+    // 两者混着说会出现"未识别 2"但页签写着 10 的自相矛盾。
+    note.value = isVideoMode.value
+      ? `扫描完成: 新增 ${counts.added} 个文件 · 待绑定目录 ${counts.shows} 个${
+          counts.unparsed ? ` (其中 ${counts.unparsed} 个文件认不出集号)` : ""
+        }${counts.auxiliary ? ` · 跳过辅助媒体 ${counts.auxiliary}` : ""}`
+      : `扫描完成: 新增 ${counts.added} · 更新 ${counts.updated} · 未变 ${counts.unchanged} · 未识别 ${counts.unparsed}${counts.auxiliary ? ` · 跳过辅助媒体 ${counts.auxiliary}` : ""}${counts.retyped ? ` · 修正内容类型 ${counts.retyped} 条` : ""}`;
     // 扫描不再读 nfo: 有 nfo 没读进来时明确告诉人下一步做什么, 别静默丢功能。
     nfoHint.value = counts.nfoPending ?? 0;
     page.value = 0;
