@@ -13,6 +13,7 @@ import {
   maskSecret,
   maskSettings,
   resolveDmmEnv,
+  resolveTmdbEnv,
   resolveProxy,
   saveSettings,
   settingsPath,
@@ -187,5 +188,28 @@ describe("图片落盘开关", () => {
     saveSettings(paths, { saveImages: true });
     expect(loadSettings(paths).saveImages).toBe(true);
     await rm(dir, { recursive: true, force: true });
+  });
+
+  test("tmdbApiKey 存取、环境变量优先、输出脱敏", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "kura-cfg-tmdb-"));
+    try {
+      const paths = { dataDir: dir } as Parameters<typeof loadSettings>[0];
+      const saved = saveSettings(paths, { tmdbApiKey: "0123456789abcdef0123456789abcdef" });
+      expect(saved.tmdbApiKey).toBe("0123456789abcdef0123456789abcdef");
+
+      const reloaded = loadSettings(paths);
+      expect(reloaded.tmdbApiKey).toBe("0123456789abcdef0123456789abcdef");
+      // 回显必须脱敏: 只留后四位
+      expect(maskSettings(reloaded).tmdbApiKey).toBe("••••cdef");
+
+      // 环境变量优先
+      expect(resolveTmdbEnv(reloaded, { KURA_TMDB_API_KEY: "from-env" }).apiKey).toBe("from-env");
+      expect(resolveTmdbEnv(reloaded, {}).apiKey).toBe("0123456789abcdef0123456789abcdef");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
