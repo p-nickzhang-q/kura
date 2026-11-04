@@ -146,7 +146,9 @@ kura file set-episode <路径> --episode 5 [--season 1]   # 绑了目录但文�
 
 `声明 > 盘上` 即缺集。只是**角标**(`9/12`)与详情页提示,**不是错误**,不阻塞刮削,不影响 NFO 导出。
 
-## 六、NFO 导出(单向)
+## 六、NFO 导出(单向) —— 已实现
+
+实现在 `domain/nfo-tv.ts`(标签词表与渲染/合并) + `tasks/nfo-tv.ts`(落盘与报告)。
 
 | 文件 | 内容 |
 |---|---|
@@ -181,7 +183,7 @@ source test tmdb
 | T4 | TMDB 来源(key 配置、`source test tmdb`、tv/movie/season 三个请求 + zh-CN 回落) | T1 | 录制 fixture 解析出剧字段与整季集列表 |
 | T5 ✅ | 未识别 → 目录级绑定(搜索 + 一次绑整目录;剩余文件留未识别可补集号) | T2,T4 | 绑定后该目录文件全部有 `number` 与 `(season,episode)` |
 | T6 | 刮削剧:剧级字段 + 各季集落 `episodes`(剧级任务记账) | T4,T5 | 一次刮削写出剧字段与该季全部集;缺集角标数字正确 |
-| T7 | 集级 NFO 导出(`tvshow.nfo` + 每集 nfo,单向、字段级、原子写) | T6 | 干跑出清单;`--apply` 后 Emby 能读;再跑一次 `changed: []` 不抖 mtime |
+| T7 ✅ | 集级 NFO 导出(`tvshow.nfo` + 每集 nfo,单向、字段级、原子写) | T6 | 干跑出清单;`--apply` 后 Emby 能读;再跑一次 `changed: []` 不抖 mtime |
 | T8 | GUI:库类型角标、剧详情页季/集展开、缺集角标、未识别目录视图 | T5,T6 | 截图验收;`av` 域界面零变化 |
 | T9 | CLI 表面 + `cli-contract.md` + README | T6 | `kura schema --json` 自描述正确 |
 

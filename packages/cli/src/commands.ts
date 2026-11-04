@@ -48,6 +48,7 @@ import {
   syncNfoTask,
   retryTask,
   actorIndexDrift,
+  exportTvNfo,
   scrapeShow,
   scrapeShows,
   scrapeShowsTask,
@@ -533,6 +534,15 @@ export const COMMANDS: Command[] = [
       if (target) {
         // 先当库名找, 找不到再当番号 —— 番号不会是库名, 两个命名空间撞不了。
         const library = findLibrary(ctx.rt!.db, target);
+        // 影视库只有写方向(Emby 会自己写集级 nfo, 回读等于把播放器状态当元数据)
+        if (library && library.domain !== "av") {
+          const report = await exportTvNfo(ctx.rt!, {
+            libraryId: library.id,
+            apply: options.apply,
+            limit: options.limit,
+          });
+          return { library: library.name, domain: library.domain, ...report };
+        }
         if (library) options.libraryId = library.id;
         else options.number = target;
       }

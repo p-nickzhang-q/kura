@@ -70,6 +70,10 @@ export { bindDirectory, countBindableDirs, listBindableDirs, setFileEpisode, unb
 export type { BindableDir, BindResult } from "./tasks/bind";
 export { hasNetworkSource, mergeNfoFields, syncNfo, syncNfoTask } from "./tasks/nfo-sync";
 export type { NfoSyncEntry, NfoSyncOptions, NfoSyncProgress, NfoSyncReport } from "./tasks/nfo-sync";
+export { exportTvNfo, exportTvNfoTask, listTvShows } from "./tasks/nfo-tv";
+export type { TvNfoEntry, TvNfoOptions, TvNfoReport } from "./tasks/nfo-tv";
+export { mergeTvNfo, renderEpisodeNfo, renderTvShowNfo } from "./domain/nfo-tv";
+export type { EpisodeNfoFields, TvShowNfoFields, TvNfoRoot } from "./domain/nfo-tv";
 export { nfoPathFor, nfoToMetadata, parseNfo, readNfo, updateNfoContent } from "./domain/nfo";
 export type { NfoFields, NfoUpdate } from "./domain/nfo";
 export type { MediaFileView } from "./tasks/scan";

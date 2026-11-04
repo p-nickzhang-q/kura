@@ -147,6 +147,7 @@ kura library add 剧库 /media/tv --domain tv          # av | movie | tv, 默认
 kura file dirs                                       # 影视: 待绑定目录 (文件数 / 已解析集数)
 kura file bind <目录> --tmdb tmdb:tv:1399            # 目录级绑定 (--dry-run 先看)
 kura file set-episode <路径> --episode 5             # 给认不出集号的文件补集号
+kura nfo sync <影视库> [--apply]                     # 影视库: 只导出 tvshow.nfo + 集级 nfo, 不回读
 kura source test tmdb --probe 1429                   # 影视来源自检 (key + 语言 + 集列表)
 kura config set --tmdb-api-key <key>                 # key 存 config.json (0600), 不进日志
 kura library list                                    # 每行带 domain 与模板
