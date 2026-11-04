@@ -119,11 +119,20 @@ function sortState(field: SortField): "none" | "ascending" | "descending" {
 const hasFilters = computed(() => Object.keys(filters.value).length > 0);
 /** 首次读库还没回来 —— 和"库里确实空"是两件事, 不能混成一个空状态。 */
 const firstLoad = ref(true);
-/** 长任务进度: 刮削与翻译共用一个进度条位置。 */
+/**
+ * 正在跑的那一行任务(库里 status = running)。
+ *
+ * 有些任务没有逐条事件可发(影视刮削是"一部剧一次请求", 进度由任务行自己推进),
+ * 所以进度条必须能从任务行读, 不能只依赖 IPC 事件。
+ */
+const liveTask = computed(() => tasks.value.find((task) => task.status === "running") ?? null);
+/** 长任务进度: 优先用实时事件, 没有就退回任务行的已处理/总数。 */
 const taskProgress = computed(() => {
   const active = progress.value ?? translateProgress.value ?? nfoProgress.value;
-  if (!active || !active.total) return null;
-  return { index: active.index, total: active.total };
+  if (active?.total) return { index: active.index, total: active.total };
+  const task = liveTask.value;
+  if (task && task.total > 0) return { index: task.processed, total: task.total };
+  return null;
 });
 const taskPercent = computed(() =>
   taskProgress.value ? Math.min(100, Math.round((taskProgress.value.index / taskProgress.value.total) * 100)) : 0,
@@ -208,6 +217,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  stopTasksPolling();
   unsubscribe?.();
   unsubscribeProgress?.();
   unsubscribeTranslate?.();
@@ -253,8 +263,43 @@ async function refreshTasks(): Promise<void> {
   tasks.value = (await window.kura.tasks(20)) ?? tasks.value;
 }
 
+/**
+ * 任务页轮询。
+ *
+ * 任务在**主进程里同步跑**, 库里的 processed 由 runTask 每 500ms 对齐一次;
+ * 渲染进程除了收到几条专门的进度事件(刮削/翻译/NFO)之外, 对其它任务一无所知。
+ * 没有守护进程, 也就没有"任务完成时推一条事件"的通路 —— 所以界面上停在任务页时
+ * 自己读库, 有任务在跑就勤一点(0.7s), 只是看看历史就慢一点(3s)。
+ */
+let tasksPollTimer: number | null = null;
+
+function stopTasksPolling(): void {
+  if (tasksPollTimer !== null) {
+    window.clearTimeout(tasksPollTimer);
+    tasksPollTimer = null;
+  }
+}
+
+/** 排下一次轮询: 有任务在跑就勤, 只是看历史就懒。离开任务页立刻停。 */
+function scheduleTasksPoll(delay: number): void {
+  stopTasksPolling();
+  if (tab.value !== "tasks") return;
+  tasksPollTimer = window.setTimeout(() => {
+    if (tab.value !== "tasks") return;
+    void refreshTasks().finally(() => {
+      const busy = tasks.value.some((task) => task.status === "running" || task.status === "queued");
+      scheduleTasksPoll(busy ? 700 : 3000);
+    });
+  }, delay);
+}
+
 watch(tab, (value) => {
-  if (value === "tasks") void refreshTasks();
+  if (value === "tasks") {
+    void refreshTasks();
+    scheduleTasksPoll(700);
+  } else {
+    stopTasksPolling();
+  }
 });
 
 async function refreshUnparsed(): Promise<void> {
