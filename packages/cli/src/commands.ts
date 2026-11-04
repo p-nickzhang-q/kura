@@ -48,6 +48,9 @@ import {
   syncNfoTask,
   retryTask,
   actorIndexDrift,
+  scrapeShow,
+  scrapeShows,
+  scrapeShowsTask,
   bindDirectory,
   listBindableDirs,
   setFileEpisode,
@@ -114,6 +117,73 @@ function requireLibrary(ctx: CommandContext, ref: string) {
     throw new AppError(`媒体库不存在: ${ref}`, EXIT.NOT_FOUND, { library: ref });
   }
   return library;
+}
+
+/**
+ * 影视库的刮削入口。
+ *
+ * 与 av 的分叉只在"按什么取数据": av 是番号路由到多个站点, 影视是 TMDB id。
+ * 任务记账、失败处理、进度都复用同一套。
+ */
+async function scrapeVideo(
+  ctx: CommandContext,
+  library: { id: number; name: string; domain: string } | null,
+  args: { options: Record<string, unknown>; positionals: Record<string, string | undefined> },
+  http: HttpClient,
+) {
+  const tmdb = createTmdbClient({ http, env: resolveTmdbEnv(ctx.rt!.settings) });
+  const missing = tmdb.requirements();
+  if (missing.length > 0) {
+    throw new AppError("未配置 TMDB API key", EXIT.NEEDS_INPUT, {
+      missing,
+      hint: "kura config set --tmdb-api-key <key>",
+    });
+  }
+
+  const controller = new AbortController();
+  const onInterrupt = () => {
+    ctx.out.log("收到中断, 正在停止…");
+    controller.abort();
+  };
+  process.once("SIGINT", onInterrupt);
+  try {
+    const dryRun = Boolean(args.options["dry-run"]);
+    const key = args.positionals.number;
+    if (key) {
+      const report = await scrapeShow(ctx.rt!, { key, tmdb, signal: controller.signal });
+      return { library: library?.name ?? null, dryRun, reports: [report] };
+    }
+    if (!library) {
+      throw new AppError("批量刮影视要给 --library <库名>", EXIT.USAGE, {
+        hint: "kura scrape tmdb:tv:1399 是单部; kura scrape --library 剧库 是整库",
+      });
+    }
+    // 干跑不建任务行(与同步 NFO 一条规矩): 它不改库, 只是看看要做什么
+    if (dryRun) {
+      const { reports } = await scrapeShows(ctx.rt!, {
+        tmdb,
+        libraryId: library.id,
+        signal: controller.signal,
+        onProgress: (progress) =>
+          ctx.out.log(`[${progress.index}/${progress.total}] ${progress.key} ${progress.ok ? "ok" : "失败"}`),
+      });
+      return { library: library.name, dryRun, reports };
+    }
+    const { task, result } = await scrapeShowsTask(
+      ctx.rt!,
+      {
+        tmdb,
+        libraryId: library.id,
+        limit: Number(args.options.limit ?? 50),
+        onProgress: (progress) =>
+          ctx.out.log(`[${progress.index}/${progress.total}] ${progress.key} ${progress.ok ? "ok" : "失败"}`),
+      },
+      controller.signal,
+    );
+    return { library: library.name, dryRun, taskId: task.id, reports: result?.reports ?? [] };
+  } finally {
+    process.off("SIGINT", onInterrupt);
+  }
 }
 
 /**
@@ -297,9 +367,21 @@ export const COMMANDS: Command[] = [
       { name: "limit", type: "number", description: "--pending 时的批大小", default: 50 },
       { name: "retry-failed", type: "boolean", description: "连已达重试上限的条目一起重试", default: false },
       { name: "dry-run", type: "boolean", description: "只报告, 不写库", default: false },
+      { name: "library", type: "string", description: "影视库: 按 TMDB 刮这个库里的剧/电影 (番号库不用给)" },
     ],
     async run(ctx, args) {
       const http = new HttpClient({ proxy: await resolveProxyUrl(ctx.rt!.settings) });
+
+      // 影视域走 TMDB, 与 av 域的番号路由无关 —— 按库的域或身份前缀分流,
+      // 不给用户第二个可能矛盾的参数 (库自带域)。
+      const scrapeLibraryRef = typeof args.options.library === "string" ? args.options.library : null;
+      if (scrapeLibraryRef) {
+        const target = requireLibrary(ctx, scrapeLibraryRef);
+        if (target.domain !== "av") return scrapeVideo(ctx, target, args, http);
+      }
+      const firstArg = typeof args.positionals.number === "string" ? args.positionals.number : "";
+      if (/^tmdb:/i.test(firstArg)) return scrapeVideo(ctx, null, args, http);
+
       const registry = defaultSources({ http, dmm: resolveDmmEnv(ctx.rt!.settings) });
 
       // 翻译是可选后处理: 没配置就跳过, 不阻断刮削。
