@@ -1096,7 +1096,7 @@ export const COMMANDS: Command[] = [
               status: "ready",
               missing: tmdbEnv.apiKey ? [] : ["KURA_TMDB_API_KEY"],
               contentTypes: [],
-              domains: ["movie", "tv"],
+              domains: ["video"],
             },
           ],
         };
