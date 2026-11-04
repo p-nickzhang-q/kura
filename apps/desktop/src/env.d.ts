@@ -159,9 +159,21 @@ interface KuraConfig {
     llm: { baseUrl: string; apiKey: string; model: string };
     translate: boolean;
     proxy: string;
+    tmdbApiKey: string;
   };
   dmmConfigured: boolean;
   dmmFromEnv: boolean;
+  tmdbConfigured: boolean;
+  tmdbFromEnv: boolean;
+}
+
+interface KuraTmdbTest {
+  ok: boolean;
+  status: string;
+  probe?: number;
+  title?: string | null;
+  originalTitle?: string | null;
+  error?: string;
 }
 
 interface KuraDmmTest {
@@ -221,6 +233,7 @@ interface KuraBridge {
   addLibrary(domain?: "av" | "video"): Promise<KuraLibrary | null>;
   bindableDirs(libraryId?: number): Promise<KuraBindableDir[]>;
   tmdbSearch(kind: "tv" | "movie", query: string): Promise<KuraTmdbHit[]>;
+  tmdbTest(probeId?: number): Promise<KuraTmdbTest>;
   bindDir(libraryId: number, dir: string, key: string): Promise<{ key: string; dir: string; bound: number; episodes: number; stillUnparsed: string[] }>;
   itemEpisodes(key: string): Promise<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats }>;
   scrapeShow(key: string): Promise<{ key: string; ok: boolean; fields: string[]; episodes: number; declared: number; bound: number; missing: number; error?: string }>;
@@ -327,7 +340,8 @@ interface KuraBridge {
     llmApiKey?: string;
     llmModel?: string;
     translate?: boolean;
-  }): Promise<{ settings: KuraConfig["settings"]; dmmConfigured: boolean }>;
+    tmdbApiKey?: string;
+  }): Promise<{ settings: KuraConfig["settings"]; dmmConfigured: boolean; tmdbConfigured: boolean }>;
   testDmm(probe?: string): Promise<KuraDmmTest>;
   testLlm(): Promise<{ ok: boolean; model: string; endpoint: string; sample: string }>;
   onScanEvent(callback: (event: KuraScanEvent) => void): () => void;

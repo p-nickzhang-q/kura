@@ -62,10 +62,11 @@ import {
   bindDirectory,
   episodeStats,
   isLibraryDomain,
+  resolveTmdbEnv,
+  exitCodeName,
   listBindableDirs,
   listEpisodes,
   createTmdbClient,
-  resolveTmdbEnv,
   scrapeShow,
   scan,
   scrape,
@@ -483,6 +484,7 @@ function registerIpc(): void {
       mediaFiles: counts?.files ?? 0,
       fixturesDir,
       dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
+      tmdbConfigured: Boolean(resolveTmdbEnv(settings).apiKey),
       llmConfigured: Boolean(resolveLlm(settings)),
       translate: translateEnabled(settings),
       pendingTranslation: translateEnabled(settings) ? countPendingTranslation(rt) : 0,
@@ -509,6 +511,27 @@ function registerIpc(): void {
   ipcMain.handle("file:dirs", (_event, input: { libraryId?: number } = {}) =>
     listBindableDirs(mustRuntime(), { libraryId: input.libraryId ?? undefined }),
   );
+
+  ipcMain.handle("tmdb:test", async (_event, probeId?: number) => {
+    const rt = mustRuntime();
+    const tmdb = tmdbClient(rt);
+    if (!tmdb) return { ok: false, status: "missing-key", error: "未配置 TMDB API key" };
+    const id = Number.isInteger(probeId) && Number(probeId) > 0 ? Number(probeId) : 1399;
+    try {
+      // seasons: [] → 只发一次请求; 验 key + 语言 + 网络三件事
+      const show = await tmdb.show(id, { seasons: [] });
+      return show
+        ? { ok: true, status: "ok", probe: id, title: show.fields.title ?? null, originalTitle: show.originalTitle }
+        : { ok: false, status: "empty", probe: id, error: "TMDB 没有这个 id" };
+    } catch (err) {
+      return {
+        ok: false,
+        status: err instanceof AppError ? exitCodeName(err.exitCode) : "ERROR",
+        probe: id,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
 
   ipcMain.handle("tmdb:search", async (_event, input: { kind: "tv" | "movie"; query: string }) => {
     const rt = mustRuntime();
@@ -840,6 +863,9 @@ function registerIpc(): void {
     dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
     /** 环境变量优先; 提示用户实际生效的是哪一层。 */
     dmmFromEnv: Boolean(process.env.KURA_DMM_API_ID || process.env.KURA_DMM_AFFILIATE_ID),
+    /** 影视域的唯一来源凭据。没有它, 绑定与刮削都会在第一次请求时停下。 */
+    tmdbConfigured: Boolean(resolveTmdbEnv(settings).apiKey),
+    tmdbFromEnv: Boolean(process.env.KURA_TMDB_API_KEY),
   }));
 
   ipcMain.handle(
@@ -854,6 +880,7 @@ function registerIpc(): void {
         llmApiKey?: string;
         llmModel?: string;
         translate?: boolean;
+        tmdbApiKey?: string;
       },
     ) => {
       const rt = mustRuntime();
@@ -864,11 +891,18 @@ function registerIpc(): void {
       if (patch.llmBaseUrl !== undefined) llm.baseUrl = patch.llmBaseUrl;
       if (patch.llmApiKey !== undefined) llm.apiKey = patch.llmApiKey;
       if (patch.llmModel !== undefined) llm.model = patch.llmModel;
-      settings = saveSettings(rt.paths, { dmm, proxy: patch.proxy, llm, translate: patch.translate });
+      settings = saveSettings(rt.paths, {
+        dmm,
+        proxy: patch.proxy,
+        llm,
+        translate: patch.translate,
+        ...(patch.tmdbApiKey !== undefined ? { tmdbApiKey: patch.tmdbApiKey.trim() } : {}),
+      });
     await applyProxy();
     return {
       settings: maskSettings(settings),
       dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
+      tmdbConfigured: Boolean(resolveTmdbEnv(settings).apiKey),
       llmConfigured: Boolean(resolveLlm(settings)),
       translate: translateEnabled(settings),
       pendingTranslation: translateEnabled(settings) ? countPendingTranslation(rt) : 0,

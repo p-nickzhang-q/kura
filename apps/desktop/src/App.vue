@@ -212,6 +212,9 @@ const affiliateInput = ref("");
 const proxyInput = ref("");
 const llmBaseUrlInput = ref("");
 const llmApiKeyInput = ref("");
+/** 影视来源 (TMDB) 的 key 输入框; 留空表示不改。 */
+const tmdbKeyInput = ref("");
+const tmdbTest = ref<KuraTmdbTest | null>(null);
 const llmModelInput = ref("");
 const translateOn = ref(false);
 const dmmTest = ref<KuraDmmTest | null>(null);
@@ -1041,6 +1044,7 @@ async function saveConfig(): Promise<void> {
     llmApiKey?: string;
     llmModel?: string;
     translate?: boolean;
+    tmdbApiKey?: string;
   } = {};
   if (apiIdInput.value.trim()) patch.apiId = apiIdInput.value.trim();
   if (affiliateInput.value.trim()) patch.affiliateId = affiliateInput.value.trim();
@@ -1048,11 +1052,12 @@ async function saveConfig(): Promise<void> {
   if (llmBaseUrlInput.value.trim()) patch.llmBaseUrl = llmBaseUrlInput.value.trim();
   if (llmApiKeyInput.value.trim()) patch.llmApiKey = llmApiKeyInput.value.trim();
   if (llmModelInput.value.trim()) patch.llmModel = llmModelInput.value.trim();
+  if (tmdbKeyInput.value.trim()) patch.tmdbApiKey = tmdbKeyInput.value.trim();
   patch.translate = translateOn.value;
 
   const changed =
     patch.apiId || patch.affiliateId || patch.proxy || patch.llmBaseUrl || patch.llmApiKey || patch.llmModel ||
-    patch.translate !== Boolean(config.value?.settings.translate);
+    patch.tmdbApiKey || patch.translate !== Boolean(config.value?.settings.translate);
   if (!changed) {
     note.value = "没有改动";
     return;
@@ -1065,6 +1070,8 @@ async function saveConfig(): Promise<void> {
     llmBaseUrlInput.value = "";
     llmApiKeyInput.value = "";
     llmModelInput.value = "";
+    tmdbKeyInput.value = "";
+    tmdbTest.value = null;
     await refreshAll();
     note.value = `已保存到 ${config.value?.path ?? "配置文件"}`;
   }
@@ -1072,6 +1079,16 @@ async function saveConfig(): Promise<void> {
 
 function openDataDir(): void {
   void window.kura.openDataDir();
+}
+
+/** 测试 TMDB: 真发一次请求, 验 key + 语言 + 网络。 */
+async function testTmdb(): Promise<void> {
+  tmdbTest.value = null;
+  try {
+    tmdbTest.value = await window.kura.tmdbTest();
+  } catch (err) {
+    tmdbTest.value = { ok: false, status: "ERROR", error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 async function testLlm(): Promise<void> {
@@ -1875,7 +1892,7 @@ async function testDmm(): Promise<void> {
 
           <div class="row">
             <button type="button" class="primary" :disabled="busy" @click="saveConfig">保存</button>
-            <button type="button" :disabled="busy" @click="testDmm">测试连接</button>
+            <button type="button" :disabled="busy" @click="testDmm">测试 DMM</button>
             <button type="button" :disabled="busy" @click="testLlm">测试 LLM</button>
             <span v-if="llmTest" class="muted">模型 {{ llmTest.model }} 回: {{ llmTest.sample }}</span>
             <span class="muted">
@@ -1892,6 +1909,38 @@ async function testDmm(): Promise<void> {
           </p>
 
           <p v-if="config" class="path">{{ config.path }}</p>
+
+          <h2>影视来源 (TMDB)</h2>
+          <p class="muted">
+            影视库（剧集 / 动画 / 综艺 / 电影）唯一的数据来源。免费申请，选 personal use 即可；
+            key 只存在本地 config.json，不发往任何第三方（除了 TMDB 自己的请求）。
+          </p>
+          <label class="field">
+            <span>API Key</span>
+            <input
+              v-model="tmdbKeyInput"
+              type="password"
+              spellcheck="false"
+              :placeholder="config?.settings.tmdbApiKey || '未设置'"
+            />
+          </label>
+          <div class="row">
+            <button type="button" :disabled="busy" @click="saveConfig">保存</button>
+            <button type="button" :disabled="busy" @click="testTmdb">测试 TMDB</button>
+            <a class="muted" href="https://www.themoviedb.org/settings/api" target="_blank" rel="noreferrer">
+              去申请 / 查看 key
+            </a>
+            <span class="muted">
+              {{ config?.tmdbConfigured ? "TMDB 已配置" : "TMDB 未配置" }}
+              <template v-if="config?.tmdbFromEnv">(环境变量生效中)</template>
+            </span>
+          </div>
+          <p v-if="tmdbTest" class="note">
+            {{ tmdbTest.ok ? "连接成功" : "未通过" }} ({{ tmdbTest.status }})
+            <template v-if="tmdbTest.title">· 查到《{{ tmdbTest.title }}》</template>
+            <template v-if="tmdbTest.originalTitle">· 原名 {{ tmdbTest.originalTitle }}</template>
+            <template v-if="tmdbTest.error">· {{ tmdbTest.error }}</template>
+          </p>
 
           <h2>翻译 (日 → 中)</h2>
           <p class="muted">

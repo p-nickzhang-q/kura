@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("kura", {
   // 影视域的几条: 待绑定目录 / TMDB 搜索 / 绑定 / 集列表 / 单部刮削
   bindableDirs: (libraryId) => ipcRenderer.invoke("file:dirs", libraryId === undefined ? {} : { libraryId }),
   tmdbSearch: (kind, query) => ipcRenderer.invoke("tmdb:search", { kind, query }),
+  tmdbTest: (probeId) => ipcRenderer.invoke("tmdb:test", probeId),
   bindDir: (libraryId, dir, key) => ipcRenderer.invoke("file:bind", { libraryId, dir, key }),
   itemEpisodes: (key) => ipcRenderer.invoke("item:episodes", { key }),
   scrapeShow: (key) => ipcRenderer.invoke("scrape:show", { key }),
