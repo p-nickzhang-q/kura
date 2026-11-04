@@ -68,9 +68,9 @@ export type { DefaultSourcesOptions, Registry, Source, SourceConfig, SourceConte
 export { HttpClient } from "./net/http";
 export type { FetchInit, FetchLike, HttpClientOptions, RequestOptions } from "./net/http";
 
-export { createLibrary, defaultTemplateFor, findLibrary, listLibraries, pinnedFields, renameLibrary, rowToMetadata, updateLibraryOrganize, updateLibraryTemplate } from "./db/rows";
+export { createLibrary, defaultTemplateFor, deleteLibrary, findLibrary, listLibraries, pinnedFields, renameLibrary, rowToMetadata, updateLibraryOrganize, updateLibraryTemplate } from "./db/rows";
 export { actorIndexDrift, setItemActors } from "./db/actors";
-export type { ItemRow, MediaFileRow } from "./db/rows";
+export type { DeleteLibraryResult, ItemRow, MediaFileRow } from "./db/rows";
 
 export { countFiles, filePhase, listFiles, scan } from "./tasks/scan";
 export { countPendingShows, episodeStats, listEpisodes, pendingShowKeys, scrapeShow, scrapeShows, scrapeShowsTask } from "./tasks/scrape-show";

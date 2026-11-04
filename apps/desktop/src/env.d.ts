@@ -238,6 +238,7 @@ interface KuraBridge {
   itemEpisodes(key: string): Promise<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats }>;
   scrapeShow(key: string): Promise<{ key: string; ok: boolean; fields: string[]; episodes: number; declared: number; bound: number; missing: number; error?: string }>;
   scan(libraryId: number, options?: { force?: boolean }): Promise<KuraScanReport>;
+  removeLibrary(libraryId: number): Promise<{ library: KuraLibrary; removedFiles: number; orphanItems: number }>;
   renameLibrary(libraryId: number, name: string): Promise<KuraLibrary>;
   setLibraryTemplate(libraryId: number, dimension: string): Promise<KuraLibrary>;
   setLibraryOrganize(libraryId: number, enabled: boolean): Promise<KuraLibrary>;

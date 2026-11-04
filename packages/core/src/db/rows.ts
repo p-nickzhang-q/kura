@@ -249,6 +249,47 @@ export function createLibrary(
 }
 
 /** 改名: 显式给的名字撞名时报错, 不自动加序号 —— 人已经明确指定了, 静默改名字更奇怪。 */
+export interface DeleteLibraryResult {
+  library: Library;
+  /** 从索引里删掉的文件数 (磁盘上一个都没动)。 */
+  removedFiles: number;
+  /** 删完没有任何文件指向的条目数 —— 条目本身**不删**, 只是不再出现在这个库里。 */
+  orphanItems: number;
+}
+
+/**
+ * 删库: **只删索引, 不动磁盘**。
+ *
+ * `media_files` 随库级联删除, 但 `items` 保留 —— 条目是跨库的(同一部片可能在两个库里
+ * 都有文件), 删库不该顺手把元数据抹了。删完没人指向的条目依然能被刮削/手动补文件。
+ */
+export function deleteLibrary(db: Db, libraryId: number): DeleteLibraryResult {
+  const row = db.get<LibraryRow>(
+    "select id, name, root, template, organize_enabled, domain from libraries where id = ?",
+    [libraryId],
+  );
+  if (!row) throw new AppError(`媒体库不存在: ${libraryId}`, EXIT.NOT_FOUND, { libraryId });
+  const library = rowToLibrary(row);
+
+  const removedFiles = db.get<{ n: number }>("select count(*) as n from media_files where library_id = ?", [libraryId])?.n ?? 0;
+  db.exec("begin");
+  try {
+    db.run("delete from libraries where id = ?", [libraryId]);
+    db.exec("commit");
+  } catch (err) {
+    db.exec("rollback");
+    throw err;
+  }
+
+  // 全局(跨库)没有任何文件指向的条目数 —— 只报数, 不删
+  const orphanItems =
+    db.get<{ n: number }>(
+      "select count(*) as n from items i where not exists (select 1 from media_files mf where mf.number = i.number)",
+    )?.n ?? 0;
+
+  return { library, removedFiles, orphanItems };
+}
+
 export function renameLibrary(db: Db, libraryId: number, name: string): Library {
   const trimmed = name.trim();
   if (!trimmed) throw new AppError("库名不能为空", EXIT.USAGE);

@@ -174,6 +174,8 @@ const dimension = ref("");
 const unparsedFiles = ref<{ path: string; size: number; libraryId: number }[]>([]);
 /** 影视库的未识别页: 一目录一部剧的候选。 */
 const bindableDirs = ref<KuraBindableDir[]>([]);
+/** 正在等确认删除的库 id (就地两段式确认, 不弹 window.confirm)。 */
+const removingId = ref<number | null>(null);
 /** 建库菜单: 先选域, 再选目录 (域决定识别方式, 事后改不了)。 */
 const libMenu = ref(false);
 /** 绑定对话框: 搜 TMDB → 选一部 → 绑整个目录。 */
@@ -596,6 +598,21 @@ async function addLibrary(domain: "av" | "video" = "av"): Promise<void> {
     await refreshAll();
     selectedId.value = library.id;
     note.value = `已添加 ${library.name}`;
+  }
+}
+
+/** 删库: 只删库与文件索引, 磁盘上什么都不动。 */
+async function removeLibrary(library: KuraLibrary): Promise<void> {
+  try {
+    const result = await window.kura.removeLibrary(library.id);
+    removingId.value = null;
+    if (selectedId.value === library.id) selectedId.value = null;
+    await refreshAll();
+    note.value = `已删除库「${result.library.name}」: 索引里的 ${result.removedFiles} 个文件已移除, 磁盘上的文件一个都没动。${
+      result.orphanItems > 0 ? ` 库里还有 ${result.orphanItems} 个条目没有被任何文件指向。` : ""
+    }`;
+  } catch (err) {
+    errors.value.push(`删除媒体库: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -1184,6 +1201,15 @@ async function testDmm(): Promise<void> {
                 @keyup.esc="cancelRename"
                 @blur="commitRename(library)"
               />
+              <button type="button" class="danger-ghost" title="删除这个库" @click.stop="removingId = library.id">
+                删除
+              </button>
+            </div>
+            <!-- 删库只删索引, 但按钮得说清楚, 否则没人敢点 -->
+            <div v-else-if="removingId === library.id" class="rename confirm">
+              <span>删除「{{ library.name }}」的索引？磁盘文件不动。</span>
+              <button type="button" class="danger" @click.stop="removeLibrary(library)">删除</button>
+              <button type="button" @click.stop="removingId = null">取消</button>
             </div>
             <button v-else type="button" class="lib" @click="selectLibrary(library.id)">
               <strong>
@@ -1650,9 +1676,11 @@ async function testDmm(): Promise<void> {
               <tr v-for="dir in bindableDirs" :key="dir.dir">
                 <td class="path-cell mono" :title="dir.dir">{{ dir.name }}</td>
                 <td class="mono">{{ dir.files }}</td>
-                <td class="mono" :class="{ warn: dir.parsed < dir.files }">
+                <!-- 电影没有集号可解析: 这一列只对剧集有意义, 否则会误报"认不出" -->
+                <td v-if="dir.kind === 'tv'" class="mono" :class="{ warn: dir.parsed < dir.files }">
                   {{ dir.parsed }}{{ dir.parsed < dir.files ? ` (${dir.files - dir.parsed} 个认不出集号)` : "" }}
                 </td>
+                <td v-else class="mono muted">—</td>
                 <td class="mono">{{ dir.seasons.length > 0 ? dir.seasons.join(", ") : "—" }}</td>
                 <td class="row-actions">
                   <button
@@ -2245,6 +2273,14 @@ h1 {
   opacity: 1;
 }
 
+.rename {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  font-size: var(--fs-label);
+}
+
 .rename input {
   width: 100%;
   box-sizing: border-box;
@@ -2254,6 +2290,32 @@ h1 {
   background: var(--panel);
   color: var(--text);
   font: inherit;
+}
+
+/* 删除确认: 就地两段式, 不用 window.confirm (它塞不下"磁盘文件不动"这句关键说明) */
+.rename.confirm {
+  flex-wrap: wrap;
+}
+
+.rename.confirm span {
+  flex: 1 1 100%;
+  color: var(--text-faint);
+}
+
+.danger-ghost {
+  flex: none;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+  cursor: pointer;
+}
+
+.danger-ghost:hover {
+  border-color: var(--danger, #d9534f);
+  color: var(--danger, #d9534f);
 }
 
 /* 条目列表里的封面缩略图 */

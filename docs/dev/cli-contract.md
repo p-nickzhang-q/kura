@@ -144,6 +144,7 @@ stdout 仍只有最后那一个结果信封。Ctrl-C 会中断在途请求并提
 
 ```bash
 kura library add 影视库 /media/video --domain video  # av | video, 默认 av
+kura library remove <库>                            # 删库: 只删索引, 磁盘文件一个都不动
 kura file dirs                                       # 影视: 待绑定目录 (文件数 / 已解析集数)
 kura file bind <目录> --tmdb tmdb:tv:1399            # 目录级绑定 (--dry-run 先看)
 kura file set-episode <路径> --episode 5             # 给认不出集号的文件补集号

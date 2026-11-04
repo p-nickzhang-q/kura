@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLibrary, renameLibrary } from "../src/db/rows";
+import { createLibrary, deleteLibrary, renameLibrary } from "../src/db/rows";
 import { openRuntime, type Runtime } from "../src/runtime";
 import { scan } from "../src/tasks/scan";
 import { countExhausted, countItems, countPending } from "../src/tasks/scrape";
@@ -187,5 +188,46 @@ describe("域 (ADR 0008 / 0009)", () => {
     createLibrary(rt.db, { name: "番号库", root: join(root, "a") });
     await mkdir(join(root, "a", "子目录"), { recursive: true });
     expect(() => createLibrary(rt.db, { name: "番号库2", root: join(root, "a", "子目录") })).not.toThrow();
+  });
+
+  test("删库只删索引: 库与文件没了, 磁盘文件与条目都还在", async () => {
+    // 造一个真目录真文件, 确认删库不碰磁盘
+    const dir = join(root, "媒体");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "SSIS-915.mp4"), "x");
+    await writeFile(join(dir, "SSIS-916.mp4"), "x");
+
+    const library = createLibrary(rt.db, { name: "番号库", root: dir });
+    await scan(rt, { library });
+    expect(rt.db.get<{ c: number }>("select count(*) c from media_files")?.c).toBe(2);
+    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(2);
+
+    const result = deleteLibrary(rt.db, library.id);
+
+    expect(result.library.name).toBe("番号库");
+    expect(result.removedFiles).toBe(2);
+    // 条目保留: 它是跨库的, 删库不该抹掉元数据
+    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(2);
+    expect(rt.db.get<{ c: number }>("select count(*) c from libraries")?.c).toBe(0);
+    expect(rt.db.get<{ c: number }>("select count(*) c from media_files")?.c).toBe(0);
+    // 磁盘文件一个都没动
+    expect(existsSync(join(dir, "SSIS-915.mp4"))).toBe(true);
+    expect(existsSync(join(dir, "SSIS-916.mp4"))).toBe(true);
+    expect(result.orphanItems).toBe(2);
+  });
+
+  test("删库不该影响别的库", async () => {
+    const kept = createLibrary(rt.db, { name: "保留库", root: join(root, "a") });
+    const dropped = createLibrary(rt.db, { name: "待删库", root: join(root, "b") });
+    rt.db.run("insert into media_files (path, library_id, size, mtime_ms) values (?, ?, 1, 1)", [join(root, "a", "X.mp4"), kept.id]);
+    rt.db.run("insert into media_files (path, library_id, size, mtime_ms) values (?, ?, 1, 1)", [join(root, "b", "Y.mp4"), dropped.id]);
+
+    deleteLibrary(rt.db, dropped.id);
+    expect(rt.db.get<{ c: number }>("select count(*) c from libraries")?.c).toBe(1);
+    expect(rt.db.get<{ path: string }>("select path from media_files")?.path).toBe(join(root, "a", "X.mp4"));
+  });
+
+  test("删不存在的库报 NOT_FOUND", () => {
+    expect(() => deleteLibrary(rt.db, 9999)).toThrow(AppError);
   });
 });

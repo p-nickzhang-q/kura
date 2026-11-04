@@ -48,6 +48,7 @@ import {
   syncNfoTask,
   retryTask,
   actorIndexDrift,
+  deleteLibrary,
   exportTvNfo,
   scrapeShow,
   scrapeShows,
@@ -214,10 +215,10 @@ function parseContentType(value: unknown): ContentType | null {
 export const COMMANDS: Command[] = [
   {
     name: "library",
-    summary: "媒体库: list | add <名称> <根目录> [--domain av|movie|tv] [--no-organize] | rename <库> --to <新名> | set-template | set-organize",
+    summary: "媒体库: list | add <名称> <根目录> [--domain av|video] [--no-organize] | rename <库> --to <新名> | set-template | set-organize | remove <库>",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "list | add | rename | set-template | set-organize", positional: true, required: true },
+      { name: "action", type: "string", description: "list | add | rename | set-template | set-organize | remove", positional: true, required: true },
       { name: "name", type: "string", description: "库名 (add: 新库名; set-template: 目标库)", positional: true },
       { name: "root", type: "string", description: "库根目录 (add)", positional: true },
       { name: "template", type: "string", description: "自定义整理模板, 相对库根" },
@@ -273,6 +274,14 @@ export const COMMANDS: Command[] = [
         const template = args.options.dimension || args.options.template ? resolveTemplate() : undefined;
         const organizeEnabled = args.options.organize !== false;
         return { library: createLibrary(ctx.rt!.db, { name, root, template, organizeEnabled, domain: rawDomain }) };
+      }
+
+      if (action === "remove" || action === "delete") {
+        const ref = args.positionals.name;
+        if (!ref) throw new AppError("用法: library remove <库名|id>", EXIT.USAGE);
+        const library = requireLibrary(ctx, ref);
+        // 只删索引, 磁盘一个文件都不动 —— 删完重扫即可恢复
+        return { removed: deleteLibrary(ctx.rt!.db, library.id), note: "只删了库与文件索引, 磁盘上的文件一个都没动" };
       }
 
       if (action === "rename") {

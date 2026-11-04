@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("kura", {
   scrapeShow: (key) => ipcRenderer.invoke("scrape:show", { key }),
   addLibrary: (domain) => ipcRenderer.invoke("library:add", domain ? { domain } : {}),
   scan: (libraryId, options = {}) => ipcRenderer.invoke("scan:start", { libraryId, force: options.force === true }),
+  removeLibrary: (libraryId) => ipcRenderer.invoke("library:remove", { libraryId }),
   renameLibrary: (libraryId, name) => ipcRenderer.invoke("library:rename", { libraryId, name }),
   setLibraryTemplate: (libraryId, dimension) => ipcRenderer.invoke("library:set-template", { libraryId, dimension }),
   setLibraryOrganize: (libraryId, enabled) => ipcRenderer.invoke("library:set-organize", { libraryId, enabled }),

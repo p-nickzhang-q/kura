@@ -8,6 +8,7 @@ import {
   AUTO_PROXY,
   EXIT,
   createLibrary,
+  deleteLibrary,
   renameLibrary,
   createDmmSource,
   defaultSources,
@@ -560,6 +561,12 @@ function registerIpc(): void {
     const tmdb = await tmdbClient(rt);
     if (!tmdb) throw new Error("未配置 TMDB API key（设置页填写，或环境变量 KURA_TMDB_API_KEY）");
     return scrapeShow(rt, { key: input.key, tmdb });
+  });
+
+  ipcMain.handle("library:remove", (_event, input: { libraryId: number }) => {
+    mustLibrary(input.libraryId);
+    // 只删索引, 磁盘不动: 误删的代价是重扫一次, 不是丢文件
+    return deleteLibrary(mustRuntime().db, input.libraryId);
   });
 
   ipcMain.handle("library:rename", (_event, input: { libraryId: number; name: string }) => {
