@@ -68,7 +68,17 @@ const page = ref(0);
 /** 正在改名的库 id 与草稿 (Electron 的渲染进程没有 window.prompt, 只能自己做行内输入)。 */
 const renamingId = ref<number | null>(null);
 const renameDraft = ref("");
+/**
+ * 改名输入框的引用。
+ *
+ * 用回调 ref 而不是 `ref="renameInput"`: 这个 input 在 `v-for` 里, 同名 ref 会被收集成
+ * **数组**, 于是 `renameInput.value?.select()` 直接抛 "is not a function"。
+ * 一次只可能有一行在改名, 所以回调只会在那一行拿到元素。
+ */
 const renameInput = ref<HTMLInputElement | null>(null);
+function bindRenameInput(el: unknown): void {
+  renameInput.value = (el as HTMLInputElement | null) ?? null;
+}
 /** 页码输入框的草稿值: 输入过程中不立即跳页, 回车/失焦才跳。 */
 const pageInput = ref("1");
 const pageSize = 100;
@@ -569,7 +579,14 @@ async function run<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
 function startRename(library: KuraLibrary): void {
   renamingId.value = library.id;
   renameDraft.value = library.name;
-  void nextTick(() => renameInput.value?.select());
+  // 只把光标放到末尾, 不做全选: 深色主题下"全选高亮"的默认样式是一团灰,
+  // 看着像输入框坏了。想整段替换的人按 Ctrl+A 就行。
+  void nextTick(() => {
+    const input = renameInput.value;
+    if (!input) return;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  });
 }
 
 function cancelRename(): void {
@@ -1192,34 +1209,53 @@ async function testDmm(): Promise<void> {
             </button>
           </li>
           <li v-for="library in libraries" :key="library.id" :class="{ active: library.id === selectedId }">
-            <div v-if="renamingId === library.id" class="rename">
+            <!-- 改名: 就地一条输入 + 显式的保存/取消。不用 blur 提交 ——
+                 点保存时 blur 会先触发一次, 结果是"保存成功但界面报错" -->
+            <form v-if="renamingId === library.id" class="lib-edit" @submit.prevent="commitRename(library)">
               <input
-                ref="renameInput"
+                :ref="bindRenameInput"
                 v-model="renameDraft"
                 type="text"
-                @keyup.enter="commitRename(library)"
+                aria-label="媒体库名称"
                 @keyup.esc="cancelRename"
-                @blur="commitRename(library)"
               />
-              <button type="button" class="danger-ghost" title="删除这个库" @click.stop="removingId = library.id">
-                删除
+              <button type="submit" class="lib-edit-ok" title="保存" aria-label="保存名称">✓</button>
+              <button type="button" title="取消" aria-label="取消改名" @click="cancelRename">✕</button>
+            </form>
+            <!-- 删库只删索引, 这句话必须让人看见 —— 否则没人敢点 -->
+            <div v-else-if="removingId === library.id" class="lib-confirm">
+              <p>
+                删除「{{ library.name }}」的索引？
+                <span class="muted">磁盘上的文件不会被删除。</span>
+              </p>
+              <div class="lib-confirm-actions">
+                <button type="button" class="danger" @click="removeLibrary(library)">删除索引</button>
+                <button type="button" @click="removingId = null">取消</button>
+              </div>
+            </div>
+            <div v-else class="lib-row">
+              <button type="button" class="lib" @click="selectLibrary(library.id)">
+                <strong>
+                  {{ library.name }}
+                  <span v-if="library.domain === 'video'" class="badge accent">影视</span>
+                  <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
+                </strong>
+                <small v-if="showRoot(library)" :title="library.root">{{ library.root }}</small>
               </button>
+              <!-- 悬停/键盘聚焦才出现: 常驻两个图标会让整列看起来像工具栏 -->
+              <div class="lib-actions">
+                <button type="button" title="改名" aria-label="重命名媒体库" @click.stop="startRename(library)">✎</button>
+                <button
+                  type="button"
+                  class="danger-action"
+                  title="删除这个库（只删索引）"
+                  aria-label="删除媒体库"
+                  @click.stop="removingId = library.id"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
-            <!-- 删库只删索引, 但按钮得说清楚, 否则没人敢点 -->
-            <div v-else-if="removingId === library.id" class="rename confirm">
-              <span>删除「{{ library.name }}」的索引？磁盘文件不动。</span>
-              <button type="button" class="danger" @click.stop="removeLibrary(library)">删除</button>
-              <button type="button" @click.stop="removingId = null">取消</button>
-            </div>
-            <button v-else type="button" class="lib" @click="selectLibrary(library.id)">
-              <strong>
-                {{ library.name }}
-                <span v-if="library.domain === 'video'" class="badge accent">影视</span>
-                <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
-              </strong>
-              <small v-if="showRoot(library)" :title="library.root">{{ library.root }}</small>
-              <span class="pencil" role="button" tabindex="0" title="改名" aria-label="重命名媒体库" @click.stop="startRename(library)" @keyup.enter.stop="startRename(library)">✎</span>
-            </button>
           </li>
           <li v-if="libraries.length === 0" class="muted">还没有媒体库</li>
         </ul>
@@ -2256,66 +2292,189 @@ h1 {
 }
 
 /* 侧边栏库列表: 名字旁边一个铅笔, 点了就地改名 */
-.lib {
+/* ---- 库行: 三态 (正常 / 改名 / 删除确认) ----
+   动作按钮浮在行右侧、悬停或键盘聚焦才出现; 常驻两个图标会让整列像工具栏。
+   `.libs button` 上有 width:100% + flex-direction:column, 这里的按钮都要显式覆盖。 */
+.lib-row {
   position: relative;
+  display: flex;
+  align-items: stretch;
 }
 
-.pencil {
+.lib-row .lib {
+  flex: 1;
+  min-width: 0;
+}
+
+.libs .lib strong {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 动作按钮**浮在行右端**而不是占位: 常驻占位会把 240px 的侧栏挤掉 88px,
+   库名和路径全被压成一截。背景取行底色, 让字从按钮下面干净地消失。 */
+.libs .lib-actions {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 50%;
+  right: 0;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding-left: 16px;
+  transform: translateY(-50%);
+  background: var(--panel);
+  border-radius: var(--radius-sm);
   opacity: 0;
-  color: var(--muted);
-  font-size: var(--fs-label);
+  transition: opacity 120ms var(--ease);
 }
 
-.lib:hover .pencil {
+.libs li.active .lib-actions {
+  background: var(--panel-2);
+}
+
+.libs li:hover .lib-actions,
+.libs li.active .lib-actions,
+.lib-actions:focus-within {
   opacity: 1;
 }
 
-.rename {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 8px;
-  font-size: var(--fs-label);
-}
-
-.rename input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--panel);
-  color: var(--text);
-  font: inherit;
-}
-
-/* 删除确认: 就地两段式, 不用 window.confirm (它塞不下"磁盘文件不动"这句关键说明) */
-.rename.confirm {
-  flex-wrap: wrap;
-}
-
-.rename.confirm span {
-  flex: 1 1 100%;
-  color: var(--text-faint);
-}
-
-.danger-ghost {
-  flex: none;
-  padding: 4px 8px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+.libs .lib-actions button {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
   background: none;
   color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 120ms var(--ease), color 120ms var(--ease);
+}
+
+.libs .lib-actions button:hover {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+/* 删除是唯一会造成损失的动作: 只在它自己身上用危险色, 别把整行染红 */
+.libs .lib-actions button.danger-action:hover {
+  border-color: var(--danger-line);
+  color: var(--danger);
+}
+
+/* 改名: 卡片内联一条输入, 高度与库行一致 (44px 触控), 保存/取消各一个方形按钮 */
+.lib-edit {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding: 4px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+
+.lib-edit input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-body);
+}
+
+.lib-edit input:focus {
+  outline: none;
+}
+
+.libs .lib-edit button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--panel);
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.libs .lib-edit button:hover {
+  color: var(--text);
+}
+
+.libs .lib-edit .lib-edit-ok {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.libs .lib-edit .lib-edit-ok:hover {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* 删除确认: 就地一张危险色卡片, 把"磁盘文件不动"写在正文里 */
+.lib-confirm {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+
+.lib-confirm p {
+  margin: 0;
+  font-size: var(--fs-label);
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.lib-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.libs .lib-confirm-actions button {
+  width: auto;
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: var(--panel);
+  color: var(--text);
   font-size: var(--fs-label);
   cursor: pointer;
 }
 
-.danger-ghost:hover {
-  border-color: var(--danger, #d9534f);
-  color: var(--danger, #d9534f);
+.libs .lib-confirm-actions button:hover {
+  border-color: var(--line-strong);
+}
+
+.libs .lib-confirm-actions button.danger {
+  border-color: var(--danger-line);
+  color: var(--danger);
+}
+
+.libs .lib-confirm-actions button.danger:hover {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--on-accent);
 }
 
 /* 条目列表里的封面缩略图 */
@@ -2497,7 +2656,9 @@ h1 {
   cursor: pointer;
 }
 
-.libs li.active button {
+/* 只给"库行"上底色。写成 .libs li.active button 会把行内的动作按钮也染上,
+   改名输入旁边的 ✓ / ✕ 就会跟着变成一整块灰底 */
+.libs li.active .lib {
   background: var(--panel-2);
   border-color: var(--line-strong);
 }
@@ -3582,6 +3743,8 @@ td.pick {
 }
 
 .badge {
+  /* 库名后面的角标不许换行: 侧栏窄, "影视" 竖排成两行像坏了 */
+  white-space: nowrap;
   font-size: var(--fs-label);
   color: var(--warn);
   border: 1px solid var(--line-strong);
