@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../src/db/driver";
 import { migrate } from "../src/db/schema";
+import { repairActorData } from "../src/db/actors";
 
 let root: string;
 let dbFile: string;
@@ -22,7 +23,7 @@ describe("迁移", () => {
     const { db } = await openDb(dbFile);
     try {
       const version = migrate(db);
-      expect(version).toBe(11);
+      expect(version).toBe(12);
 
       const columns = db.all<{ name: string }>("pragma table_info(libraries)").map((row) => row.name);
       expect(columns).toContain("organize_enabled");
@@ -70,7 +71,7 @@ describe("迁移", () => {
       db.run("insert into libraries (name, root) values ('老库', '/old')");
       db.exec("pragma user_version = 3");
 
-      expect(migrate(db)).toBe(11);
+      expect(migrate(db)).toBe(12);
       const row = db.get<{ name: string; organize_enabled: number }>(
         "select name, organize_enabled from libraries",
       );
@@ -96,8 +97,28 @@ describe("迁移", () => {
     const { db } = await openDb(dbFile);
     try {
       migrate(db);
-      expect(migrate(db)).toBe(11);
-      expect(migrate(db)).toBe(11);
+      expect(migrate(db)).toBe(12);
+      expect(migrate(db)).toBe(12);
+    } finally {
+      db.close();
+    }
+  });
+
+  test("v12 修影视条目的演员索引 (刮削只写了 JSON 的那些)", async () => {
+    const { db } = await openDb(dbFile);
+    try {
+      migrate(db);
+      // 造出"影视条目有 actors 但索引为空"的现场 (0.6.20 的刮削路径漏了这一步)
+      db.run("insert into items (number, content_type, domain, actors) values ('tmdb:tv:1', '', 'tv', ?)", [
+        JSON.stringify(["演员甲", "未知演员"]),
+      ]);
+      expect(db.get<{ c: number }>("select count(*) c from item_actors")?.c).toBe(0);
+
+      repairActorData(db); // 重放 v12 的代码步骤
+
+      expect(db.get<{ c: number }>("select count(*) c from item_actors")?.c).toBe(1);
+      // 占位符依旧被丢掉
+      expect(JSON.parse(db.get<{ actors: string }>("select actors from items")!.actors)).toEqual(["演员甲"]);
     } finally {
       db.close();
     }
@@ -147,7 +168,7 @@ describe("迁移", () => {
       db.run("insert into media_files (path, library_id, number, size, mtime_ms) values ('/old/a.mp4', 1, 'SSIS-915', 1, 1)");
       db.exec("pragma user_version = 8");
 
-      expect(migrate(db)).toBe(11);
+      expect(migrate(db)).toBe(12);
 
       // 域列: 老数据全部落在 av 域
       expect(db.get<{ domain: string }>("select domain from libraries")?.domain).toBe("av");

@@ -8,6 +8,8 @@ import { bindDirectory } from "../src/tasks/bind";
 import { scan } from "../src/tasks/scan";
 import { countPendingShows, pendingShowKeys, scrapeShow, scrapeShows } from "../src/tasks/scrape-show";
 import type { TmdbClient, TmdbShow } from "../src/sources/tmdb";
+import { actorIndexDrift } from "../src/db/actors";
+import { listItems } from "../src/tasks/scrape";
 
 let root: string;
 let rt: Runtime;
@@ -115,6 +117,24 @@ describe("刮一部剧", () => {
     });
     const item = rt.db.get<{ duration_min: number }>("select duration_min from items where number = 'tmdb:tv:1429'");
     expect(item?.duration_min).toBe(24);
+  });
+
+  test("演员写进索引 —— 否则演员筛选里搜不到影视条目的演员", async () => {
+    await bindShow(["第1集.mp4"]);
+    await scrapeShow(rt, { key: "tmdb:tv:1429", tmdb: fakeTmdb(showFixture) });
+
+    // JSON 里有
+    const item = rt.db.get<{ actors: string }>("select actors from items where number = 'tmdb:tv:1429'");
+    expect(JSON.parse(item!.actors)).toEqual(["演员甲"]);
+    // 派生索引也得有 (演员筛选走的是这一步)
+    expect(rt.db.get<{ n: number }>("select count(*) as n from item_actors where number = 'tmdb:tv:1429'")?.n).toBe(1);
+    expect(rt.db.get<{ name: string }>("select name from actors")?.name).toBe("演员甲");
+    // 有漂移就是没走唯一入口
+    expect(actorIndexDrift(rt.db)).toBe(0);
+
+    // 按演员筛: 影视条目要被命中
+    const hits = listItems(rt, { actor: "演员甲" });
+    expect(hits.map((hit) => hit.key)).toEqual(["tmdb:tv:1429"]);
   });
 
   test("缺集 = 声明集数 - 盘上绑着的集数", async () => {

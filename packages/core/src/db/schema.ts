@@ -176,6 +176,10 @@ const MIGRATIONS: string[] = [
   `
   update libraries set domain = 'video' where domain in ('movie', 'tv');
   `,
+
+  // v12 — 影视条目的演员没进索引 (刮削时直接写了 items.actors 的 JSON)。
+  // 症状是"演员筛选里搜不到这些剧的演员"。修复动作与 v10 相同: 重建全部索引。
+  ``,
 ];
 
 /**
@@ -185,6 +189,7 @@ const MIGRATIONS: string[] = [
 const AFTER_MIGRATIONS: Record<number, (db: Db) => void> = {
   8: (db) => backfillActors(db),
   10: (db) => repairActorData(db),
+  12: (db) => repairActorData(db),
 };
 
 export function migrate(db: Db): number {

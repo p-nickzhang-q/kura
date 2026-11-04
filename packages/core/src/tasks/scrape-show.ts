@@ -3,6 +3,7 @@ import { parseTmdbKey, type TmdbClient, type TmdbShow } from "../sources/tmdb";
 import type { Runtime } from "../runtime";
 import type { Domain, FieldKey, RawFields } from "../domain/types";
 import { stringify } from "../db/rows";
+import { setItemActors } from "../db/actors";
 import { createTask, runTask, type TaskRow } from "./queue";
 
 /**
@@ -281,6 +282,8 @@ function writeFields(
   };
 
   const raw = fields as Record<string, unknown>;
+  // 演员单独处理: 它要同时写 JSON 和派生索引, 见下面 setItemActors
+  const actorNames = Array.isArray(raw.actors) ? (raw.actors as string[]) : null;
   for (const field of SINGLE_FIELDS_OUT) {
     const value = raw[field];
     if (value === undefined || value === null || value === "") continue;
@@ -291,6 +294,7 @@ function writeFields(
     if (!Array.isArray(value) || value.length === 0) continue;
     put(field as FieldKey, stringify(value));
   }
+
   for (const field of URL_FIELDS_OUT) {
     const value = raw[field];
     if (!Array.isArray(value) || value.length === 0) continue;
@@ -306,12 +310,22 @@ function writeFields(
   params.push(stringify(sources));
   sets.push("updated_at = unixepoch()");
   rt.db.run(`update items set ${sets.join(", ")} where number = ?`, [...params, key]);
+
+  // 演员必须走唯一入口: 它要同时写 items.actors 与 item_actors 索引。
+  // 直接写 JSON 的后果是"演员筛选里搜不到这批剧的演员" —— 和 0.6.18 修的
+  // 那个 nfo 漂移是同一个坑, 只是这次是自己踩的。
+  if (actorNames && actorNames.length > 0) {
+    setItemActors(rt.db, key, actorNames);
+    written.push("actors");
+  }
+
   return written;
 }
 
 /** 影视域真正会写到的列。av 的 content_type / pinned 之类绝不在这里出现。 */
 const SINGLE_FIELDS_OUT = ["title", "plot", "release_date", "duration_min", "studio", "label", "series"] as const;
-const LIST_FIELDS_OUT = ["actors", "directors", "tags"] as const;
+/** 演员不在里面: 它走 setItemActors (写 JSON + 建索引), 不能当普通列写 */
+const LIST_FIELDS_OUT = ["directors", "tags"] as const;
 const URL_FIELDS_OUT = ["poster_urls", "cover_urls", "thumb_urls"] as const;
 
 function writeEpisodes(rt: Runtime, key: string, show: TmdbShow): void {
