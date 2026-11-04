@@ -108,6 +108,65 @@ export function countPendingShows(rt: Runtime, options: { libraryId?: number } =
   return pendingShowKeys(rt, { ...options, limit: Number.MAX_SAFE_INTEGER }).length;
 }
 
+export interface EpisodeStats {
+  /** 来源声明/已落库的集数。 */
+  declared: number;
+  /** 盘上真有的集数。 */
+  bound: number;
+}
+
+/** 一批剧的集数统计(列表角标 `9/12` 与详情页都用它)。 */
+export function episodeStats(rt: Runtime, keys: string[]): Record<string, EpisodeStats> {
+  const out: Record<string, EpisodeStats> = {};
+  if (keys.length === 0) return out;
+  const placeholders = keys.map(() => "?").join(", ");
+  for (const row of rt.db.all<{ number: string; n: number }>(
+    `select number, count(*) as n from episodes where number in (${placeholders}) group by number`,
+    keys,
+  )) {
+    out[row.number] = { declared: row.n, bound: 0 };
+  }
+  for (const row of rt.db.all<{ number: string; n: number }>(
+    `select number, count(*) as n from media_files
+     where number in (${placeholders}) and season is not null and episode is not null
+     group by number`,
+    keys,
+  )) {
+    const current = out[row.number] ?? { declared: 0, bound: 0 };
+    out[row.number] = { declared: current.declared, bound: row.n };
+  }
+  return out;
+}
+
+/** 一个剧的所有集(按季、集号排序), 详情页按季分组用。 */
+export function listEpisodes(
+  rt: Runtime,
+  key: string,
+): { season: number; episode: number; title: string | null; airDate: string | null; runtimeMin: number | null; hasFile: boolean }[] {
+  const rows = rt.db.all<{
+    season: number;
+    episode: number;
+    title: string | null;
+    air_date: string | null;
+    duration_min: number | null;
+    file_count: number;
+  }>(
+    `select e.season, e.episode, e.title, e.air_date, e.duration_min,
+            (select count(*) from media_files mf
+             where mf.number = e.number and mf.season = e.season and mf.episode = e.episode) as file_count
+     from episodes e where e.number = ? order by e.season, e.episode`,
+    [key],
+  );
+  return rows.map((row) => ({
+    season: row.season,
+    episode: row.episode,
+    title: row.title,
+    airDate: row.air_date,
+    runtimeMin: row.duration_min,
+    hasFile: row.file_count > 0,
+  }));
+}
+
 export interface ScrapeShowsResult {
   libraryId: number | null;
   reports: ScrapeShowReport[];

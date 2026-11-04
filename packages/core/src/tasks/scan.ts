@@ -303,9 +303,12 @@ async function scanVideo(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
 
       if (!dryRun) {
         rt.db.run(
+          // number 一律保留: 影视文件的身份来自**绑定**, 扫描只负责季/集与文件属性。
+          // 写成 excluded.number(null) 会把已绑定的文件打回未识别 —— 重扫一次全库就得重绑。
           `insert into media_files (path, library_id, number, size, mtime_ms, sha256, phase, season, episode, seen_at)
            values (?, ?, null, ?, ?, ?, ?, ?, ?, unixepoch())
-           on conflict(path) do update set library_id = excluded.library_id, number = excluded.number,
+           on conflict(path) do update set library_id = excluded.library_id,
+             number = coalesce(media_files.number, excluded.number),
              size = excluded.size, mtime_ms = excluded.mtime_ms, sha256 = excluded.sha256,
              phase = excluded.phase, season = excluded.season, episode = excluded.episode, seen_at = excluded.seen_at`,
           [file.path, library.id, file.size, file.mtimeMs, previous?.sha256 ?? null, stringify(phase), season, episode],

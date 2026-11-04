@@ -154,6 +154,18 @@ describe("目录级绑定", () => {
     expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(1);
   });
 
+  test("重扫不会把已绑定的文件打回未识别 (扫描不碰 number)", async () => {
+    await makeShow("某剧", ["第1集.mp4", "第2集.mp4"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:5" });
+
+    const again = await scan(rt, { library });
+    expect(again.counts.unchanged).toBe(2);
+    expect(listFiles(rt, { libraryId: library.id }).every((file) => file.number === "tmdb:tv:5")).toBe(true);
+    expect(countBindableDirs(rt, { libraryId: library.id })).toBe(0);
+  });
+
   test("解绑退回未识别; 条目没人指向时删掉", async () => {
     await makeShow("某剧", ["第1集.mp4", "第2集.mp4"]);
     const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });

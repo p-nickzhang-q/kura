@@ -6,6 +6,7 @@ import type { Db } from "./driver";
 import { AppError, EXIT } from "../exit";
 
 export interface ItemRow {
+  domain?: string | null;
   number: string;
   content_type: string;
   title: string | null;
@@ -45,6 +46,7 @@ export function rowToMetadata(row: ItemRow): Metadata {
     key: row.number,
     number: row.number,
     contentType: row.content_type as ContentType,
+    domain: isDomain(row.domain) ? row.domain : "av",
     title: row.title ?? undefined,
     titleOriginal: row.title_original ?? undefined,
     plotOriginal: row.plot_original ?? undefined,

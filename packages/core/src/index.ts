@@ -64,7 +64,8 @@ export { actorIndexDrift, setItemActors } from "./db/actors";
 export type { ItemRow, MediaFileRow } from "./db/rows";
 
 export { countFiles, filePhase, listFiles, scan } from "./tasks/scan";
-export { countPendingShows, pendingShowKeys, scrapeShow, scrapeShows, scrapeShowsTask } from "./tasks/scrape-show";
+export { countPendingShows, episodeStats, listEpisodes, pendingShowKeys, scrapeShow, scrapeShows, scrapeShowsTask } from "./tasks/scrape-show";
+export type { EpisodeStats } from "./tasks/scrape-show";
 export type { ScrapeShowOptions, ScrapeShowReport, ScrapeShowsOptions, ScrapeShowsResult } from "./tasks/scrape-show";
 export { bindDirectory, countBindableDirs, listBindableDirs, setFileEpisode, unbindDirectory } from "./tasks/bind";
 export type { BindableDir, BindResult } from "./tasks/bind";

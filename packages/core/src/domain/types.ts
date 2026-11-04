@@ -85,6 +85,8 @@ export interface Metadata extends RawFields {
   key: string;
   number: string | null;
   contentType: ContentType;
+  /** 域: av / movie / tv。av 条目没有内容类型的场合会看到空串, 域永远是确定的。 */
+  domain?: Domain;
   /** 只记单源字段的来源; 列表/URL 字段自带顺序。 */
   fieldSources: Record<string, string>;
 }

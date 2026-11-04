@@ -32,6 +32,7 @@ import {
   isDmmConfigured,
   maskSettings,
   resolveDmmEnv,
+  resolveProxyUrl,
   saveSettings,
   settingsPath,
   type Settings,
@@ -58,6 +59,14 @@ import {
   resolvePaths,
   organize,
   pendingKeys,
+  bindDirectory,
+  episodeStats,
+  isDomain,
+  listBindableDirs,
+  listEpisodes,
+  createTmdbClient,
+  resolveTmdbEnv,
+  scrapeShow,
   scan,
   scrape,
   scrapeKeysTask,
@@ -253,6 +262,19 @@ function registerProtocols(): void {
     }
     return net.fetch(pathToFileURL(join(resourceDir(mustRuntime()), name)).href);
   });
+}
+
+/**
+ * TMDB 客户端: 没配 key 就返回 null, 由调用方给"去设置页填"的提示。
+ *
+ * 走 `browserFetch`(Chromium 网络栈)而不是 Node 的 fetch: 代理是 `applyProxySettings`
+ * 设在 defaultSession 上的, 只有 Chromium 的栈认这份设置。用 Node fetch 等于绕过
+ * 用户配的代理 —— 在有墙的网络里就是必然失败。
+ */
+function tmdbClient(rt: Runtime) {
+  const env = resolveTmdbEnv(rt.settings);
+  if (!env.apiKey) return null;
+  return createTmdbClient({ http: createHttp(), env });
 }
 
 function mustRuntime(): Runtime {
@@ -474,11 +496,47 @@ function registerIpc(): void {
 
   ipcMain.handle("library:list", () => listLibraries(mustRuntime().db));
 
-  ipcMain.handle("library:add", async () => {
+  ipcMain.handle("library:add", async (_event, input: { domain?: string } = {}) => {
     const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
     if (result.canceled || !result.filePaths[0]) return null;
     const root = result.filePaths[0];
-    return createLibrary(mustRuntime().db, { name: basename(root), root });
+    // 域决定识别方式、来源与模板; 建库时落定, 之后不可改 (ADR 0008 决策 2)
+    const domain = isDomain(input.domain) ? input.domain : "av";
+    return createLibrary(mustRuntime().db, { name: basename(root), root, domain });
+  });
+
+  // ── 影视域 ────────────────────────────────────────────────────────────────
+  ipcMain.handle("file:dirs", (_event, input: { libraryId?: number } = {}) =>
+    listBindableDirs(mustRuntime(), { libraryId: input.libraryId ?? undefined }),
+  );
+
+  ipcMain.handle("tmdb:search", async (_event, input: { kind: "tv" | "movie"; query: string }) => {
+    const rt = mustRuntime();
+    const tmdb = await tmdbClient(rt);
+    if (!tmdb) throw new Error("未配置 TMDB API key（设置页填写，或环境变量 KURA_TMDB_API_KEY）");
+    return tmdb.search(input.kind, input.query.trim());
+  });
+
+  ipcMain.handle("file:bind", async (_event, input: { libraryId: number; dir: string; key: string }) => {
+    const rt = mustRuntime();
+    const result = bindDirectory(rt, { libraryId: input.libraryId, dir: input.dir, key: input.key });
+    // 绑完立刻刮一次: 绑定按钮的语义是"让这部剧有数据", 不该让人再点一次刮削
+    const tmdb = await tmdbClient(rt);
+    if (!tmdb) return { ...result, scraped: null };
+    const scraped = await scrapeShow(rt, { key: result.key, tmdb });
+    return { ...result, scraped };
+  });
+
+  ipcMain.handle("item:episodes", (_event, input: { key: string }) => {
+    const rt = mustRuntime();
+    return { key: input.key, episodes: listEpisodes(rt, input.key), stats: episodeStats(rt, [input.key])[input.key] ?? { declared: 0, bound: 0 } };
+  });
+
+  ipcMain.handle("scrape:show", async (_event, input: { key: string }) => {
+    const rt = mustRuntime();
+    const tmdb = await tmdbClient(rt);
+    if (!tmdb) throw new Error("未配置 TMDB API key（设置页填写，或环境变量 KURA_TMDB_API_KEY）");
+    return scrapeShow(rt, { key: input.key, tmdb });
   });
 
   ipcMain.handle("library:rename", (_event, input: { libraryId: number; name: string }) => {
@@ -611,9 +669,16 @@ function registerIpc(): void {
       sort: input.sort,
     };
     const items = listItems(rt, { ...filters, limit: input.limit ?? 100, offset: input.offset ?? 0 });
+    // 影视条目带集数角标 (9/12); av 条目不需要, 所以只对这批 key 查一次
+    const showKeys = items.filter((item) => item.domain !== "av").map((item) => item.key);
+    const stats = episodeStats(rt, showKeys);
     return {
       // 封面是本地缓存的文件, 走自定义协议给渲染进程读 (不给它 file:// 权限)
-      items: items.map((item) => ({ ...item, coverUrl: coverUrlFor(rt, item) })),
+      items: items.map((item) => ({
+        ...item,
+        coverUrl: coverUrlFor(rt, item),
+        ...(item.domain !== "av" ? { episodeStats: stats[item.key] ?? { declared: 0, bound: 0 } } : {}),
+      })),
       total: countItems(rt, filters),
       // 计数与列表同口径: 选了库就只算这个库, 否则"待刮削 N"会把别的库算进来
       pending: countPending(rt, { libraryId: input.libraryId }),

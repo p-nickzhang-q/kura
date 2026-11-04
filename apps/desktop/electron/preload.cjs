@@ -5,7 +5,13 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("kura", {
   info: () => ipcRenderer.invoke("app:info"),
   libraries: () => ipcRenderer.invoke("library:list"),
-  addLibrary: () => ipcRenderer.invoke("library:add"),
+  // 影视域的几条: 待绑定目录 / TMDB 搜索 / 绑定 / 集列表 / 单部刮削
+  bindableDirs: (libraryId) => ipcRenderer.invoke("file:dirs", libraryId === undefined ? {} : { libraryId }),
+  tmdbSearch: (kind, query) => ipcRenderer.invoke("tmdb:search", { kind, query }),
+  bindDir: (libraryId, dir, key) => ipcRenderer.invoke("file:bind", { libraryId, dir, key }),
+  itemEpisodes: (key) => ipcRenderer.invoke("item:episodes", { key }),
+  scrapeShow: (key) => ipcRenderer.invoke("scrape:show", { key }),
+  addLibrary: (domain) => ipcRenderer.invoke("library:add", domain ? { domain } : {}),
   scan: (libraryId, options = {}) => ipcRenderer.invoke("scan:start", { libraryId, force: options.force === true }),
   renameLibrary: (libraryId, name) => ipcRenderer.invoke("library:rename", { libraryId, name }),
   setLibraryTemplate: (libraryId, dimension) => ipcRenderer.invoke("library:set-template", { libraryId, dimension }),

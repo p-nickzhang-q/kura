@@ -38,8 +38,43 @@ interface KuraLibrary {
   name: string;
   root: string;
   template: string;
+  /** av = 番号制, movie = 电影, tv = 剧集/动画/综艺。建库时落定, 不可改。 */
+  domain: "av" | "movie" | "tv";
   /** false = 只索引, 不允许移动/改名/写 NFO。 */
   organizeEnabled?: boolean;
+}
+
+/** 影视条目: 集数角标 (声明/盘上)。 */
+interface KuraEpisodeStats {
+  declared: number;
+  bound: number;
+}
+
+interface KuraEpisode {
+  season: number;
+  episode: number;
+  title: string | null;
+  airDate: string | null;
+  runtimeMin: number | null;
+  hasFile: boolean;
+}
+
+/** 未识别页里"待绑定的目录" (一个目录 = 一部剧的候选)。 */
+interface KuraBindableDir {
+  dir: string;
+  name: string;
+  files: number;
+  parsed: number;
+  seasons: number[];
+}
+
+interface KuraTmdbHit {
+  id: number;
+  key: string;
+  title: string;
+  year: string | null;
+  overview: string | null;
+  score: number;
 }
 
 interface KuraScanEvent {
@@ -72,6 +107,10 @@ interface KuraItem {
   coverUrl?: string | null;
   content_type?: string;
   contentType: string;
+  /** av / movie / tv。 */
+  domain?: "av" | "movie" | "tv";
+  /** 影视条目才有: 集数角标。 */
+  episodeStats?: KuraEpisodeStats;
   title?: string;
   plot?: string;
   release_date?: string;
@@ -177,7 +216,12 @@ interface KuraTask {
 interface KuraBridge {
   info(): Promise<KuraAppInfo>;
   libraries(): Promise<KuraLibrary[]>;
-  addLibrary(): Promise<KuraLibrary | null>;
+  addLibrary(domain?: "av" | "movie" | "tv"): Promise<KuraLibrary | null>;
+  bindableDirs(libraryId?: number): Promise<KuraBindableDir[]>;
+  tmdbSearch(kind: "tv" | "movie", query: string): Promise<KuraTmdbHit[]>;
+  bindDir(libraryId: number, dir: string, key: string): Promise<{ key: string; dir: string; bound: number; episodes: number; stillUnparsed: string[] }>;
+  itemEpisodes(key: string): Promise<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats }>;
+  scrapeShow(key: string): Promise<{ key: string; ok: boolean; fields: string[]; episodes: number; declared: number; bound: number; missing: number; error?: string }>;
   scan(libraryId: number, options?: { force?: boolean }): Promise<KuraScanReport>;
   renameLibrary(libraryId: number, name: string): Promise<KuraLibrary>;
   setLibraryTemplate(libraryId: number, dimension: string): Promise<KuraLibrary>;

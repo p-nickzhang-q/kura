@@ -117,6 +117,23 @@ function sortState(field: SortField): "none" | "ascending" | "descending" {
   return sort.value.desc ? "descending" : "ascending";
 }
 const hasFilters = computed(() => Object.keys(filters.value).length > 0);
+/** 当前选中的库是不是影视域; 全部库时为 null (按 av 的界面走)。 */
+const currentDomain = computed<"av" | "movie" | "tv" | null>(() => {
+  if (selectedId.value === null) return null;
+  return libraries.value.find((library) => library.id === selectedId.value)?.domain ?? "av";
+});
+/** 影视模式的界面分支。 */
+const isVideoMode = computed(() => currentDomain.value === "movie" || currentDomain.value === "tv");
+/** 详情页按季分组。 */
+const seasonGroups = computed(() => {
+  const groups = new Map<number, KuraEpisode[]>();
+  for (const episode of episodeView.value?.episodes ?? []) {
+    const list = groups.get(episode.season) ?? [];
+    list.push(episode);
+    groups.set(episode.season, list);
+  }
+  return [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([season, episodes]) => ({ season, episodes }));
+});
 /** 首次读库还没回来 —— 和"库里确实空"是两件事, 不能混成一个空状态。 */
 const firstLoad = ref(true);
 /**
@@ -155,6 +172,20 @@ const pageCount = computed(() => Math.max(1, Math.ceil(itemTotal.value / pageSiz
 const detail = ref<KuraItem | null>(null);
 const dimension = ref("");
 const unparsedFiles = ref<{ path: string; size: number; libraryId: number }[]>([]);
+/** 影视库的未识别页: 一目录一部剧的候选。 */
+const bindableDirs = ref<KuraBindableDir[]>([]);
+/** 建库菜单: 先选域, 再选目录 (域决定识别方式, 事后改不了)。 */
+const libMenu = ref(false);
+/** 绑定对话框: 搜 TMDB → 选一部 → 绑整个目录。 */
+const bindDialog = ref<{
+  dir: KuraBindableDir;
+  kind: "tv" | "movie";
+  query: string;
+  hits: KuraTmdbHit[];
+  busy: boolean;
+} | null>(null);
+/** 打开中的剧的集列表 (影视条目才有)。 */
+const episodeView = ref<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats } | null>(null);
 const unparsedCount = ref(0);
 const unparsedPage = ref(0);
 const unparsedPageSize = 100;
@@ -310,6 +341,74 @@ async function refreshUnparsed(): Promise<void> {
   });
   unparsedFiles.value = result.files;
   unparsedCount.value = result.total;
+
+  // 影视库的"未识别"是目录级的: 一个目录 = 一部剧的候选
+  if (isVideoMode.value) {
+    bindableDirs.value = await window.kura.bindableDirs(selectedId.value ?? undefined).catch(() => []);
+  } else {
+    bindableDirs.value = [];
+  }
+}
+
+/** 打开详情时顺带读集列表 (只有影视条目有)。 */
+async function loadEpisodes(key: string, domain: string | undefined): Promise<void> {
+  episodeView.value = null;
+  if (!domain || domain === "av") return;
+  try {
+    episodeView.value = await window.kura.itemEpisodes(key);
+  } catch {
+    episodeView.value = null;
+  }
+}
+
+/** 绑定对话框: 先搜 TMDB, 再绑整个目录并顺手刮一次。 */
+async function searchTmdb(): Promise<void> {
+  const dialog = bindDialog.value;
+  if (!dialog || dialog.query.trim().length === 0) return;
+  dialog.busy = true;
+  try {
+    dialog.hits = await window.kura.tmdbSearch(dialog.kind, dialog.query.trim());
+  } catch (err) {
+    errors.value.push(`搜索 TMDB: ${err instanceof Error ? err.message : String(err)}`);
+    dialog.hits = [];
+  } finally {
+    dialog.busy = false;
+  }
+}
+
+async function bindDir(hit: KuraTmdbHit): Promise<void> {
+  const dialog = bindDialog.value;
+  if (!dialog || selectedId.value === null) return;
+  dialog.busy = true;
+  try {
+    const result = await window.kura.bindDir(selectedId.value, dialog.dir.dir, hit.key);
+    const scraped = (result as { scraped?: { declared: number; bound: number; missing: number } | null }).scraped;
+    note.value = scraped
+      ? `已绑定「${hit.title}」: ${result.bound} 个文件 · ${result.episodes} 集 · 缺 ${scraped.missing} 集${
+          result.stillUnparsed.length > 0 ? ` · ${result.stillUnparsed.length} 个文件还缺集号` : ""
+        }`
+      : `已绑定「${hit.title}」: ${result.bound} 个文件 · ${result.episodes} 集`;
+    bindDialog.value = null;
+    await refreshAll();
+  } catch (err) {
+    errors.value.push(`绑定: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    dialog.busy = false;
+  }
+}
+
+async function rescrapeShow(): Promise<void> {
+  if (!detail.value || detail.value.domain === "av") return;
+  try {
+    const report = await window.kura.scrapeShow(detail.value.key);
+    note.value = report.ok
+      ? `已刮削: ${report.fields.length} 个字段 · ${report.declared} 集（盘上 ${report.bound} 集，缺 ${report.missing}）`
+      : `刮削失败: ${report.error ?? "未知原因"}`;
+    await refreshAll();
+    await loadEpisodes(detail.value.key, detail.value.domain);
+  } catch (err) {
+    errors.value.push(`刮削: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 async function goUnparsedPage(next: number): Promise<void> {
@@ -487,8 +586,9 @@ async function commitRename(library: KuraLibrary): Promise<void> {
   }
 }
 
-async function addLibrary(): Promise<void> {
-  const library = await run("添加媒体库", () => window.kura.addLibrary());
+async function addLibrary(domain: "av" | "movie" | "tv" = "av"): Promise<void> {
+  libMenu.value = false;
+  const library = await run("添加媒体库", () => window.kura.addLibrary(domain));
   if (library) {
     await refreshAll();
     selectedId.value = library.id;
@@ -697,6 +797,7 @@ async function retryTask(task: KuraTask, onlyFailed: boolean): Promise<void> {
 async function openDetail(item: KuraItem): Promise<void> {
   const fresh = await run("读取条目", () => window.kura.item(item.key));
   if (fresh) detail.value = fresh;
+  await loadEpisodes(item.key, item.domain);
 }
 
 /** 详情里就地补一张图, 省得为了一个条目去勾选列表。 */
@@ -1026,9 +1127,31 @@ async function testDmm(): Promise<void> {
       <aside class="side">
         <div class="side-head">
           <span>媒体库</span>
-          <button class="ghost" type="button" aria-label="添加媒体库" title="添加媒体库" :disabled="busy" @click="addLibrary">
+          <button
+            class="ghost"
+            type="button"
+            aria-label="添加媒体库"
+            title="添加媒体库"
+            :disabled="busy"
+            @click="libMenu = !libMenu"
+          >
             +
           </button>
+          <!-- 域决定识别方式、来源与模板, 建库时落定就改不了, 所以必须先选 -->
+          <div v-if="libMenu" class="lib-menu" role="menu">
+            <button type="button" role="menuitem" @click="addLibrary('av')">
+              <strong>番号制</strong>
+              <small>番号识别 · DMM/JavBus/JavDB</small>
+            </button>
+            <button type="button" role="menuitem" @click="addLibrary('tv')">
+              <strong>剧集 · 动画 · 综艺</strong>
+              <small>TMDB · 按季分集</small>
+            </button>
+            <button type="button" role="menuitem" @click="addLibrary('movie')">
+              <strong>电影</strong>
+              <small>TMDB · 一个文件一部</small>
+            </button>
+          </div>
         </div>
         <ul class="libs">
           <!-- 「全部库」不是真库, 只是把范围放宽: 扫描会挨个跑 -->
@@ -1052,6 +1175,7 @@ async function testDmm(): Promise<void> {
             <button v-else type="button" class="lib" @click="selectLibrary(library.id)">
               <strong>
                 {{ library.name }}
+                <span v-if="library.domain !== 'av'" class="badge accent">{{ library.domain === "tv" ? "剧集" : "电影" }}</span>
                 <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
               </strong>
               <small v-if="showRoot(library)" :title="library.root">{{ library.root }}</small>
@@ -1303,11 +1427,24 @@ async function testDmm(): Promise<void> {
                     </td>
                     <td class="num-cell">
                       <span class="mono">{{ item.number }}</span>
-                      <span class="type-badge">{{ TYPE_LABEL[item.contentType] ?? item.contentType }}</span>
+                      <span v-if="item.contentType" class="type-badge">
+                        {{ TYPE_LABEL[item.contentType] ?? item.contentType }}
+                      </span>
                       <span v-if="item.pinned.length" title="有锁定字段" aria-label="有锁定字段">🔒</span>
                     </td>
                     <td class="title-cell" :title="item.title ?? ''">
-                      <span>{{ displayTitle(item) }}</span>
+                      <div class="title-line">
+                        <span class="title-text">{{ displayTitle(item) }}</span>
+                        <!-- 影视条目: 盘上/声明集数。缺集不是错误, 只是信息 -->
+                        <span
+                          v-if="item.episodeStats"
+                          class="badge ep-badge"
+                          :class="{ warn: item.episodeStats.bound < item.episodeStats.declared }"
+                          :title="`盘上 ${item.episodeStats.bound} 集 / 声明 ${item.episodeStats.declared} 集`"
+                        >
+                          {{ item.episodeStats.bound }}/{{ item.episodeStats.declared }}
+                        </span>
+                      </div>
                     </td>
                     <td>
                       <button v-if="item.studio" type="button" class="actor" :title="`只看 ${item.studio}`" @click="applyFilter('studio', item.studio!)">
@@ -1347,7 +1484,7 @@ async function testDmm(): Promise<void> {
                 </template>
                 <template v-else-if="libraries.length === 0">
                   <p>还没有媒体库。</p>
-                  <button type="button" class="primary" :disabled="busy" @click="addLibrary">添加媒体库</button>
+                  <button type="button" class="primary" :disabled="busy" @click="addLibrary('av')">添加媒体库</button>
                   <p class="hint">选一个存放影片的文件夹, Kura 会扫一遍并登记所有文件。</p>
                 </template>
                 <template v-else>
@@ -1366,8 +1503,9 @@ async function testDmm(): Promise<void> {
                 </button>
                 <button class="ghost" type="button" aria-label="关闭详情" title="关闭详情" @click="detail = null">×</button>
               </header>
-              <!-- 类型决定刮削路由与整理目录, 所以做成显式可改: 判错时人得能修 -->
-              <div class="detail-type">
+              <!-- 类型决定刮削路由与整理目录, 所以做成显式可改: 判错时人得能修。
+                   影视条目没有内容类型(域决定一切), 所以这一行对它们不显示 -->
+              <div v-if="!detail.domain || detail.domain === 'av'" class="detail-type">
                 <span class="muted">类型</span>
                 <select
                   :value="detail.contentType"
@@ -1445,6 +1583,34 @@ async function testDmm(): Promise<void> {
                 <span v-else class="muted">—</span>
               </div>
               <p class="muted hint">锁定后重新刮削不会覆盖该字段。点片商/厂牌/系列/演员/导演/标签可以筛出同类条目。</p>
+
+              <!-- 影视条目: 季/集展开 + 缺集。集是"内容单位", 与 av 的分集不是一回事 -->
+              <section v-if="detail.domain && detail.domain !== 'av'" class="detail-episodes">
+                <header class="episodes-head">
+                  <strong>集</strong>
+                  <span v-if="episodeView" class="muted">
+                    盘上 {{ episodeView.stats.bound }} / 声明 {{ episodeView.stats.declared }}
+                    <span v-if="episodeView.stats.declared > episodeView.stats.bound" class="warn">
+                      · 缺 {{ episodeView.stats.declared - episodeView.stats.bound }}
+                    </span>
+                  </span>
+                  <span class="spacer" />
+                  <button type="button" :disabled="busy" @click="rescrapeShow">重新刮削</button>
+                </header>
+                <p v-if="!episodeView || episodeView.episodes.length === 0" class="muted">
+                  还没有集信息。点「重新刮削」从 TMDB 拉一次。
+                </p>
+                <div v-for="group in seasonGroups" :key="group.season" class="season-group">
+                  <p class="season-title">第 {{ group.season }} 季 · {{ group.episodes.length }} 集</p>
+                  <ul>
+                    <li v-for="episode in group.episodes" :key="`${episode.season}-${episode.episode}`" :class="{ missing: !episode.hasFile }">
+                      <span class="ep mono">E{{ String(episode.episode).padStart(2, "0") }}</span>
+                      <span class="ep-title">{{ episode.title || "（无集名）" }}</span>
+                      <span v-if="!episode.hasFile" class="warn">盘上没有</span>
+                    </li>
+                  </ul>
+                </div>
+              </section>
               <!-- 图放最后: 字段通常占不满整栏, 让图吃掉剩下的空白, 也就能显示得更大 -->
               <div v-if="detail.coverUrl" class="detail-cover">
                 <button type="button" class="cover-zoom" :aria-label="`放大 ${detail.number} 的封面`" @click="zoom = detail.coverUrl!">
@@ -1453,6 +1619,44 @@ async function testDmm(): Promise<void> {
               </div>
             </aside>
           </div>
+        </div>
+
+        <!-- 未识别: 影视库是"目录"级 (一个目录 = 一部剧的候选) -->
+        <div v-else-if="tab === 'unparsed' && isVideoMode" class="pane">
+          <div class="toolbar">
+            <span class="muted">
+              待绑定的目录: {{ bindableDirs.length }} 个（影视没有番号，要先绑到 TMDB 才知道是哪一部）
+            </span>
+          </div>
+          <table>
+            <thead>
+              <tr><th>目录</th><th>文件</th><th>已解析集号</th><th>季</th><th /></tr>
+            </thead>
+            <tbody>
+              <tr v-for="dir in bindableDirs" :key="dir.dir">
+                <td class="path-cell mono" :title="dir.dir">{{ dir.name }}</td>
+                <td class="mono">{{ dir.files }}</td>
+                <td class="mono" :class="{ warn: dir.parsed < dir.files }">
+                  {{ dir.parsed }}{{ dir.parsed < dir.files ? ` (${dir.files - dir.parsed} 个认不出集号)` : "" }}
+                </td>
+                <td class="mono">{{ dir.seasons.length > 0 ? dir.seasons.join(", ") : "—" }}</td>
+                <td class="row-actions">
+                  <button
+                    type="button"
+                    :disabled="busy || selectedId === null"
+                    @click="bindDialog = { dir, kind: currentDomain === 'movie' ? 'movie' : 'tv', query: dir.name, hits: [], busy: false }"
+                  >
+                    绑定到 TMDB
+                  </button>
+                  <button type="button" @click="copyPath(dir.dir)">复制路径</button>
+                  <button type="button" @click="reveal(dir.dir)">定位</button>
+                </td>
+              </tr>
+              <tr v-if="bindableDirs.length === 0">
+                <td colspan="5" class="muted">没有待绑定的目录。扫一遍库，或者它们都已经绑过了。</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
 
         <!-- 未识别 -->
@@ -1774,6 +1978,41 @@ async function testDmm(): Promise<void> {
       <img :src="zoom" alt="" />
       <button type="button" class="ghost lightbox-close" aria-label="关闭大图" @click.stop="zoom = null">×</button>
     </div>
+  <!-- 绑定: 搜 TMDB → 选一部 → 绑整个目录。选错会让整季集名全错, 所以不自动挑 -->
+  <div v-if="bindDialog" class="lightbox" role="dialog" aria-modal="true" aria-label="绑定到 TMDB" @keydown.esc="bindDialog = null">
+    <div class="bind-modal">
+      <header>
+        <strong>绑定到 TMDB</strong>
+        <span class="spacer" />
+        <button class="ghost" type="button" aria-label="关闭" title="关闭" @click="bindDialog = null">×</button>
+      </header>
+      <p class="muted">
+        {{ bindDialog.dir.name }} · {{ bindDialog.dir.files }} 个文件
+        <template v-if="bindDialog.dir.seasons.length > 0"> · 季 {{ bindDialog.dir.seasons.join(", ") }}</template>
+      </p>
+      <div class="bind-search">
+        <input
+          v-model="bindDialog.query"
+          type="search"
+          :placeholder="bindDialog.kind === 'tv' ? '剧名（中文或原名）' : '片名'"
+          @keyup.enter="searchTmdb"
+        />
+        <button type="button" :disabled="bindDialog.busy || bindDialog.query.trim().length === 0" @click="searchTmdb">
+          {{ bindDialog.busy ? "处理中…" : "搜索" }}
+        </button>
+      </div>
+      <ul class="bind-hits">
+        <li v-for="hit in bindDialog.hits" :key="hit.key">
+          <button type="button" :disabled="bindDialog.busy" @click="bindDir(hit)">
+            <strong>{{ hit.title }}</strong>
+            <small class="muted">{{ hit.year ?? "年份未知" }} · TMDB {{ hit.id }}</small>
+          </button>
+        </li>
+        <li v-if="!bindDialog.busy && bindDialog.hits.length === 0" class="muted">还没搜。</li>
+      </ul>
+    </div>
+  </div>
+
   <!-- 同步 NFO 的结果/预览面板: 原生 confirm 塞不下 2641 条清单, 失败也标不红 -->
     <div
       v-if="nfoDialog.open && nfoDialog.report"
@@ -2424,6 +2663,163 @@ button:disabled {
   white-space: nowrap;
 }
 
+/* 建库前的域选择: 三个选项各带一句"它会怎么处理文件" */
+.lib-menu {
+  position: absolute;
+  top: 44px;
+  right: 12px;
+  z-index: 20;
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  min-width: 232px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 40%);
+}
+
+.lib-menu button {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.lib-menu button:hover {
+  background: var(--panel-2);
+}
+
+.lib-menu small {
+  color: var(--text-faint);
+}
+
+.badge.accent {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.ep-badge {
+  margin-left: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 详情里的集列表: 季分组, 缺集的那一行轻一点 */
+.detail-episodes {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.episodes-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-label);
+}
+
+.season-title {
+  margin: 12px 0 4px;
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+}
+
+.detail-episodes ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.detail-episodes li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 0;
+  font-size: var(--fs-label);
+}
+
+.detail-episodes li.missing .ep-title {
+  color: var(--text-faint);
+}
+
+.ep {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.ep-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 缺集标记不能被挤成竖排 (flex 容器里没有 nowrap 就会一个字一行) */
+.detail-episodes li > .warn {
+  flex: none;
+  white-space: nowrap;
+  font-size: var(--fs-label);
+}
+
+/* 绑定面板: 借 lightbox 的遮罩, 自己是一张宽卡片 */
+.bind-modal {
+  display: grid;
+  gap: 8px;
+  width: min(560px, 92vw);
+  max-height: 82vh;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 45%), 0 2px 8px rgb(0 0 0 / 30%);
+  overflow: auto;
+}
+
+.bind-modal header {
+  display: flex;
+  align-items: center;
+}
+
+.bind-search {
+  display: flex;
+  gap: 8px;
+}
+
+.bind-search input {
+  flex: 1;
+}
+
+.bind-hits {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.bind-hits button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bind-hits button:hover {
+  border-color: var(--accent);
+}
+
 /* 行内可点的统计数字: 比 chip 轻, 不跟主按钮抢注意力 */
 .link {
   padding: 0;
@@ -2769,7 +3165,17 @@ td.title-cell {
 }
 
 /* 两行截断必须作用在单元格内部: 直接把 td 变成 -webkit-box 会让表格行高错乱 */
-td.title-cell > span {
+.title-line {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.title-line .title-text {
+  min-width: 0;
+}
+
+td.title-cell .title-text {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -2892,6 +3298,11 @@ td.pick {
   overflow: auto;
   display: flex;
   flex-direction: column;
+}
+
+/* 影视条目要装"季 → 集"两列信息, 320px 挤成面条 */
+.detail:has(.detail-episodes) {
+  width: 400px;
 }
 
 .detail header {
