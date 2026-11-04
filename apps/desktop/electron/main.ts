@@ -61,7 +61,7 @@ import {
   pendingKeys,
   bindDirectory,
   episodeStats,
-  isDomain,
+  isLibraryDomain,
   listBindableDirs,
   listEpisodes,
   createTmdbClient,
@@ -501,7 +501,7 @@ function registerIpc(): void {
     if (result.canceled || !result.filePaths[0]) return null;
     const root = result.filePaths[0];
     // 域决定识别方式、来源与模板; 建库时落定, 之后不可改 (ADR 0008 决策 2)
-    const domain = isDomain(input.domain) ? input.domain : "av";
+    const domain = isLibraryDomain(input.domain) ? input.domain : "av";
     return createLibrary(mustRuntime().db, { name: basename(root), root, domain });
   });
 
@@ -669,15 +669,15 @@ function registerIpc(): void {
       sort: input.sort,
     };
     const items = listItems(rt, { ...filters, limit: input.limit ?? 100, offset: input.offset ?? 0 });
-    // 影视条目带集数角标 (9/12); av 条目不需要, 所以只对这批 key 查一次
-    const showKeys = items.filter((item) => item.domain !== "av").map((item) => item.key);
+    // 集数角标只对剧集有意义 (电影没有集); 一批 key 查一次, 不是逐条查
+    const showKeys = items.filter((item) => item.domain === "tv").map((item) => item.key);
     const stats = episodeStats(rt, showKeys);
     return {
       // 封面是本地缓存的文件, 走自定义协议给渲染进程读 (不给它 file:// 权限)
       items: items.map((item) => ({
         ...item,
         coverUrl: coverUrlFor(rt, item),
-        ...(item.domain !== "av" ? { episodeStats: stats[item.key] ?? { declared: 0, bound: 0 } } : {}),
+        ...(item.domain === "tv" ? { episodeStats: stats[item.key] ?? { declared: 0, bound: 0 } } : {}),
       })),
       total: countItems(rt, filters),
       // 计数与列表同口径: 选了库就只算这个库, 否则"待刮削 N"会把别的库算进来

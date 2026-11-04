@@ -8,8 +8,8 @@
 三处改动,`av` 域行为不变。
 
 ```sql
--- 库:域建库时落定,不可改
-alter table libraries add column domain text not null default 'av';   -- av | movie | tv
+-- 库:域建库时落定,不可改 (ADR 0009 之后只有 av | video)
+alter table libraries add column domain text not null default 'av';   -- av | video
 
 -- 条目:冗余一列,权威是库
 alter table items add column domain text not null default 'av';

@@ -143,7 +143,7 @@ stdout 仍只有最后那一个结果信封。Ctrl-C 会中断在途请求并提
 ## 媒体库的域（ADR 0008）
 
 ```bash
-kura library add 剧库 /media/tv --domain tv          # av | movie | tv, 默认 av
+kura library add 影视库 /media/video --domain video  # av | video, 默认 av
 kura file dirs                                       # 影视: 待绑定目录 (文件数 / 已解析集数)
 kura file bind <目录> --tmdb tmdb:tv:1399            # 目录级绑定 (--dry-run 先看)
 kura file set-episode <路径> --episode 5             # 给认不出集号的文件补集号
@@ -156,6 +156,7 @@ kura library list                                    # 每行带 domain 与模�
 ```
 
 - **域建库时落定，不可改**：它决定识别方式、刮削来源与整理模板。选错只能删库重建（只索引库删掉不丢磁盘数据）。
-- **跨域目录重叠直接拒绝**（USAGE 退出码）：同一个物理目录不能同时属于两个域，否则两个域的整理模板会互相搬家。同域重叠只放行 —— 老用户可能真有父子目录两个番号库。
-- 默认模板按域给：`av` → `{content_type}/{studio}/{number}`，`tv` → `{series}/Season {season}`，`movie` → `{series}`。
+- **跨域目录重叠直接拒绝**（USAGE 退出码）：同一个物理目录不能同时属于两个域。同域重叠只放行 —— 老用户可能真有父子目录两个番号库。
+- **一个文件只属于一个库**（`media_files.path` 是主键）：同一个根下建两个库做不到，也没必要 —— 想分开就把目录分开建两个 `video` 库。
+- 默认模板按域给：`av` → `{content_type}/{studio}/{number}`，`video` → `{series}`（剧集的 `Season {nn}` 留到 v2 的 organize 一并处理）。
 - `scan` / `scrape` / `organize` **不接受** `--domain`：它们按库执行，库自带域。给两个口径等于给 agent 两个可能矛盾的输入。

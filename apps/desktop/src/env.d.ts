@@ -38,8 +38,8 @@ interface KuraLibrary {
   name: string;
   root: string;
   template: string;
-  /** av = 番号制, movie = 电影, tv = 剧集/动画/综艺。建库时落定, 不可改。 */
-  domain: "av" | "movie" | "tv";
+  /** av = 番号制, video = 影视(剧集/动画/综艺/电影)。建库时落定, 不可改。 */
+  domain: "av" | "video";
   /** false = 只索引, 不允许移动/改名/写 NFO。 */
   organizeEnabled?: boolean;
 }
@@ -66,6 +66,8 @@ interface KuraBindableDir {
   files: number;
   parsed: number;
   seasons: number[];
+  /** 从文件名推断: 有集号 → tv, 没有 → movie。绑定面板据此决定搜哪个库。 */
+  kind: "tv" | "movie";
 }
 
 interface KuraTmdbHit {
@@ -216,7 +218,7 @@ interface KuraTask {
 interface KuraBridge {
   info(): Promise<KuraAppInfo>;
   libraries(): Promise<KuraLibrary[]>;
-  addLibrary(domain?: "av" | "movie" | "tv"): Promise<KuraLibrary | null>;
+  addLibrary(domain?: "av" | "video"): Promise<KuraLibrary | null>;
   bindableDirs(libraryId?: number): Promise<KuraBindableDir[]>;
   tmdbSearch(kind: "tv" | "movie", query: string): Promise<KuraTmdbHit[]>;
   bindDir(libraryId: number, dir: string, key: string): Promise<{ key: string; dir: string; bound: number; episodes: number; stillUnparsed: string[] }>;

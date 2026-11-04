@@ -1,6 +1,25 @@
 /**
- * 域 (ADR 0008): 库与条目的所属范畴。内容类型是 `av` 域**内部**的分类, 两者不是一个轴。
- * 一个库只属于一个域, 一个条目只属于一个域, 永不跨域转换。
+ * **库**的域 (ADR 0008 + ADR 0009): 决定识别方式、来源与默认模板。
+ *
+ * 只有两个: 番号制与影视。影视库里的条目再分电影/剧集, 但那是**条目类型**,
+ * 从身份键 (`tmdb:movie:` / `tmdb:tv:`) 推导 —— 不需要用户在建库时选第二遍,
+ * 也不会出现"同一个文件被两个库争抢" (media_files.path 是主键, 一个文件只能属于一个库)。
+ */
+export const LIBRARY_DOMAINS = ["av", "video"] as const;
+export type LibraryDomain = (typeof LIBRARY_DOMAINS)[number];
+
+export const LIBRARY_DOMAIN_LABEL: Record<LibraryDomain, string> = {
+  av: "番号制",
+  video: "影视",
+};
+
+export function isLibraryDomain(value: unknown): value is LibraryDomain {
+  return typeof value === "string" && (LIBRARY_DOMAINS as readonly string[]).includes(value);
+}
+
+/**
+ * **条目**的域(类型)。内容类型是 `av` 内部更细的分类, 两者不是一个轴。
+ * 影视条目的 movie / tv 由身份键推导, 永不跨类型转换。
  */
 export const DOMAINS = ["av", "movie", "tv"] as const;
 export type Domain = (typeof DOMAINS)[number];

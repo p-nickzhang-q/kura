@@ -1,4 +1,12 @@
-import { isDomain, type ContentType, type Domain, type FieldKey, type FileInfo, type Metadata } from "../domain/types";
+import {
+  isDomain,
+  isLibraryDomain,
+  type ContentType,
+  type FieldKey,
+  type FileInfo,
+  type LibraryDomain,
+  type Metadata,
+} from "../domain/types";
 import type { Library } from "../domain/materialize";
 import { sanitizeActorNames } from "../domain/actors";
 import { resolve, sep } from "node:path";
@@ -133,8 +141,8 @@ export function rowToLibrary(row: LibraryRow): Library {
     template: row.template,
     // 老库升上来时列可能存在但为 NULL, 统一按"允许整理"处理。
     organizeEnabled: row.organize_enabled !== 0,
-    // v9 之前建的库没有 domain 列, 一律是番号制
-    domain: isDomain(row.domain) ? row.domain : "av",
+    // v9 之前建的库没有 domain 列, 一律是番号制; v11 把 movie/tv 并成 video
+    domain: isLibraryDomain(row.domain) ? row.domain : "av",
   };
 }
 
@@ -174,15 +182,9 @@ function uniqueLibraryName(db: Db, base: string): string {
  * `av` 的 `{content_type}/{studio}/{number}` 对影视毫无意义(影视没有 content_type),
  * 照抄会生成一堆叫 "censored" 的目录。
  */
-export function defaultTemplateFor(domain: Domain): string {
-  switch (domain) {
-    case "tv":
-      return "{series}/Season {season}";
-    case "movie":
-      return "{series}";
-    default:
-      return "{content_type}/{studio}/{number}";
-  }
+export function defaultTemplateFor(domain: LibraryDomain): string {
+  // 影视库的模板到 v2(organize)才真正用上; 到时要按条目类型分支(剧多一层 Season)
+  return domain === "video" ? "{series}" : "{content_type}/{studio}/{number}";
 }
 
 /**
@@ -206,7 +208,7 @@ function resolveForCompare(path: string): string {
 
 export function createLibrary(
   db: Db,
-  input: { name: string; root: string; template?: string; organizeEnabled?: boolean; domain?: Domain },
+  input: { name: string; root: string; template?: string; organizeEnabled?: boolean; domain?: LibraryDomain },
 ): Library {
   // 同一个目录建两个库毫无意义, 而且会让同一批文件被索引两遍。
   const existing = db.get<{ name: string }>("select name from libraries where root = ?", [input.root]);

@@ -1,8 +1,7 @@
 import { sep } from "node:path";
 import { AppError, EXIT } from "../exit";
-import { locateEpisode } from "../domain/episodes";
+import { locateEpisode, showDirOf } from "../domain/episodes";
 import { parseTmdbKey } from "../sources/tmdb";
-import type { Domain } from "../domain/types";
 import type { Runtime } from "../runtime";
 
 /**
@@ -24,6 +23,11 @@ export interface BindableDir {
   /** 其中能解析出集号的文件数; files > parsed 说明还有文件需要手工补集号。 */
   parsed: number;
   seasons: number[];
+  /**
+   * 从文件名推断的类型: 有集号 → 剧集, 没有 → 电影。
+   * 绑定面板据此决定去 TMDB 搜剧还是搜片 (人仍然可以改)。
+   */
+  kind: "tv" | "movie";
 }
 
 /** 未识别页要的清单: 有哪些目录等着绑定, 各自多少文件。 */
@@ -52,9 +56,9 @@ export function listBindableDirs(
   const byDir = new Map<string, BindableDir & { seasonSet: Set<number> }>();
   for (const row of rows) {
     const located = locateEpisode(row.path, roots.get(row.library_id) ?? "");
-    // 认不出集号的文件该归到哪个目录? 用它自己的父目录, 这样它会跟同目录的其它文件
-    // 一起出现在清单里, 人绑完目录再给这几个补集号。
-    const dir = located?.showDir ?? parentOf(row.path);
+    // 认不出集号的文件也归到"剧目录"(父目录是 Season 01 就再上一层): 它要跟同剧的
+    // 其它文件一起出现在清单里, 人绑完目录再给这几个补集号。
+    const dir = located?.showDir ?? showDirOf(row.path);
     const entry =
       byDir.get(dir) ??
       ({
@@ -64,11 +68,13 @@ export function listBindableDirs(
         parsed: 0,
         seasons: [],
         seasonSet: new Set<number>(),
+        kind: "movie" as "tv" | "movie",
       } as BindableDir & { seasonSet: Set<number> });
     entry.files++;
     if (row.season !== null) {
       entry.parsed++;
       entry.seasonSet.add(row.season);
+      entry.kind = "tv";
     }
     byDir.set(dir, entry);
   }
@@ -102,7 +108,7 @@ export interface BindResult {
  */
 export function bindDirectory(
   rt: Runtime,
-  options: { libraryId: number; dir: string; key: string; dryRun?: boolean; domain?: Domain },
+  options: { libraryId: number; dir: string; key: string; dryRun?: boolean },
 ): BindResult {
   const target = parseTmdbKey(options.key);
   if (!target) {
@@ -117,13 +123,14 @@ export function bindDirectory(
   );
   if (!library) throw new AppError(`库不存在: ${options.libraryId}`, EXIT.NOT_FOUND, { libraryId: options.libraryId });
 
-  // 域与身份种类必须一致: tv 库绑电影 id 是纯粹的输入错误, 越早报越好
-  const expectedKind = library.domain === "movie" ? "movie" : "tv";
-  if (target.kind !== expectedKind) {
-    throw new AppError(`这个库是 ${library.domain} 域, 却要绑 ${target.kind} 类型的 TMDB 身份`, EXIT.USAGE, {
+  // 影视库里电影和剧集混装, 条目的类型由身份键决定, 不需要和库对齐。
+  // 但番号制库不该绑 TMDB 身份 —— 那是两套完全不同的识别与来源。
+  if (library.domain === "av") {
+    throw new AppError("番号制库不能绑定 TMDB 身份", EXIT.USAGE, {
       libraryId: library.id,
       domain: library.domain,
       key: options.key,
+      hint: "影视文件请建一个 video 域的库 (kura library add <名称> <目录> --domain video)",
     });
   }
 
@@ -147,8 +154,9 @@ export function bindDirectory(
   const stillUnparsed: string[] = [];
   const episodes: { season: number; episode: number }[] = [];
   for (const file of files) {
+    // 电影本来就没有集号 —— 它不是"缺集号", 不该出现在待补清单里
     if (!file.season || !file.episode) {
-      stillUnparsed.push(file.path);
+      if (target.kind === "tv") stillUnparsed.push(file.path);
       continue;
     }
     episodes.push({ season: file.season, episode: file.episode });
@@ -160,12 +168,10 @@ export function bindDirectory(
 
   rt.db.exec("begin");
   try {
-    // 条目占位行: 元数据由 T6 的刮削填。content_type 对影视条目存空串 ——
+    // 条目占位行: 元数据由刮削填。content_type 对影视条目存空串 ——
     // 它是 av 域的概念, 而列是 NOT NULL(改它要重建表, 不值得)。
-    rt.db.run(
-      "insert or ignore into items (number, content_type, domain) values (?, '', ?)",
-      [key, library.domain],
-    );
+    // 条目类型(电影/剧集)来自身份键, 不是库的域。
+    rt.db.run("insert or ignore into items (number, content_type, domain) values (?, '', ?)", [key, target.kind]);
 
     const update = rt.db.run.bind(rt.db);
     for (const file of files) {

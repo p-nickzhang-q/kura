@@ -1,13 +1,13 @@
 import { copyFile, mkdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve, sep } from "node:path";
-import { CONTENT_TYPE_LABEL, type Domain, type FileInfo, type Metadata } from "./types";
+import { CONTENT_TYPE_LABEL, type FileInfo, type LibraryDomain, type Metadata } from "./types";
 
 export interface Library {
   id: number;
   name: string;
   root: string;
-  /** 域: av / movie / tv。建库时落定, 不可改 —— 它决定识别方式、来源与整理模板。 */
-  domain: Domain;
+  /** 库的域: av(番号制) / video(影视)。建库时落定, 不可改 —— 它决定识别方式、来源与模板。 */
+  domain: LibraryDomain;
   /** 相对目录模板, 占位符见 renderTemplate。 */
   template: string;
   /** false = 只索引, 不允许移动/改名/写 NFO。默认视为允许。 */

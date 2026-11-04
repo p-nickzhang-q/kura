@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { createLibrary } from "../src/db/rows";
 import { openRuntime, type Runtime } from "../src/runtime";
 import { countFiles, listFiles, scan } from "../src/tasks/scan";
+import { listBindableDirs } from "../src/tasks/bind";
 
 let root: string;
 let rt: Runtime;
@@ -38,7 +39,7 @@ describe("剧集库扫描", () => {
       Array.from({ length: 12 }, (_, i) => `某剧 - S01E${String(i + 1).padStart(2, "0")}.mkv`),
     );
 
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     const report = await scan(rt, { library });
 
     expect(report.counts.added).toBe(12);
@@ -58,7 +59,7 @@ describe("剧集库扫描", () => {
 
   test("幂等: 同一目录重复扫描全部 unchanged", async () => {
     await makeShow(join(media, "Show", "Season 02"), "Show", ["Show.S02E01.mkv", "Show.S02E02.mkv"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
 
     expect((await scan(rt, { library })).counts.added).toBe(2);
     const second = await scan(rt, { library });
@@ -68,10 +69,10 @@ describe("剧集库扫描", () => {
     expect(second.counts.shows).toBe(1);
   });
 
-  test("认不出集号的文件计入 unparsed, 但不阻塞其他集", async () => {
+  test("剧目录里认不出集号的文件计入 unparsed, 但不阻塞其他集", async () => {
     const dir = join(media, "Show", "Season 01");
     await makeShow(dir, "Show", ["Show.S01E01.mkv", "花絮合集片段.mkv"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
 
     const report = await scan(rt, { library });
     expect(report.counts.added).toBe(2);
@@ -89,7 +90,7 @@ describe("剧集库扫描", () => {
     await makeShow(join(media, "Show", "extras"), "Show", ["behind.mkv"]);
     await makeShow(join(media, "Show"), "Show", ["trailer.mkv"]);
 
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     const report = await scan(rt, { library });
 
     expect(report.counts.added).toBe(1);
@@ -100,7 +101,7 @@ describe("剧集库扫描", () => {
   test("删除的文件从索引里清掉", async () => {
     const dir = join(media, "Show", "Season 01");
     await makeShow(dir, "Show", ["Show.S01E01.mkv", "Show.S01E02.mkv"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
 
     await rm(join(dir, "Show.S01E02.mkv"));
@@ -110,12 +111,21 @@ describe("剧集库扫描", () => {
   });
 });
 
-describe("电影库扫描", () => {
+describe("影视库里的电影", () => {
+  test("没有集号的文件不是 unparsed —— 在这个域里它可能是电影", async () => {
+    await makeShow(join(media, "电影 A"), "电影 A", ["某电影 (2019).mkv"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    const report = await scan(rt, { library });
+    expect(report.counts.added).toBe(1);
+    expect(report.counts.unparsed).toBe(0);
+    expect(report.counts.shows).toBe(1);
+  });
+
   test("一个文件一个候选, 没有季/集", async () => {
     await makeShow(join(media, "电影 A"), "A", ["某电影 (2019).mkv"]);
     await makeShow(join(media, "电影 B"), "B", ["另一部 (2021).mkv", "另一部 (2021).cd2.mkv"]);
 
-    const library = createLibrary(rt.db, { name: "电影库", root: media, domain: "movie" });
+    const library = createLibrary(rt.db, { name: "电影库", root: media, domain: "video" });
     const report = await scan(rt, { library });
 
     expect(report.counts.added).toBe(3);
@@ -125,6 +135,37 @@ describe("电影库扫描", () => {
 
     const rows = rt.db.all<{ season: number | null; episode: number | null }>("select season, episode from media_files");
     expect(rows.every((row) => row.season === null && row.episode === null)).toBe(true);
+  });
+});
+
+describe("电影与剧集混在一个库", () => {
+  test("分目录判定: 有集号的算剧, 没有的算电影", async () => {
+    await makeShow(join(media, "某剧", "Season 01"), "某剧", ["某剧 - S01E01.mkv", "某剧 - S01E02.mkv"]);
+    await makeShow(join(media, "电影"), "电影", ["某电影 (2019).mkv"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+
+    const report = await scan(rt, { library });
+    expect(report.counts.added).toBe(3);
+    expect(report.counts.unparsed).toBe(0);
+    expect(report.counts.shows).toBe(2);
+
+    const episodes = rt.db.all<{ season: number | null; episode: number | null }>(
+      "select season, episode from media_files order by path",
+    );
+    // 剧那两条有季集, 电影那条没有
+    expect(episodes.filter((row) => row.episode !== null)).toHaveLength(2);
+    expect(episodes.filter((row) => row.episode === null)).toHaveLength(1);
+  });
+
+  test("待绑定清单标注推断的类型", async () => {
+    await makeShow(join(media, "某剧", "Season 01"), "某剧", ["某剧 - S01E01.mkv"]);
+    await makeShow(join(media, "电影"), "电影", ["某电影 (2019).mkv"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const dirs = listBindableDirs(rt, { libraryId: library.id });
+    // 只看"每个目录被判成什么", 不依赖排序
+    expect(Object.fromEntries(dirs.map((dir) => [dir.name, dir.kind]))).toEqual({ 电影: "movie", 某剧: "tv" });
   });
 });
 

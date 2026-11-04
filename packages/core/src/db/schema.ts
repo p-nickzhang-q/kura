@@ -169,6 +169,13 @@ const MIGRATIONS: string[] = [
   // 升级即自愈, 不需要用户跑任何命令。
   // 纯数据修复, 没有 SQL: 具体动作在 AFTER_MIGRATIONS[10]
   ``,
+
+  // v11 — 库域合并 (ADR 0009): 电影与剧集合成一个 video 域。
+  // 条目类型(电影/剧集)已经在身份键里(tmdb:movie: / tmdb:tv:), 库不必再分两种 ——
+  // 而且 media_files.path 是主键, 一个文件只能属于一个库, 同根两库本来就做不到。
+  `
+  update libraries set domain = 'video' where domain in ('movie', 'tv');
+  `,
 ];
 
 /**

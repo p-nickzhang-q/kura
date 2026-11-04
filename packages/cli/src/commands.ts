@@ -17,9 +17,9 @@ import {
   countExhausted,
   MAX_SCRAPE_ATTEMPTS,
   listFiles,
-  DOMAINS,
-  DOMAIN_LABEL,
-  isDomain,
+  LIBRARY_DOMAINS,
+  LIBRARY_DOMAIN_LABEL,
+  isLibraryDomain,
   listLibraries,
   organize,
   parseFieldList,
@@ -227,7 +227,7 @@ export const COMMANDS: Command[] = [
       {
         name: "domain",
         type: "string",
-        description: "add: 域 av(番号制) | movie(电影) | tv(剧集/动画/综艺), 建库时落定不可改",
+        description: "add: 域 av(番号制) | video(影视: 剧集/动画/综艺/电影), 建库时落定不可改",
         default: "av",
       },
     ],
@@ -265,9 +265,9 @@ export const COMMANDS: Command[] = [
         const root = args.positionals.root;
         if (!name || !root) throw new AppError("用法: library add <名称> <根目录>", EXIT.USAGE);
         const rawDomain = typeof args.options.domain === "string" ? args.options.domain : "av";
-        if (!isDomain(rawDomain)) {
+        if (!isLibraryDomain(rawDomain)) {
           throw new AppError(`未知的域: ${rawDomain}`, EXIT.USAGE, {
-            allowed: DOMAINS.map((domain) => ({ id: domain, label: DOMAIN_LABEL[domain] })),
+            allowed: LIBRARY_DOMAINS.map((domain) => ({ id: domain, label: LIBRARY_DOMAIN_LABEL[domain] })),
           });
         }
         const template = args.options.dimension || args.options.template ? resolveTemplate() : undefined;

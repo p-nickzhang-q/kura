@@ -118,12 +118,12 @@ function sortState(field: SortField): "none" | "ascending" | "descending" {
 }
 const hasFilters = computed(() => Object.keys(filters.value).length > 0);
 /** 当前选中的库是不是影视域; 全部库时为 null (按 av 的界面走)。 */
-const currentDomain = computed<"av" | "movie" | "tv" | null>(() => {
+const currentDomain = computed<"av" | "video" | null>(() => {
   if (selectedId.value === null) return null;
   return libraries.value.find((library) => library.id === selectedId.value)?.domain ?? "av";
 });
-/** 影视模式的界面分支。 */
-const isVideoMode = computed(() => currentDomain.value === "movie" || currentDomain.value === "tv");
+/** 影视模式的界面分支 (电影与剧集在同一个域里, 由条目类型再分)。 */
+const isVideoMode = computed(() => currentDomain.value === "video");
 /** 详情页按季分组。 */
 const seasonGroups = computed(() => {
   const groups = new Map<number, KuraEpisode[]>();
@@ -586,7 +586,7 @@ async function commitRename(library: KuraLibrary): Promise<void> {
   }
 }
 
-async function addLibrary(domain: "av" | "movie" | "tv" = "av"): Promise<void> {
+async function addLibrary(domain: "av" | "video" = "av"): Promise<void> {
   libMenu.value = false;
   const library = await run("添加媒体库", () => window.kura.addLibrary(domain));
   if (library) {
@@ -1143,13 +1143,9 @@ async function testDmm(): Promise<void> {
               <strong>番号制</strong>
               <small>番号识别 · DMM/JavBus/JavDB</small>
             </button>
-            <button type="button" role="menuitem" @click="addLibrary('tv')">
-              <strong>剧集 · 动画 · 综艺</strong>
-              <small>TMDB · 按季分集</small>
-            </button>
-            <button type="button" role="menuitem" @click="addLibrary('movie')">
-              <strong>电影</strong>
-              <small>TMDB · 一个文件一部</small>
+            <button type="button" role="menuitem" @click="addLibrary('video')">
+              <strong>影视</strong>
+              <small>TMDB · 剧集按季分集, 电影一个文件一部 (可以混着放)</small>
             </button>
           </div>
         </div>
@@ -1175,7 +1171,7 @@ async function testDmm(): Promise<void> {
             <button v-else type="button" class="lib" @click="selectLibrary(library.id)">
               <strong>
                 {{ library.name }}
-                <span v-if="library.domain !== 'av'" class="badge accent">{{ library.domain === "tv" ? "剧集" : "电影" }}</span>
+                <span v-if="library.domain === 'video'" class="badge accent">影视</span>
                 <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
               </strong>
               <small v-if="showRoot(library)" :title="library.root">{{ library.root }}</small>
@@ -1257,7 +1253,8 @@ async function testDmm(): Promise<void> {
         <nav class="tabs">
           <button type="button" :class="{ on: tab === 'items' }" @click="tab = 'items'">条目</button>
           <button type="button" :class="{ on: tab === 'unparsed' }" @click="tab = 'unparsed'; goUnparsedPage(unparsedPage)">
-            未识别 ({{ unparsedCount }})
+            <!-- 影视库的"未识别"是目录级的, 标签上的数字也跟着换成目录数 -->
+            未识别 ({{ isVideoMode ? bindableDirs.length : unparsedCount }})
           </button>
           <button type="button" :class="{ on: tab === 'plan' }" @click="tab = 'plan'">整理预览</button>
           <button type="button" :class="{ on: tab === 'tasks' }" @click="tab = 'tasks'">任务</button>
@@ -1644,7 +1641,7 @@ async function testDmm(): Promise<void> {
                   <button
                     type="button"
                     :disabled="busy || selectedId === null"
-                    @click="bindDialog = { dir, kind: currentDomain === 'movie' ? 'movie' : 'tv', query: dir.name, hits: [], busy: false }"
+                    @click="bindDialog = { dir, kind: dir.kind, query: dir.name, hits: [], busy: false }"
                   >
                     绑定到 TMDB
                   </button>
@@ -1990,6 +1987,12 @@ async function testDmm(): Promise<void> {
         {{ bindDialog.dir.name }} · {{ bindDialog.dir.files }} 个文件
         <template v-if="bindDialog.dir.seasons.length > 0"> · 季 {{ bindDialog.dir.seasons.join(", ") }}</template>
       </p>
+      <div class="bind-kind">
+        <span class="muted">搜</span>
+        <button type="button" :class="{ on: bindDialog.kind === 'tv' }" @click="bindDialog.kind = 'tv'; bindDialog.hits = []">剧集</button>
+        <button type="button" :class="{ on: bindDialog.kind === 'movie' }" @click="bindDialog.kind = 'movie'; bindDialog.hits = []">电影</button>
+        <span class="muted">· 从文件名推断的，可以改</span>
+      </div>
       <div class="bind-search">
         <input
           v-model="bindDialog.query"
@@ -2784,6 +2787,28 @@ button:disabled {
 .bind-modal header {
   display: flex;
   align-items: center;
+}
+
+.bind-kind {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: var(--fs-label);
+}
+
+.bind-kind button {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+  cursor: pointer;
+}
+
+.bind-kind button.on {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .bind-search {

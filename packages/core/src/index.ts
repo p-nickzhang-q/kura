@@ -15,8 +15,17 @@ export type { Settings } from "./config";
 export type { Paths } from "./paths";
 export type { Db, DbInfo } from "./db/driver";
 
-export { CONTENT_TYPES, CONTENT_TYPE_LABEL, DOMAINS, DOMAIN_LABEL, isDomain } from "./domain/types";
-export type { Domain } from "./domain/types";
+export {
+  CONTENT_TYPES,
+  CONTENT_TYPE_LABEL,
+  DOMAINS,
+  DOMAIN_LABEL,
+  LIBRARY_DOMAINS,
+  LIBRARY_DOMAIN_LABEL,
+  isDomain,
+  isLibraryDomain,
+} from "./domain/types";
+export type { Domain, LibraryDomain } from "./domain/types";
 export { chineseNumber, locateEpisode, locateMovie, parseEpisode, seasonFromDir, showDirOf } from "./domain/episodes";
 export type { EpisodeInfo, EpisodeLocation } from "./domain/episodes";
 export type {

@@ -72,7 +72,7 @@ async function bindShow(files: string[]): Promise<number> {
   const dir = join(media, "某剧", "Season 01");
   await mkdir(dir, { recursive: true });
   for (const file of files) await writeFile(join(dir, file), "x");
-  const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+  const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
   await scan(rt, { library });
   bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1429" });
   return library.id;
@@ -163,8 +163,8 @@ describe("刮一部剧", () => {
   });
 
   test("电影走 movie 通道, 不碰集表", async () => {
-    const library = createLibrary(rt.db, { name: "电影库", root: join(root, "movies"), domain: "movie" });
-    expect(library.domain).toBe("movie");
+    const library = createLibrary(rt.db, { name: "影视库", root: join(root, "movies"), domain: "video" });
+    expect(library.domain).toBe("video");
     const report = await scrapeShow(rt, {
       key: "tmdb:movie:603",
       tmdb: fakeTmdb(null, { id: 603, fields: { title: "示例电影", duration_min: 118 }, originalTitle: "Example Movie" }),

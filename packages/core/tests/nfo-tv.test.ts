@@ -110,7 +110,7 @@ describe("导出到磁盘", () => {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "某剧 - S01E01.mkv"), "x");
     await writeFile(join(dir, "某剧 - S01E02.mkv"), "x");
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
     bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧 (2019)"), key: "tmdb:tv:1399" });
 

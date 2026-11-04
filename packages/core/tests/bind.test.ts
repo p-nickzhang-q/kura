@@ -34,7 +34,7 @@ async function makeShow(relative: string, files: string[]): Promise<string> {
 describe("待绑定目录清单", () => {
   test("一个季目录 3 个文件 → 一个候选 (剧目录是它的上一层)", async () => {
     await makeShow("某剧 (2019)/Season 01", ["某剧 - S01E01.mkv", "某剧 - S01E02.mkv", "某剧 - S01E03.mkv"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
 
     const dirs = listBindableDirs(rt, { libraryId: library.id });
@@ -48,7 +48,7 @@ describe("待绑定目录清单", () => {
 
   test("认不出集号的文件也算进它所在目录, 并拉低 parsed", async () => {
     await makeShow("某剧", ["第1集.mp4", "花絮片段.mp4"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
 
     const dirs = listBindableDirs(rt, { libraryId: library.id });
@@ -64,7 +64,7 @@ describe("目录级绑定", () => {
       "某剧/Season 01",
       Array.from({ length: 12 }, (_, i) => `某剧 - S01E${String(i + 1).padStart(2, "0")}.mkv`),
     );
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
 
     const result = bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1399" });
@@ -95,7 +95,7 @@ describe("目录级绑定", () => {
 
   test("干跑不写库", async () => {
     await makeShow("某剧", ["第1集.mp4", "第2集.mp4"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
 
     const dry = bindDirectory(rt, {
@@ -111,7 +111,7 @@ describe("目录级绑定", () => {
 
   test("认不出集号的文件绑了目录也留着, 等 set-episode", async () => {
     await makeShow("某剧", ["第1集.mp4", "特典映像.mp4"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
 
     const result = bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:7" });
@@ -123,19 +123,33 @@ describe("目录级绑定", () => {
     expect(files.every((file) => file.number === "tmdb:tv:7")).toBe(true);
   });
 
-  test("域与身份种类不匹配直接拒 (tv 库绑电影 id)", async () => {
-    await makeShow("某剧", ["第1集.mp4"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+  test("影视库里绑电影 id 是合法的 (类型来自身份键)", async () => {
+    await makeShow("某电影", ["某电影 (2019).mkv"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
     await scan(rt, { library });
 
+    const result = bindDirectory(rt, { libraryId: library.id, dir: join(media, "某电影"), key: "tmdb:movie:603" });
+    expect(result.bound).toBe(1);
+    // 电影没有集号是正常的, 不该被算成"还缺集号"
+    expect(result.stillUnparsed).toEqual([]);
+    const item = rt.db.get<{ domain: string }>("select domain from items where number = 'tmdb:movie:603'");
+    expect(item?.domain).toBe("movie");
+    // 电影没有集
+    expect(rt.db.get<{ c: number }>("select count(*) c from episodes")?.c).toBe(0);
+  });
+
+  test("番号制库不能绑 TMDB 身份", async () => {
+    await makeShow("某剧", ["第1集.mp4"]);
+    const library = createLibrary(rt.db, { name: "番号库", root: media, domain: "av" });
+    await scan(rt, { library });
     expect(() =>
-      bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:movie:603" }),
-    ).toThrow(AppError);
+      bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1" }),
+    ).toThrow(/番号制库不能绑定 TMDB/);
   });
 
   test("不是 TMDB 身份直接拒", async () => {
     await makeShow("某剧", ["第1集.mp4"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
     expect(() => bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "SSIS-915" })).toThrow(
       /不是 TMDB 身份/,
@@ -144,7 +158,7 @@ describe("目录级绑定", () => {
 
   test("已经绑过的文件不会被静默改绑", async () => {
     await makeShow("某剧", ["第1集.mp4", "第2集.mp4"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
     bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1" });
 
@@ -156,7 +170,7 @@ describe("目录级绑定", () => {
 
   test("重扫不会把已绑定的文件打回未识别 (扫描不碰 number)", async () => {
     await makeShow("某剧", ["第1集.mp4", "第2集.mp4"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
     bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:5" });
 
@@ -168,7 +182,7 @@ describe("目录级绑定", () => {
 
   test("解绑退回未识别; 条目没人指向时删掉", async () => {
     await makeShow("某剧", ["第1集.mp4", "第2集.mp4"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
     bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1" });
 
@@ -183,7 +197,7 @@ describe("目录级绑定", () => {
 describe("手工补集号", () => {
   test("绑定后给认不出的文件指定集号, 集行跟着长出来", async () => {
     await makeShow("某剧", ["第1集.mp4", "特典映像.mp4"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
     const bound = bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:9" });
 
@@ -203,7 +217,7 @@ describe("手工补集号", () => {
 
   test("集号必须是正整数", async () => {
     await makeShow("某剧", ["第1集.mp4"]);
-    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "tv" });
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
     await scan(rt, { library });
     const path = listFiles(rt, { libraryId: library.id })[0]!.path;
     expect(() => setFileEpisode(rt, { path, episode: 0 })).toThrow(/正整数/);

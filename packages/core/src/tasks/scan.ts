@@ -3,7 +3,7 @@ import { AppError, EXIT } from "../exit";
 import { basename, extname, join } from "node:path";
 import { detectContentType, extractNumber, isAuxiliaryMedia, parseFileInfo } from "../domain/identify";
 import { existsSync } from "node:fs";
-import { locateEpisode, locateMovie } from "../domain/episodes";
+import { locateEpisode, showDirOf } from "../domain/episodes";
 import { nfoPathFor } from "../domain/nfo";
 import { hasNetworkSource } from "./nfo-sync";
 import type { Library } from "../domain/materialize";
@@ -271,6 +271,15 @@ async function scanVideo(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
   const seen = new Set<string>();
   const shows = new Set<string>();
 
+  // 第一遍: 只判定"每个目录是剧目录还是电影目录"
+  const dirKinds = new Map<string, "tv" | "movie">();
+  for (const file of found) {
+    const episodeInfo = locateEpisode(file.path, library.root);
+    const dir = episodeInfo?.showDir ?? showDirOf(file.path);
+    if (episodeInfo) dirKinds.set(dir, "tv");
+    else if (!dirKinds.has(dir)) dirKinds.set(dir, "movie");
+  }
+
   rt.db.exec("begin");
   try {
     for (const file of found) {
@@ -278,9 +287,16 @@ async function scanVideo(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
       const previous = known.get(file.path);
 
       // 解析是纯函数、不花 IO, 所以每次重算 —— 解析器升级后, 旧库里"以前认不出"的文件重扫一次就自愈。
-      const episodeInfo = library.domain === "tv" ? locateEpisode(file.path, library.root) : null;
-      if (library.domain === "tv" && !episodeInfo) counts.unparsed++;
-      shows.add((episodeInfo ?? locateMovie(file.path, library.root)).showDir);
+      //
+      // 影视库同时装电影和剧: 类型**按目录推断**, 不看库(库只有 av/video 两种)。
+      // 目录里有文件解析出了集号 → 这是剧目录, 同目录里没集号的文件算"认不出"(等人工补);
+      // 目录里一个集号都没有 → 这是电影(或还没绑的剧), 文件本身就是候选。
+      const episodeInfo = locateEpisode(file.path, library.root);
+      // 认不出集号的文件也要归到"剧目录"(父目录是 Season 01 就再上一层), 否则它会自成
+      // 一个目录、被判成电影 —— 结果就是剧目录里永远数不出"认不出"的文件。
+      const dir = episodeInfo?.showDir ?? showDirOf(file.path);
+      shows.add(dir);
+      if (!episodeInfo && dirKinds.get(dir) === "tv") counts.unparsed++;
       const season = episodeInfo?.season ?? null;
       const episode = episodeInfo?.episode ?? null;
       const phase = parseFileInfo(file.path);
