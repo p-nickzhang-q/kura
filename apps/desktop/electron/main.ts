@@ -995,10 +995,32 @@ function registerIpc(): void {
   ipcMain.handle("scrape:keys", (_event, input: { keys: string[] }) =>
     exclusive("刮削", async (signal) => {
       const rt = mustRuntime();
+      // 勾选里可能既有番号条目也有影视条目: 影视走 TMDB(按剧记账), 番号走来源路由。
+      // 混在一起塞给番号来源就会得到"没有可用来源"—— 影视条目根本没有内容类型。
+      const shows = input.keys.filter((key) => key.startsWith("tmdb:"));
+      const numbers = input.keys.filter((key) => !key.startsWith("tmdb:"));
+      const reports: { key: string; ok: boolean; fields?: string[]; error?: string; declined?: number; missing?: number }[] = [];
+      let taskId: number | null = null;
+      if (shows.length > 0) {
+        const tmdb = await tmdbClient(rt);
+        if (!tmdb) throw new AppError("未配置 TMDB API Key", EXIT.NEEDS_INPUT);
+        for (const key of shows) {
+          if (signal.aborted) break;
+          try {
+            const report = await scrapeShow(rt, { key, tmdb, signal });
+            reports.push({ key, ok: report.ok, fields: report.fields, ...(report.error ? { error: report.error } : {}), declined: report.declared, missing: report.missing });
+          } catch (err) {
+            reports.push({ key, ok: false, error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+      }
+      if (numbers.length === 0) {
+        return { taskId, total: input.keys.length, reports, cancelled: signal.aborted };
+      }
       const { task, result } = await scrapeKeysTask(
         rt,
         {
-          keys: input.keys,
+          keys: numbers,
           registry: defaultSources({ http: createHttp(), dmm: resolveDmmEnv(settings) }),
           fixturesDir,
           sources: fixturesDir ? ["fixture"] : undefined,
@@ -1006,7 +1028,11 @@ function registerIpc(): void {
         },
         signal,
       );
-      return result ?? { taskId: task.id, total: input.keys.length, reports: [], cancelled: true };
+      taskId = task.id;
+      const merged = [...reports, ...(result?.reports ?? [])];
+      return result
+        ? { ...result, taskId, total: input.keys.length, reports: merged }
+        : { taskId, total: input.keys.length, reports: merged, cancelled: true };
     }),
   );
 

@@ -367,3 +367,13 @@ describe("scan → scrape → organize", () => {
     }
   });
 });
+
+describe("影视身份走番号刮削路径", () => {
+  test("content_type 为空时 routeFor 不炸, 给出可读的错", async () => {
+    // 影视条目的 content_type 是空串(列 NOT NULL) —— 曾经在这里抛
+    // "Cannot read properties of undefined (reading 'map')"
+    const { routeFor } = await import("../src/sources/index");
+    const registry = new Map() as unknown as Parameters<typeof routeFor>[0];
+    expect(routeFor(registry, "" as never)).toEqual([]);
+  });
+});

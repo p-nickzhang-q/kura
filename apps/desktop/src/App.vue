@@ -62,6 +62,9 @@ const note = ref<string | null>(null);
 const plan = ref<KuraPlan | null>(null);
 /** 整理计划的人话提醒(认不出集号、没有缓存海报…)。 */
 const planWarnings = ref<string[]>([]);
+/** 「重新刮削」进行中 / 结果 —— 就显示在按钮那一行, 别指望人滚到页面顶部看。 */
+const rescraping = ref(false);
+const scrapedNote = ref("");
 const events = ref<KuraScanEvent[]>([]);
 const confirmApply = ref(false);
 
@@ -673,15 +676,23 @@ async function bindDir(hit: KuraTmdbHit): Promise<void> {
 
 async function rescrapeShow(): Promise<void> {
   if (!detail.value || detail.value.domain === "av") return;
+  const key = detail.value.key;
+  // 反馈就放在按钮旁边: 顶部那条 note 在长页面里看不见, 人会以为"点了没反应"
+  rescraping.value = true;
+  scrapedNote.value = "";
   try {
-    const report = await window.kura.scrapeShow(detail.value.key);
-    note.value = report.ok
-      ? `已刮削: ${report.fields.length} 个字段 · ${report.declared} 集（盘上 ${report.bound} 集，缺 ${report.missing}）`
+    const report = await window.kura.scrapeShow(key);
+    scrapedNote.value = report.ok
+      ? `已刮削 ${report.fields.length} 个字段 · ${report.declared} 集（盘上 ${report.bound}，缺 ${report.missing}）`
       : `刮削失败: ${report.error ?? "未知原因"}`;
+    note.value = scrapedNote.value;
     await refreshAll();
-    await loadEpisodes(detail.value.key, detail.value.domain);
+    await loadEpisodes(key, detail.value.domain);
   } catch (err) {
-    errors.value.push(`刮削: ${err instanceof Error ? err.message : String(err)}`);
+    scrapedNote.value = `刮削失败: ${err instanceof Error ? err.message : String(err)}`;
+    errors.value.push(scrapedNote.value);
+  } finally {
+    rescraping.value = false;
   }
 }
 
@@ -1984,7 +1995,10 @@ async function testDmm(): Promise<void> {
                   </button>
                   <button type="button" :disabled="busy" @click="openRebindDialog">改绑</button>
                   <button type="button" :disabled="busy" class="danger-ghost" @click="unbindCurrent">解绑</button>
-                  <button type="button" :disabled="busy" @click="rescrapeShow">重新刮削</button>
+                  <button type="button" :disabled="busy || rescraping" @click="rescrapeShow">
+                    {{ rescraping ? "刮削中…" : "重新刮削" }}
+                  </button>
+                  <span v-if="scrapedNote" class="muted scraped-note">{{ scrapedNote }}</span>
                 </header>
                 <!-- 同一部剧拆成多个目录时, 各目录可能是不同季 (仁医 / 仁医2) -->
                 <div v-if="itemDirs.length > 1" class="item-dirs">
@@ -4530,3 +4544,13 @@ td.pick {
   color: var(--danger);
 }
 </style>
+
+/* 「重新刮削」的结果紧跟按钮: 长页面里顶部那条提示没人看得到 */
+.scraped-note {
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}

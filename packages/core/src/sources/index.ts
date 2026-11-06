@@ -39,6 +39,8 @@ export function defaultSources(options: DefaultSourcesOptions = {}): Registry {
 
 /** `--source fixture` 之类的显式覆盖: 只跑指定源, 顺序即优先级。 */
 export function routeFor(registry: Registry, contentType: ContentType, override?: string[]): Source[] {
-  const ids = override ?? DEFAULT_ROUTES[contentType];
+  // 影视条目的 content_type 是空串(列 NOT NULL, 影视没有内容类型), 没有默认路由。
+  // 这里不能直接 `.map` —— 曾经就是这样抛 "Cannot read properties of undefined (reading 'map')"。
+  const ids = override ?? DEFAULT_ROUTES[contentType] ?? [];
   return ids.map((id) => registry.get(id)).filter((source): source is Source => Boolean(source));
 }

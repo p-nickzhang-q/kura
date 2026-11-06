@@ -54,7 +54,8 @@ export async function scrape(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRe
     return report;
   } catch (err) {
     // 取消不算一次失败尝试; dry-run 不动数据库。
-    if (!opts.dryRun && !opts.signal?.aborted) {
+    // 影视身份不该记番号刮削的失败次数 —— 它走的是另一个刮削器, 记了会让"需手动重试"虚高。
+    if (!opts.dryRun && !opts.signal?.aborted && !opts.key.value.startsWith("tmdb:")) {
       recordFailure(rt, opts.key.value, err instanceof Error ? err.message : String(err));
     }
     throw err;
@@ -78,6 +79,14 @@ async function scrapeOnce(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRepor
   const skipped = declared.filter((source) => source.status !== "ready").map((source) => source.id);
 
   if (usable.length === 0) {
+    // 影视条目(tmdb:tv:… / 空内容类型)没有番号来源, 走错路时要说清楚该去哪
+    if (!opts.key.contentType || opts.key.value.startsWith("tmdb:")) {
+      throw new AppError(
+        `影视条目要用 TMDB 刮削, 不是番号来源: ${opts.key.value}`,
+        EXIT.USAGE,
+        { key: opts.key.value, hint: "界面点「重新刮削」, 或 kura scrape <影视库>" },
+      );
+    }
     throw new AppError(
       `没有可用来源 (路由: ${declared.map((s) => s.id).join(" → ") || "空"})`,
       EXIT.NEEDS_INPUT,
