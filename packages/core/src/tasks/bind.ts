@@ -319,6 +319,69 @@ export function bindDirectory(
   return { key, dir, bound: files.length, episodes: total, stillUnparsed };
 }
 
+export interface RebindResult {
+  /** 旧身份 → 新身份。 */
+  from: string;
+  to: string;
+  /** 这次跟着改绑的文件数。 */
+  moved: number;
+  /** 旧条目是否被删掉(没有别的文件指向它)。 */
+  oldRemoved: boolean;
+  /** 重新绑定的结果(集数等)。 */
+  bound: BindResult | null;
+}
+
+/**
+ * 改绑: 把一个已绑定的条目换到另一个 TMDB 身份。
+ *
+ * 为什么需要: 绑定这一步是**人挑的**, 挑错是常态(同名剧、重拍版、季数对不上)。
+ * 之前只能"删库重来"或去 CLI 手敲 unbind, 等于把错绑变成了不可逆操作。
+ *
+ * 语义: 旧条目的文件全部转到新身份, 旧条目的集行与占位行一起清掉(没有别的文件指向时)。
+ */
+export function rebindItem(rt: Runtime, options: { key: string; newKey: string; libraryId?: number }): RebindResult {
+  const from = options.key.toLowerCase();
+  const to = options.newKey.toLowerCase();
+  if (from === to) throw new AppError("新旧身份相同, 不需要改绑", EXIT.USAGE, { key: from });
+
+  const target = parseTmdbKey(to);
+  if (!target) throw new AppError(`不是 TMDB 身份: ${options.newKey}`, EXIT.USAGE, { key: options.newKey });
+
+  const files = rt.db.all<{ path: string; library_id: number }>(
+    "select path, library_id from media_files where number = ? order by path",
+    [from],
+  );
+  if (files.length === 0) {
+    throw new AppError(`条目 ${from} 没有登记到任何文件, 无从改绑`, EXIT.NOT_FOUND, { key: from });
+  }
+  const libraryId = options.libraryId ?? files[0]!.library_id;
+  for (const file of files) {
+    if (file.library_id !== libraryId) {
+      throw new AppError("这个条目的文件分散在多个库里, 改绑请分开处理", EXIT.USAGE, { key: from });
+    }
+  }
+
+  rt.db.exec("begin");
+  try {
+    rt.db.run("update media_files set number = null where number = ?", [from]);
+    rt.db.run("delete from episodes where number = ?", [from]);
+    rt.db.run("delete from items where number = ?", [from]);
+    rt.db.exec("commit");
+  } catch (err) {
+    rt.db.exec("rollback");
+    throw err;
+  }
+
+  const bound = bindDirectory(rt, {
+    libraryId,
+    dir: files[0]!.path,
+    key: to,
+    paths: files.map((file) => file.path),
+  });
+
+  return { from, to, moved: files.length, oldRemoved: true, bound };
+}
+
 /** 解绑: 把这个目录下的文件退回未识别。集行跟着条目走, 条目没人指向时一并删掉。 */
 export function unbindDirectory(rt: Runtime, options: { libraryId: number; dir: string; key?: string }): number {
   const dir = options.dir.replace(/[\\/]+$/, "");

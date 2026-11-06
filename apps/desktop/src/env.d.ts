@@ -284,6 +284,8 @@ interface KuraBridge {
     paths?: string[],
   ): Promise<{ key: string; dir: string; bound: number; episodes: number; stillUnparsed: string[] }>;
   itemEpisodes(key: string): Promise<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats }>;
+  rebindItem(key: string, newKey: string): Promise<{ from: string; to: string; moved: number; scraped: { declared: number; bound: number; missing: number } | null }>;
+  unbindItem(key: string): Promise<{ unbound: number }>;
   scrapeShow(key: string): Promise<{ key: string; ok: boolean; fields: string[]; episodes: number; declared: number; bound: number; missing: number; error?: string }>;
   scan(libraryId: number, options?: { force?: boolean }): Promise<KuraScanReport>;
   removeLibrary(libraryId: number): Promise<{ library: KuraLibrary; removedFiles: number; orphanItems: number }>;

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from "electron";
 import { mkdir, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   AppError,
@@ -62,6 +62,8 @@ import {
   organize,
   pendingKeys,
   bindDirectory,
+  rebindItem,
+  unbindDirectory,
   episodeStats,
   isLibraryDomain,
   resolveTmdbEnv,
@@ -665,6 +667,32 @@ function registerIpc(): void {
     if (!tmdb) return { ...result, scraped: null };
     const scraped = await scrapeShow(rt, { key: result.key, tmdb });
     return { ...result, scraped };
+  });
+
+  // 改绑: 绑错了换一个 TMDB 身份 (不用删库重来)
+  ipcMain.handle(
+    "item:rebind",
+    async (_event, input: { key: string; newKey: string }) => {
+      const rt = mustRuntime();
+      const result = rebindItem(rt, { key: input.key, newKey: input.newKey });
+      const tmdb = await tmdbClient(rt);
+      const scraped = tmdb ? await scrapeShow(rt, { key: result.to, tmdb }) : null;
+      return { ...result, scraped };
+    },
+  );
+
+  // 解绑: 退回未识别, 之后可在未识别页重新选
+  ipcMain.handle("item:unbind", (_event, input: { key: string }) => {
+    const rt = mustRuntime();
+    const files = rt.db.all<{ path: string; library_id: number }>(
+      "select path, library_id from media_files where number = ?",
+      [input.key.toLowerCase()],
+    );
+    if (files.length === 0) throw new AppError(`条目 ${input.key} 没有登记到文件`, EXIT.NOT_FOUND, { key: input.key });
+    const libraryId = files[0]!.library_id;
+    const dir = dirname(files[0]!.path);
+    const unbound = unbindDirectory(rt, { libraryId, dir, key: input.key });
+    return { unbound };
   });
 
   ipcMain.handle("item:episodes", (_event, input: { key: string }) => {

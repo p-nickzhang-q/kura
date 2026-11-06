@@ -208,11 +208,18 @@ const removingId = ref<number | null>(null);
 const libMenu = ref(false);
 /** 绑定对话框: 搜 TMDB → 选一部 → 绑整个目录。 */
 const bindDialog = ref<{
-  dir: KuraBindableDir;
+  /** rebind 模式下没有候选(条目已经绑好了), 只用来显示标题。 */
+  dir: KuraBindableDir | null;
   kind: "tv" | "movie";
   query: string;
   hits: KuraTmdbHit[];
   busy: boolean;
+  /** rebind = 给已绑定条目换一个身份; bind = 把未绑定的候选绑上。 */
+  mode?: "bind" | "rebind";
+  /** rebind 模式: 要改的条目身份。 */
+  rebindKey?: string;
+  /** rebind 模式下的标题(条目当前名)。 */
+  label?: string;
 } | null>(null);
 /** 待绑定目录的搜索建议 (dir → 建议)。批量找建议的结果, 不是决定。 */
 const suggestions = ref<Record<string, KuraBindingSuggestion>>({});
@@ -489,6 +496,37 @@ async function bindPicked(): Promise<void> {
   }
 }
 
+/** 已绑定的影视条目: 换一个 TMDB 身份。 */
+function openRebindDialog(): void {
+  if (!detail.value || detail.value.domain === "av") return;
+  bindDialog.value = {
+    dir: null,
+    kind: detail.value.domain === "tv" ? "tv" : "movie",
+    // 预填当前标题, 名字不对就自己改 —— 大多数改绑都是"搜错了一部同名的"
+    query: detail.value.title ?? "",
+    hits: [],
+    busy: false,
+    mode: "rebind",
+    rebindKey: detail.value.key,
+    label: `${detail.value.title ?? detail.value.key}`,
+  };
+}
+
+/** 解绑: 退回未识别, 之后可以在未识别页重新选。 */
+async function unbindCurrent(): Promise<void> {
+  if (!detail.value || detail.value.domain === "av") return;
+  const key = detail.value.key;
+  try {
+    const result = await window.kura.unbindItem(key);
+    detail.value = null;
+    episodeView.value = null;
+    await refreshAll();
+    note.value = `已解绑 ${key}: ${result.unbound} 个文件退回未识别，可以在「未识别」页重新绑`;
+  } catch (err) {
+    errors.value.push(`解绑: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 /** 打开绑定面板: 预填建议里的搜索词(已剥掉年份/发布标记), 没有就用候选名。 */
 function openBindDialog(dir: KuraBindableDir): void {
   bindDialog.value = {
@@ -517,11 +555,35 @@ async function searchTmdb(): Promise<void> {
 
 async function bindDir(hit: KuraTmdbHit): Promise<void> {
   const dialog = bindDialog.value;
-  if (!dialog || selectedId.value === null) return;
+  if (!dialog) return;
+
+  // 改绑: 不新建条目, 把旧条目的文件转到新身份
+  if (dialog.mode === "rebind" && dialog.rebindKey) {
+    dialog.busy = true;
+    try {
+      const result = await window.kura.rebindItem(dialog.rebindKey, hit.key);
+      bindDialog.value = null;
+      // 先把详情指到新身份再刷新: refreshAll 会用旧 key 去查, 查不到就把面板关了
+      detail.value = await window.kura.item(hit.key).catch(() => null);
+      await refreshAll();
+      await loadEpisodes(hit.key, detail.value?.domain ?? dialog.kind);
+      note.value = `已改绑到「${hit.title}」: ${result.moved} 个文件${
+        result.scraped ? ` · 声明 ${result.scraped.declared} 集 · 缺 ${result.scraped.missing} 集` : ""
+      }`;
+    } catch (err) {
+      errors.value.push(`改绑: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      dialog.busy = false;
+    }
+    return;
+  }
+
+  if (selectedId.value === null || !dialog.dir) return;
+  const candidate = dialog.dir;
   dialog.busy = true;
   try {
     // paths 来自 Vue 的响应式对象, 直接传会抛 "An object could not be cloned"
-    const result = await window.kura.bindDir(selectedId.value, dialog.dir.dir, hit.key, plainArray(dialog.dir.paths));
+    const result = await window.kura.bindDir(selectedId.value, candidate.dir, hit.key, plainArray(candidate.paths));
     const scraped = (result as { scraped?: { declared: number; bound: number; missing: number } | null }).scraped;
     note.value = scraped
       ? `已绑定「${hit.title}」: ${result.bound} 个文件 · ${result.episodes} 集 · 缺 ${scraped.missing} 集${
@@ -1806,6 +1868,8 @@ async function testDmm(): Promise<void> {
                     </span>
                   </span>
                   <span class="spacer" />
+                  <button type="button" :disabled="busy" @click="openRebindDialog">改绑</button>
+                  <button type="button" :disabled="busy" class="danger-ghost" @click="unbindCurrent">解绑</button>
                   <button type="button" :disabled="busy" @click="rescrapeShow">重新刮削</button>
                 </header>
                 <p v-if="!episodeView || episodeView.episodes.length === 0" class="muted">
@@ -2303,13 +2367,18 @@ async function testDmm(): Promise<void> {
   <div v-if="bindDialog" class="lightbox" role="dialog" aria-modal="true" aria-label="绑定到 TMDB" @keydown.esc="bindDialog = null">
     <div class="bind-modal">
       <header>
-        <strong>绑定到 TMDB</strong>
+        <strong>{{ bindDialog.mode === "rebind" ? "改绑到别的 TMDB 条目" : "绑定到 TMDB" }}</strong>
         <span class="spacer" />
         <button class="ghost" type="button" aria-label="关闭" title="关闭" @click="bindDialog = null">×</button>
       </header>
       <p class="muted">
-        {{ bindDialog.dir.name }} · {{ bindDialog.dir.files }} 个文件
-        <template v-if="bindDialog.dir.seasons.length > 0"> · 季 {{ bindDialog.dir.seasons.join(", ") }}</template>
+        <template v-if="bindDialog.mode === 'rebind'">
+          把「{{ bindDialog.label }}」改绑到别的 TMDB 条目 —— 文件不会动, 只换身份
+        </template>
+        <template v-else-if="bindDialog.dir">
+          {{ bindDialog.dir.name }} · {{ bindDialog.dir.files }} 个文件
+          <template v-if="bindDialog.dir.seasons.length > 0"> · 季 {{ bindDialog.dir.seasons.join(", ") }}</template>
+        </template>
       </p>
       <div class="bind-kind">
         <span class="muted">搜</span>

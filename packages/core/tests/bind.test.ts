@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLibrary } from "../src/db/rows";
 import { openRuntime, type Runtime } from "../src/runtime";
-import { bindDirectory, countBindableDirs, listBindableDirs, setFileEpisode, unbindDirectory } from "../src/tasks/bind";
+import {
+  bindDirectory,
+  countBindableDirs,
+  listBindableDirs,
+  rebindItem,
+  setFileEpisode,
+  unbindDirectory,
+} from "../src/tasks/bind";
 import { listFiles, scan } from "../src/tasks/scan";
 import { AppError } from "../src/exit";
 
@@ -221,5 +228,40 @@ describe("手工补集号", () => {
     await scan(rt, { library });
     const path = listFiles(rt, { libraryId: library.id })[0]!.path;
     expect(() => setFileEpisode(rt, { path, episode: 0 })).toThrow(/正整数/);
+  });
+});
+
+describe("改绑", () => {
+  test("把已绑定条目的文件转到新身份, 旧条目清掉", async () => {
+    await makeShow("某剧", ["第1集.mp4", "第2集.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1" });
+    expect(rt.db.get<{ c: number }>("select count(*) c from items where number = 'tmdb:tv:1'")?.c).toBe(1);
+
+    const result = rebindItem(rt, { key: "tmdb:tv:1", newKey: "tmdb:tv:2" });
+    expect(result.moved).toBe(2);
+    expect(result.bound?.episodes).toBe(2);
+
+    // 旧条目与它的集没了
+    expect(rt.db.get<{ c: number }>("select count(*) c from items where number = 'tmdb:tv:1'")?.c).toBe(0);
+    expect(rt.db.get<{ c: number }>("select count(*) c from episodes where number = 'tmdb:tv:1'")?.c).toBe(0);
+    // 新条目接住了文件与集
+    expect(rt.db.get<{ c: number }>("select count(*) c from items where number = 'tmdb:tv:2'")?.c).toBe(1);
+    expect(rt.db.get<{ c: number }>("select count(*) c from episodes where number = 'tmdb:tv:2'")?.c).toBe(2);
+    const numbers = rt.db.all<{ number: string }>("select number from media_files");
+    expect(numbers.every((row) => row.number === "tmdb:tv:2")).toBe(true);
+  });
+
+  test("新旧身份相同时报错", async () => {
+    await makeShow("某剧", ["第1集.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1" });
+    expect(() => rebindItem(rt, { key: "tmdb:tv:1", newKey: "tmdb:tv:1" })).toThrow(/新旧身份相同/);
+  });
+
+  test("没有文件的条目无从改绑", () => {
+    expect(() => rebindItem(rt, { key: "tmdb:tv:9", newKey: "tmdb:tv:10" })).toThrow(/没有登记到任何文件/);
   });
 });
