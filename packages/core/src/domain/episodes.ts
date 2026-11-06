@@ -97,13 +97,15 @@ export function parseEpisode(fileName: string): EpisodeInfo | null {
     if (episode > 0) return { season: Number(sxxexx[1]), episode };
   }
 
-  const cn = new RegExp(String.raw`第[\s]*${NUM}[\s]*[集话話回期]`).exec(name);
+  // `第12集` 与 `001集` 都算 —— 国内资源站大量写成「剧名 001集」, 没有「第」
+  const cn = new RegExp(String.raw`第?[\s]*${NUM}[\s]*[集话話回期]`).exec(name);
   if (cn) {
     const episode = chineseNumber(cn[1]!);
     if (episode && episode > 0) return { season: null, episode };
   }
 
-  const ep = /(?:^|[^A-Za-z0-9])EP?[\s._-]?(\d{1,4})(?![0-9])/i.exec(name);
+  // `EP01` / `E05`; 允许前面紧贴数字 (`庆余年2EP01` 的 2 是季号, 不是集号的一部分)
+  const ep = /(?<![A-Za-z])EP?[\s._-]?(\d{1,4})(?![0-9])/i.exec(name);
   if (ep) {
     const episode = Number(ep[1]);
     if (episode > 0) return { season: null, episode };
@@ -112,10 +114,10 @@ export function parseEpisode(fileName: string): EpisodeInfo | null {
   // `Part 2` / `Disc 1` / `CD1` 里的数字盘号不是集号
   if (/(?:^|[\s._-])(?:part|pt|disc|disk|cd|dvd|vol)[\s._-]*\d{1,2}$/i.test(name)) return null;
 
-  // 结尾纯数字: `Show - 07` / `Show 07` / `Show_07`
-  const tail = /[\s._-](\d{1,4})$/.exec(name);
-  if (tail) {
-    const episode = Number(tail[1]);
+  // 被分隔符包住的数字: `Show - 07` / `Show 07` / `Show 07_高清` / `Show_07`
+  const bracketed = /(?:^|[\s._-])(\d{1,4})(?=[\s._-]|$)/.exec(name);
+  if (bracketed) {
+    const episode = Number(bracketed[1]);
     // 1080p/2160p 这类分辨率不是集号; 1900-2099 更像年份
     if (episode > 0 && episode < 1000) return { season: null, episode };
   }
