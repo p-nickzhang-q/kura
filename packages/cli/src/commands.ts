@@ -320,13 +320,17 @@ export const COMMANDS: Command[] = [
     render(data: {
       libraries?: { name: string; root: string; template: string; organizeEnabled?: boolean }[];
       library?: { name: string; root: string; template: string; organizeEnabled?: boolean };
-      removedFiles?: number;
-      orphanItems?: number;
+      removed?: { library: { name: string; root: string }; removedFiles: number; orphanItems: number };
     }) {
-      // remove 动作返回的是 {removedFiles, orphanItems}, 不是 library —— 以前会走到底部
-      // 那句"还没有媒体库", 看着像整库都没了一样。
-      if (typeof data.removedFiles === "number") {
-        return `已删除媒体库 (磁盘上的文件一个都没动)\n  清掉索引 ${data.removedFiles} 个文件${data.orphanItems ? `\n  保留 ${data.orphanItems} 个条目 (条目跨库, 元数据没删)` : ""}`;
+      // remove 动作返回的是 {removed, note}, 不是 library —— 以前会走到底部那句
+      // "还没有媒体库", 看着像整库都没了一样。
+      if (data.removed) {
+        const { library, removedFiles, orphanItems } = data.removed;
+        return [
+          `已删除媒体库「${library.name}」(${library.root})`,
+          `  磁盘上的文件一个都没动`,
+          `  清掉索引 ${removedFiles} 个文件${orphanItems ? ` · 保留 ${orphanItems} 个条目 (条目跨库, 元数据没删)` : ""}`,
+        ].join("\n");
       }
       if (data.library) {
         const mode = data.library.organizeEnabled === false ? "只索引 (不整理)" : "允许整理";
