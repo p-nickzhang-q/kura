@@ -297,8 +297,26 @@ async function scanVideo(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
       const dir = episodeInfo?.showDir ?? showDirOf(file.path);
       shows.add(dir);
       if (!episodeInfo && dirKinds.get(dir) === "tv") counts.unparsed++;
-      const season = episodeInfo?.season ?? null;
-      const episode = episodeInfo?.episode ?? null;
+      // (季, 集) 是**绑定与人工**决定的元数据: 绑定目录时定季、「改季」改季、摊到各季定集、
+      // set-episode 补集号。扫描只该给新文件一个初始猜测, 不该覆盖这些决定 ——
+      // 否则重扫一次, 七季的剧又全被打回第 1 季(踩过)。
+      // 唯一例外: 文件名显式写了 `SxxEyy`, 那是文件自己声明的身份, 以它为准。
+      const parsedSeason = episodeInfo?.seasonExplicit ? episodeInfo.season : null;
+      const parsedEpisode = episodeInfo?.episode ?? null;
+      const assigned = previous !== undefined && previous.season !== null && previous.episode !== null;
+      let season: number | null;
+      let episode: number | null;
+      if (parsedSeason !== null) {
+        season = parsedSeason;
+        episode = parsedEpisode;
+      } else if (assigned) {
+        season = previous.season ?? null;
+        episode = previous.episode ?? null;
+      } else {
+        // 只补集号(比如刚补了解析规则): 季沿用已有的, 新文件就用解析出来的(季目录 / 兜底 1)
+        season = previous?.season ?? episodeInfo?.season ?? null;
+        episode = parsedEpisode;
+      }
       const phase = parseFileInfo(file.path);
 
       const untouched =

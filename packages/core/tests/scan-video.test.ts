@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLibrary } from "../src/db/rows";
@@ -260,5 +260,51 @@ describe("番号识别的误报", () => {
     const row = rt.db.get<{ number: string | null }>("select number from media_files");
     // 目录里的 -C 是"分集/中字"相位标记, 番号是 SSIS-915
     expect(row?.number).toBe("SSIS-915");
+  });
+});
+
+describe("重扫不覆盖人工定的季集", () => {
+  test("摊到各季/改季定下来的 (季,集) 重扫后原样保留; 新解析出的集号会补上", async () => {
+    await mkdir(join(media, "某剧"), { recursive: true });
+    await writeFile(join(media, "某剧", "某剧 001集.mp4"), "x");
+    await writeFile(join(media, "某剧", "某剧 002集.mp4"), "x");
+    // 字幕组写法: 扫描当时认不出, 后来补了规则
+    await writeFile(join(media, "某剧", "[Group][7].mp4"), "x");
+
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:54" });
+
+    // 模拟"摊到各季": 把两个文件挪到第 3 季的 11 / 12 集
+    rt.db.run("update media_files set season = 3, episode = 11 where path like '%001集%'");
+    rt.db.run("update media_files set season = 3, episode = 12 where path like '%002集%'");
+
+    await scan(rt, { library });
+
+    const rows = rt.db.all<{ season: number | null; episode: number | null; path: string }>(
+      "select path, season, episode from media_files order by path",
+    );
+    const byName = new Map(rows.map((row) => [row.path.split("/").pop()!, row]));
+    // 人工定的季集没被动
+    expect(byName.get("某剧 001集.mp4")).toEqual({ path: expect.any(String), season: 3, episode: 11 });
+    expect(byName.get("某剧 002集.mp4")).toEqual({ path: expect.any(String), season: 3, episode: 12 });
+    // 之前认不出的文件现在补上了集号, 季沿用原来的
+    expect(byName.get("[Group][7].mp4")?.episode).toBe(7);
+  });
+
+  test("文件名显式写了 SxxEyy 时以文件名为准", async () => {
+    await mkdir(join(media, "某剧"), { recursive: true });
+    await writeFile(join(media, "某剧", "某剧 - 第1集.mp4"), "x");
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:54" });
+    rt.db.run("update media_files set season = 5, episode = 9");
+
+    // 改名成显式 SxxEyy 后重扫
+    await rename(join(media, "某剧", "某剧 - 第1集.mp4"), join(media, "某剧", "某剧 - S02E07.mp4"));
+    await scan(rt, { library });
+
+    const row = rt.db.get<{ season: number; episode: number }>("select season, episode from media_files");
+    expect(row).toEqual({ season: 2, episode: 7 });
   });
 });

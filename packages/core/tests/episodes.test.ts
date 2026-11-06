@@ -104,20 +104,28 @@ describe("剧目录与位置", () => {
       showDir: "/m/Show",
       season: 2,
       episode: 5,
+      seasonExplicit: true,
     });
-    // 文件名没说季 → 用目录
+    // 文件名没说季 → 用目录 (但 seasonExplicit 是 false: 扫描据此不覆盖人工指定的季)
     expect(locateEpisode("/m/Show/Season 03/第5集.mp4", "/m")).toEqual({
       showDir: "/m/Show",
       season: 3,
       episode: 5,
+      seasonExplicit: false,
     });
     // 都没有 → 第 1 季
-    expect(locateEpisode("/m/Show/第5集.mp4", "/m")).toEqual({ showDir: "/m/Show", season: 1, episode: 5 });
+    expect(locateEpisode("/m/Show/第5集.mp4", "/m")).toEqual({
+      showDir: "/m/Show",
+      season: 1,
+      episode: 5,
+      seasonExplicit: false,
+    });
     // 文件名与目录冲突时以文件名为准 (它更具体)
     expect(locateEpisode("/m/Show/Season 01/Show.S02E05.mkv", "/m")).toEqual({
       showDir: "/m/Show",
       season: 2,
       episode: 5,
+      seasonExplicit: true,
     });
   });
 
@@ -132,5 +140,26 @@ describe("剧目录与位置", () => {
 
   test("电影: 目录即候选, 与集号无关", () => {
     expect(locateMovie("/m/电影/某电影 (2019).mkv", "/m")).toEqual({ showDir: "/m/电影" });
+  });
+});
+
+describe("方括号里的集号 (字幕组写法)", () => {
+  test("[BLEACH][13].rmvb → 第 13 集", () => {
+    expect(parseEpisode("[BLEACH][13].rmvb")).toEqual({ season: null, episode: 13 });
+    expect(parseEpisode("[BLEACH][366].rmvb")).toEqual({ season: null, episode: 366 });
+  });
+
+  test("分辨率不是集号", () => {
+    // [1080P] 有字母; 纯数字的 [1080] / [2160] 也要排除
+    expect(parseEpisode("[Group][Movie][2160].mkv")).toBeNull();
+    expect(parseEpisode("[Group][Movie][1080].mkv")).toBeNull();
+  });
+
+  test("两个候选就是有歧义, 交给人", () => {
+    expect(parseEpisode("[Group][12][2].mkv")).toBeNull();
+  });
+
+  test("已有明确集号时不看方括号", () => {
+    expect(parseEpisode("[Group] 某剧 S02E07 [13].mkv")).toEqual({ season: 2, episode: 7 });
   });
 });

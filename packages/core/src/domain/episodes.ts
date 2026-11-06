@@ -85,11 +85,18 @@ export interface EpisodeInfo {
  * 不认 (故意): 日期型 `20240115`、罗马数字、`Part 2`、`CD1`。它们进未识别页人工指定。
  */
 export function parseEpisode(fileName: string): EpisodeInfo | null {
+  const withoutExtension = fileName.replace(/\.[^.]+$/, "");
+
+  // `[BLEACH][13].rmvb` —— 字幕组把集号单独放在方括号里, 而方括号整体是要剥掉的
+  // (否则 `[Group]` 里的数字会被当成集号)。剥之前先把"纯数字的方括号"记下来当兜底。
+  // 排除分辨率: `[720]` / `[1080]` / `[2160]` 这类。
+  const RESOLUTIONS = new Set([360, 480, 540, 576, 720, 1080, 1440, 2160]);
+  const bracketNumbers = [...withoutExtension.matchAll(/[[【[]\s*(\d{1,3})\s*[\]】\]]/g)]
+    .map((match) => Number(match[1]))
+    .filter((value) => value > 0 && !RESOLUTIONS.has(value));
+
   // 去掉扩展名与方括号包裹的发布组标记, 免得 `[Group]` 里的数字被当成集号
-  const name = fileName
-    .replace(/\.[^.]+$/, "")
-    .replace(/[[(（【][^\])）】]*[\])）】]/g, " ")
-    .trim();
+  const name = withoutExtension.replace(/[[(（【][^\])）】]*[\])）】]/g, " ").trim();
 
   const sxxexx = new RegExp(String.raw`(?:^|[^A-Za-z0-9])S(\d{1,2})[\s._-]*E(\d{1,4})(?![0-9])`, "i").exec(name);
   if (sxxexx) {
@@ -122,6 +129,9 @@ export function parseEpisode(fileName: string): EpisodeInfo | null {
     if (episode > 0 && episode < 1000) return { season: null, episode };
   }
 
+  // 兜底: 只有一个候选时就认 (`[BLEACH][13].rmvb`)。两个以上说明有歧义, 交给人。
+  if (bracketNumbers.length === 1) return { season: null, episode: bracketNumbers[0]! };
+
   return null;
 }
 
@@ -142,8 +152,15 @@ export function isSeasonDir(dirName: string): boolean {
 export interface EpisodeLocation {
   /** 剧目录 (一个目录 = 一部剧的候选)。 */
   showDir: string;
+  /** 已解析出来的季号 (文件名 > 季目录 > 1)。 */
   season: number;
   episode: number;
+  /**
+   * 季号是**文件名显式写的**吗 (`S02E07`)。
+   *
+   * 扫描要用它区分"文件自己声明的季"与"兜底猜的 1" —— 后者不该覆盖人工指定的季。
+   */
+  seasonExplicit: boolean;
 }
 
 /**
@@ -162,7 +179,12 @@ export function locateEpisode(filePath: string, root: string): EpisodeLocation |
   // 不允许走出库根: 库根本身若叫 `Season 1`(有人真这么干), 剧目录就是库根。
   const bounded = atOrInside(showDir, root) ? showDir : root;
 
-  return { showDir: bounded, season: info.season ?? dirSeason ?? 1, episode: info.episode };
+  return {
+    showDir: bounded,
+    season: info.season ?? dirSeason ?? 1,
+    episode: info.episode,
+    seasonExplicit: info.season !== null,
+  };
 }
 
 /** 电影没有集: 一个文件就是一部片子, 它的"剧目录"就是它自己所在的目录。 */
