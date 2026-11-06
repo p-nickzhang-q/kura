@@ -642,6 +642,7 @@ export const COMMANDS: Command[] = [
       warnings?: string[];
       removedDirs?: string[];
       leftoverDirs?: { dir: string; files: string[] }[];
+      removedFiles?: string[];
     }) {
       if (data.skipped) return `跳过: ${data.reason}`;
       const lines = [
@@ -652,6 +653,7 @@ export const COMMANDS: Command[] = [
       }
       if (data.plan.entries.length > 50) lines.push(`  … 还有 ${data.plan.entries.length - 50} 条`);
       for (const warning of data.warnings ?? []) lines.push(`  ! ${warning}`);
+      if (data.removedFiles?.length) lines.push(`  清掉 ${data.removedFiles.length} 个残留文件 (旧目录里的海报 / nfo)`);
       if (data.removedDirs?.length) lines.push(`  搬空后清理了 ${data.removedDirs.length} 个源目录`);
       if (data.leftoverDirs?.length) lines.push(`  还有 ${data.leftoverDirs.length} 个源目录没删 (里面有文件)`);
       if (data.applied) {

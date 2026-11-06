@@ -1,7 +1,8 @@
-import { dirname, extname, join, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import {
   applyPlan,
   pruneEmptyDirs,
+  type PruneResult,
   sanitizeName,
   targetState,
   type ApplyResult,
@@ -47,8 +48,10 @@ export interface VideoOrganizeReport {
   warnings: string[];
   /** 搬空之后删掉的源目录。 */
   removedDirs?: string[];
-  /** 源目录里还有东西、所以没删的 (旧的 nfo/图片/字幕/认不出集号的文件)。 */
+  /** 源目录里还有东西、所以没删的 (字幕/认不出集号的文件)。 */
   leftoverDirs?: { dir: string; files: string[] }[];
+  /** 删掉的 Kura 自己生成的残留 (旧目录里的 poster.jpg / fanart.jpg / 集 nfo)。 */
+  removedFiles?: string[];
 }
 
 export interface VideoOrganizeOptions {
@@ -280,7 +283,7 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
   const plan: Plan = { libraryId: opts.library.id, libraryRoot: root, entries, summary };
   const applied = apply ? await applyPlan(plan) : null;
 
-  let prune: { removed: string[]; leftover: { dir: string; files: string[] }[] } | null = null;
+  let prune: PruneResult | null = null;
   if (applied) {
     // 搬完立刻改索引: 否则下次扫描会把同一文件当成 "旧路径消失 + 新路径出现"。
     rt.db.exec("begin");
@@ -302,11 +305,19 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
     const targets = plan.entries
       .filter((entry) => entry.action !== "skip" && entry.to)
       .map((entry) => entry.to!);
-    const sources = applied
+    const moved = applied
       .filter((result) => result.ok && result.entry.action === "move" && result.entry.from)
-      .map((result) => dirname(result.entry.from!))
-      .filter((dir) => !targets.some((target) => target === dir || target.startsWith(`${dir}${sep}`)));
-    prune = await pruneEmptyDirs([root], sources);
+      .map((result) => ({ from: result.entry.from!, base: basename(result.entry.from!, extname(result.entry.from!)) }))
+      .filter((item) => !targets.some((target) => target === dirname(item.from) || target.startsWith(`${dirname(item.from)}${sep}`)));
+    const byDir = new Map<string, string[]>();
+    for (const item of moved) {
+      const dir = dirname(item.from);
+      byDir.set(dir, [...(byDir.get(dir) ?? []), item.base]);
+    }
+    prune = await pruneEmptyDirs(
+      [root],
+      [...byDir].map(([dir, bases]) => ({ dir, bases })),
+    );
     for (const item of prune.leftover.slice(0, 10)) {
       warnings.push(`${item.dir}: 还有 ${item.files.length} 个文件 (${item.files.join("、")}), 目录没删`);
     }
@@ -316,7 +327,7 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
     plan,
     applied,
     warnings,
-    ...(prune ? { removedDirs: prune.removed, leftoverDirs: prune.leftover } : {}),
+    ...(prune ? { removedDirs: prune.removed, leftoverDirs: prune.leftover, removedFiles: prune.removedFiles } : {}),
   };
 }
 

@@ -255,3 +255,38 @@ describe("目标目录就是源目录时", () => {
     expect(report.warnings.some((warning) => warning.includes("目录没删"))).toBe(false);
   });
 });
+
+describe("老目录里只剩 Kura 自己的东西时", () => {
+  test("poster.jpg / fanart.jpg / 集 nfo 会被清掉, 目录跟着删; 字幕一律不动", async () => {
+    await touch(join(media, "某剧", "某剧 - 第1集.mp4"));
+    await touch(join(media, "某剧", "某剧 - 第1集.nfo"));
+    await touch(join(media, "某剧", "poster.jpg"));
+    await touch(join(media, "某剧", "fanart.jpg"));
+    await touch(join(media, "某剧", "tvshow.nfo"));
+    // 用户自己的东西: 必须留着
+    await touch(join(media, "另一个剧", "另一个剧 - 第1集.mp4"));
+    await touch(join(media, "另一个剧", "另一个剧 - 第1集.nfo"));
+    await touch(join(media, "另一个剧", "poster.jpg"));
+    await touch(join(media, "另一个剧", "另一个剧 - 第1集.zh.srt"));
+
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1" });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "另一个剧"), key: "tmdb:tv:2" });
+    rt.db.run("update items set title = '某剧', release_date = '2020-01-01' where number = 'tmdb:tv:1'");
+    rt.db.run("update items set title = '另一个剧', release_date = '2021-01-01' where number = 'tmdb:tv:2'");
+
+    const report = await organizeVideo(rt, { library, apply: true });
+    const left = await readdir(media);
+
+    // 只剩 Kura 生成物的目录 → 连目录一起没了
+    expect(left).not.toContain("某剧");
+    expect(report.removedFiles?.some((file) => file.endsWith("poster.jpg"))).toBe(true);
+
+    // 有字幕的目录: 字幕留着, Kura 的图删了, 目录保留并报出来
+    expect(left).toContain("另一个剧");
+    const remain = await readdir(join(media, "另一个剧"));
+    expect(remain).toEqual(["另一个剧 - 第1集.zh.srt"]);
+    expect(report.leftoverDirs?.some((item) => item.dir.endsWith("另一个剧"))).toBe(true);
+  });
+});

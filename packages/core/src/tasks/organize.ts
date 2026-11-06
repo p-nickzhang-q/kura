@@ -1,6 +1,6 @@
 import { buildPlan, applyPlan, pruneEmptyDirs, type ApplyResult, type Library, type Plan, type PlanInput } from "../domain/materialize";
 import type { Metadata } from "../domain/types";
-import { dirname, sep } from "node:path";
+import { dirname, extname, sep } from "node:path";
 import { parsePhase, rowToMetadata, type ItemRow } from "../db/rows";
 import type { Runtime } from "../runtime";
 import { cachedPoster, cachedThumb, findSidecarImages } from "./resources";
@@ -19,8 +19,10 @@ export interface OrganizeReport {
   reason?: string;
   /** 搬空之后删掉的源目录。 */
   removedDirs?: string[];
-  /** 源目录里还有东西(nfo/图片/字幕)、所以没删的。 */
+  /** 源目录里还有东西(字幕等)、所以没删的。 */
   leftoverDirs?: { dir: string; files: string[] }[];
+  /** 删掉的 Kura 自己生成的残留。 */
+  removedFiles?: string[];
 }
 
 /**
@@ -93,11 +95,24 @@ export async function organize(rt: Runtime, opts: OrganizeOptions): Promise<Orga
 
   // 搬空的源目录顺手清掉 —— 只删空目录, 还有东西的一律留着并报出来
   const targets = plan.entries.filter((entry) => entry.action !== "skip" && entry.to).map((entry) => entry.to!);
-  const sources = applied
-    .filter((result) => result.ok && result.entry.action === "move" && result.entry.from)
-    .map((result) => dirname(result.entry.from!))
+  const byDir = new Map<string, string[]>();
+  for (const result of applied) {
+    if (!result.ok || result.entry.action !== "move" || !result.entry.from) continue;
+    const dir = dirname(result.entry.from);
     // 目标目录可能就是源目录本身: 那是新结构, 不是"搬空的旧目录"
-    .filter((dir) => !targets.some((target) => target === dir || target.startsWith(`${dir}${sep}`)));
-  const prune = await pruneEmptyDirs([opts.library.root], sources);
-  return { plan, applied, removedDirs: prune.removed, leftoverDirs: prune.leftover };
+    if (targets.some((target) => target === dir || target.startsWith(`${dir}${sep}`))) continue;
+    const base = result.entry.from.slice(result.entry.from.length - extname(result.entry.from).length);
+    byDir.set(dir, [...(byDir.get(dir) ?? []), base.slice(dir.length + 1)]);
+  }
+  const prune = await pruneEmptyDirs(
+    [opts.library.root],
+    [...byDir].map(([dir, bases]) => ({ dir, bases })),
+  );
+  return {
+    plan,
+    applied,
+    removedDirs: prune.removed,
+    leftoverDirs: prune.leftover,
+    removedFiles: prune.removedFiles,
+  };
 }

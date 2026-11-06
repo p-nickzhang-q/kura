@@ -261,30 +261,47 @@ async function moveFile(from: string, to: string): Promise<void> {
 export interface PruneResult {
   /** 真的删掉的空目录 (由深到浅)。 */
   removed: string[];
-  /** 原本要删、但里面还有东西的目录, 附上前几个文件名 —— 让人知道该不该自己清。 */
+  /** 删掉的 Kura 自己生成的文件 (旧目录里剩下的海报 / tvshow.nfo / 集 nfo)。 */
+  removedFiles: string[];
+  /** 还有别人的东西, 所以没删的目录, 附上前几个文件名 —— 让人知道该不该自己清。 */
   leftover: { dir: string; files: string[] }[];
 }
+
+/** Kura 自己写进目录的图片名。老目录里只剩这些时, 删掉它们不算动用户的东西。 */
+const KURA_IMAGE_NAMES = new Set(["poster.jpg", "poster.png", "fanart.jpg", "fanart.png", "thumb.jpg", "thumb.png", "folder.jpg"]);
 
 /**
  * 整理之后清掉被搬空的源目录。
  *
- * 只删**空目录**: `rmdir` 对非空目录会失败, 这里正好把它当成安全阀 —— 旧的 nfo、
- * 海报、字幕、认不出集号的文件都会让目录留下来。整理只负责把影片搬到新结构,
- * 不该顺手删掉用户自己的东西。
+ * 分两步, 顺序很重要:
+ *  1. 先删**Kura 自己生成的残留** —— 剧目录里的 `poster.jpg` / `fanart.jpg`、
+ *     已经搬走的影片的 `<视频名>.nfo` / `<视频名>-poster.jpg`。
+ *     (用户先「下载图片」再「整理」, 图就留在老目录里, 目录永远不空 —— 真事故。)
+ *  2. 再 `rmdir`。非空就说明还有用户的文件(字幕、认不出集号的片子), 留着并报出来。
  *
- * 会一路往上清到库根(不含), 所以 `PPTV/仁医/` 空了之后, 只剩 `PPTV` 也会一起清掉。
- * 所有路径都必须在库根内 —— 模板被改坏时宁可什么都不删。
+ * 绝不碰: 字幕、别的 nfo、认不出集号的文件、子目录。整理只负责搬影片, 不替人删东西。
  */
-export async function pruneEmptyDirs(roots: string[], dirs: string[]): Promise<PruneResult> {
-  const result: PruneResult = { removed: [], leftover: [] };
+export async function pruneEmptyDirs(
+  roots: string[],
+  moved: { dir: string; bases: string[] }[],
+): Promise<PruneResult> {
+  const result: PruneResult = { removed: [], removedFiles: [], leftover: [] };
   const normalizedRoots = roots.map((root) => resolve(root));
   const inside = (path: string): boolean =>
     normalizedRoots.some((root) => path.startsWith(`${root}${sep}`) && path !== root);
 
+  const basesByDir = new Map<string, Set<string>>();
+  for (const item of moved) {
+    const dir = resolve(item.dir);
+    const set = basesByDir.get(dir) ?? new Set<string>();
+    for (const base of item.bases) set.add(base.toLowerCase());
+    basesByDir.set(dir, set);
+  }
+
   // 由深到浅: 先清最里层, 清了才有机会清掉父目录
   const queue = new Set<string>();
-  for (const dir of dirs) {
-    let current = resolve(dir);
+  for (const item of moved) {
+    let current = resolve(item.dir);
     while (inside(current)) {
       queue.add(current);
       current = dirname(current);
@@ -293,13 +310,31 @@ export async function pruneEmptyDirs(roots: string[], dirs: string[]): Promise<P
   const ordered = [...queue].sort((a, b) => b.split(sep).length - a.split(sep).length);
 
   for (const dir of ordered) {
+    const bases = basesByDir.get(dir) ?? new Set<string>();
+    // 第一步: 清掉 Kura 生成的残留
+    let entries: string[];
+    try {
+      entries = await readdir(dir);
+    } catch {
+      continue; // 已经不在了(被父目录带走)
+    }
+    for (const name of entries) {
+      if (!isKuraArtifact(name, bases)) continue;
+      try {
+        await unlink(join(dir, name));
+        result.removedFiles.push(join(dir, name));
+      } catch {
+        // 删不掉就算了, 下面 rmdir 会失败并把它列进 leftover
+      }
+    }
+
+    // 第二步: 目录空了才删
     try {
       await rmdir(dir);
       result.removed.push(dir);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") continue; // 已经被父目录的清理带走, 或本来就不在
-      // ENOTEMPTY / EEXIST / EBUSY: 里面还有东西, 报给人看, 不删
+      if (code === "ENOENT") continue;
       try {
         const files = await readdir(dir);
         result.leftover.push({ dir, files: files.slice(0, 5) });
@@ -309,4 +344,20 @@ export async function pruneEmptyDirs(roots: string[], dirs: string[]): Promise<P
     }
   }
   return result;
+}
+
+/**
+ * 这个文件是不是 Kura 为了**已经搬走的影片**写的?
+ *
+ * 只看名字, 不看内容 —— 判据越窄越好: `poster.jpg` 这类固定名, 或者
+ * `base.nfo` / `base-poster.jpg` / `base-thumb.jpg` 且 base 正是刚搬走的那几个。
+ */
+function isKuraArtifact(name: string, movedBases: Set<string>): boolean {
+  const lower = name.toLowerCase();
+  if (KURA_IMAGE_NAMES.has(lower)) return true;
+  if (lower === "tvshow.nfo") return true;
+  const match = /^(.*?)(-poster|-thumb)?\.(nfo|jpg|jpeg|png|webp)$/.exec(lower);
+  if (!match) return false;
+  const base = match[1]!;
+  return movedBases.has(base);
 }

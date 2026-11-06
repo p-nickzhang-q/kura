@@ -1364,9 +1364,10 @@ async function apply(): Promise<void> {
     const failed = (report.applied ?? []).filter((result) => !result.ok);
     const pruned = report.removedDirs?.length ?? 0;
     const leftover = report.leftoverDirs?.length ?? 0;
-    note.value = `已整理, 失败 ${failed.length} 项${pruned ? ` · 清理了 ${pruned} 个空目录` : ""}${
-      leftover ? ` · ${leftover} 个旧目录里还有文件, 没删` : ""
-    }`;
+    const swept = report.removedFiles?.length ?? 0;
+    note.value = `已整理, 失败 ${failed.length} 项${swept ? ` · 清掉 ${swept} 个残留文件` : ""}${
+      pruned ? ` · 清理了 ${pruned} 个旧目录` : ""
+    }${leftover ? ` · ${leftover} 个旧目录里还有你的文件, 没删` : ""}`;
     confirmApply.value = false;
     await refreshAll();
   }

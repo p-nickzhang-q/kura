@@ -187,6 +187,8 @@ interface KuraOrganizeReport {
   removedDirs?: string[];
   /** 源目录里还有东西、所以没删的。 */
   leftoverDirs?: { dir: string; files: string[] }[];
+  /** 删掉的 Kura 自己生成的残留 (旧目录里的 poster.jpg / fanart.jpg / 集 nfo)。 */
+  removedFiles?: string[];
 }
 
 interface KuraScrapeBatch {
