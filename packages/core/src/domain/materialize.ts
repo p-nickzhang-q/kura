@@ -352,12 +352,19 @@ export async function pruneEmptyDirs(
  * 只看名字, 不看内容 —— 判据越窄越好: `poster.jpg` 这类固定名, 或者
  * `base.nfo` / `base-poster.jpg` / `base-thumb.jpg` 且 base 正是刚搬走的那几个。
  */
-function isKuraArtifact(name: string, movedBases: Set<string>): boolean {
+export function isKuraArtifact(
+  name: string,
+  movedBases: Set<string> = new Set(),
+  options: { orphanNfo?: boolean } = {},
+): boolean {
   const lower = name.toLowerCase();
   if (KURA_IMAGE_NAMES.has(lower)) return true;
   if (lower === "tvshow.nfo") return true;
   const match = /^(.*?)(-poster|-thumb)?\.(nfo|jpg|jpeg|png|webp)$/.exec(lower);
   if (!match) return false;
   const base = match[1]!;
-  return movedBases.has(base);
+  if (movedBases.has(base)) return true;
+  // `orphanNfo`: 这个目录里**一个影片都没有**时, 任何 .nfo 都是断了线的元数据
+  // (它的影片已经搬走/删掉了)。`cleanup` 用这个口径, 整理时不用 —— 整理只认刚搬走的那几个。
+  return options.orphanNfo === true && match[3] === "nfo" && !base.startsWith("-");
 }

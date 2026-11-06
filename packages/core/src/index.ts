@@ -141,6 +141,6 @@ export type { TaskFailure, TaskRow, TaskRun, TaskStatus } from "./tasks/queue";
 export { redact, TaskLog, taskLogFiles } from "./observability/task-log";
 
 export { organize } from "./tasks/organize";
-export { episodeBaseName, folderName, organizeVideo } from "./tasks/organize-video";
-export type { VideoOrganizeReport } from "./tasks/organize-video";
+export { cleanupEmptyDirs, episodeBaseName, folderName, organizeVideo } from "./tasks/organize-video";
+export type { CleanupReport, VideoOrganizeReport } from "./tasks/organize-video";
 export type { OrganizeOptions, OrganizeReport } from "./tasks/organize";

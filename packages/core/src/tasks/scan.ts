@@ -11,7 +11,25 @@ import { metadataColumns, parsePhase, stringify, type MediaFileRow } from "../db
 import type { FileInfo } from "../domain/types";
 import type { Runtime } from "../runtime";
 
-const VIDEO_EXTENSIONS = new Set([".mp4", ".mkv", ".avi", ".wmv", ".mov", ".ts", ".m2ts", ".iso", ".rmvb", ".flv", ".webm", ".m4v"]);
+export const VIDEO_EXTENSIONS = new Set([
+  ".mp4",
+  ".mkv",
+  ".avi",
+  ".wmv",
+  ".mov",
+  ".ts",
+  ".m2ts",
+  ".iso",
+  ".rmvb",
+  ".flv",
+  ".webm",
+  ".m4v",
+]);
+
+/** 这个文件名是不是影片。扫描与清理共用一张表 —— 两边判断不一致就会一边搬一边删。 */
+export function isVideoFile(name: string): boolean {
+  return VIDEO_EXTENSIONS.has(extname(name).toLowerCase());
+}
 
 export type ScanEventType = "file.added" | "file.updated" | "file.unchanged" | "file.removed" | "file.unparsed";
 

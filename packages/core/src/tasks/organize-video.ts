@@ -1,6 +1,9 @@
+import { readdir, rmdir, unlink } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
+import { isVideoFile } from "./scan";
 import {
   applyPlan,
+  isKuraArtifact,
   pruneEmptyDirs,
   type PruneResult,
   sanitizeName,
@@ -369,4 +372,111 @@ function addImages(
   if (thumb) {
     push({ action: "copy-image", from: thumb.path, to: resolve(join(dir, `${fanartBase}${extname(thumb.path) || ".jpg"}`)) });
   }
+}
+
+export interface CleanupReport {
+  dryRun: boolean;
+  /** 清掉的目录(由深到浅)。 */
+  removedDirs: string[];
+  /** 清掉的文件: 全是 Kura 自己生成的海报 / nfo。 */
+  removedFiles: string[];
+  /** 里面有视频或用户文件、所以没动的目录。 */
+  kept: { dir: string; files: string[] }[];
+}
+
+/**
+ * 清掉库里的"空壳目录": 已经没有影片、只剩 Kura 自己生成的海报与 nfo。
+ *
+ * 为什么单独一条命令: 「整理」只清它这次**搬空**的目录。等影片早就搬完了、
+ * 老目录里只剩 `poster.jpg` + `fanart.jpg` 时才想起来要清, 再跑整理也没用
+ * —— 没有移动发生, 就没有清理的触发点。
+ *
+ * 判据(宁可不动): 目录里**没有任何影片**, 且**每个文件**都是 Kura 生成物
+ * (固定图片名 / tvshow.nfo / 任意 .nfo)。字幕、别的东西一律让目录留下来。
+ */
+export async function cleanupEmptyDirs(
+  rt: Runtime,
+  options: { libraryId?: number; apply?: boolean },
+): Promise<CleanupReport> {
+  const apply = options.apply ?? false;
+  const roots = rt.db.all<{ id: number; root: string }>(
+    options.libraryId === undefined
+      ? "select id, root from libraries"
+      : "select id, root from libraries where id = ?",
+    options.libraryId === undefined ? [] : [options.libraryId],
+  );
+  const report: CleanupReport = { dryRun: !apply, removedDirs: [], removedFiles: [], kept: [] };
+
+  for (const library of roots) {
+    const root = resolve(library.root);
+    const dirs = await listDirs(root);
+    // 由深到浅: 清完子目录, 父目录才有机会变空
+    for (const dir of dirs.sort((a, b) => b.split(sep).length - a.split(sep).length)) {
+      if (dir === root) continue;
+      let names: string[];
+      try {
+        names = (await readdir(dir, { withFileTypes: true }))
+          .filter((entry) => entry.isFile())
+          .map((entry) => entry.name);
+      } catch {
+        continue;
+      }
+      if (names.some(isVideoFile)) continue; // 还有片子, 不动
+      if ((await readdir(dir, { withFileTypes: true })).some((entry) => entry.isDirectory())) continue;
+
+      // 这个目录里没有任何影片, 所以 .nfo 也算断了线的元数据
+      const artifacts = names.filter((name) => isKuraArtifact(name, new Set(), { orphanNfo: true }));
+      const remains = names.filter((name) => !artifacts.includes(name));
+
+      if (!apply) {
+        report.removedFiles.push(...artifacts.map((name) => join(dir, name)));
+        if (remains.length === 0) report.removedDirs.push(dir);
+        else report.kept.push({ dir, files: remains.slice(0, 5) });
+        continue;
+      }
+
+      for (const name of artifacts) {
+        try {
+          await unlink(join(dir, name));
+          report.removedFiles.push(join(dir, name));
+        } catch {
+          // 删不掉就不算清掉
+          remains.push(name);
+        }
+      }
+      if (remains.length > 0) {
+        report.kept.push({ dir, files: remains.slice(0, 5) });
+        continue;
+      }
+      try {
+        await rmdir(dir);
+        report.removedDirs.push(dir);
+      } catch (err) {
+        report.kept.push({ dir, files: [`rmdir 失败: ${(err as NodeJS.ErrnoException).code ?? "?"}`] });
+      }
+    }
+  }
+  return report;
+}
+
+/** 库根下所有目录(含多层), 跳过软链与隐藏目录。 */
+async function listDirs(root: string): Promise<string[]> {
+  const out: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    let entries: { name: string; isDirectory(): boolean; isSymbolicLink(): boolean }[];
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
+      if (entry.name.startsWith(".")) continue;
+      const next = join(dir, entry.name);
+      out.push(next);
+      await walk(next);
+    }
+  };
+  await walk(root);
+  return out;
 }

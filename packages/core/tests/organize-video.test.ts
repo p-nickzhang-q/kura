@@ -290,3 +290,32 @@ describe("老目录里只剩 Kura 自己的东西时", () => {
     expect(report.leftoverDirs?.some((item) => item.dir.endsWith("另一个剧"))).toBe(true);
   });
 });
+
+describe("清理空壳目录", () => {
+  test("没影片、只剩海报与 nfo → 连目录一起删; 有字幕的只删海报", async () => {
+    const { cleanupEmptyDirs } = await import("../src/tasks/organize-video");
+    await touch(join(media, "剧/某剧 老目录/poster.jpg"));
+    await touch(join(media, "剧/某剧 老目录/fanart.jpg"));
+    await touch(join(media, "剧/某剧 老目录/某剧 - 第1集.nfo"));
+    await touch(join(media, "剧/有字幕的/poster.jpg"));
+    await touch(join(media, "剧/有字幕的/某剧 - 第1集.zh.srt"));
+    await touch(join(media, "剧/还有影片/某剧 - S01E01.mkv"));
+    await touch(join(media, "剧/还有影片/poster.jpg"));
+
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+
+    // 干跑: 一个文件都不动
+    const dry = await cleanupEmptyDirs(rt, { libraryId: library.id });
+    expect(dry.dryRun).toBe(true);
+    expect(dry.removedDirs.some((dir) => dir.endsWith("某剧 老目录"))).toBe(true);
+    expect(await readdir(join(media, "剧/某剧 老目录"))).toContain("poster.jpg");
+
+    const report = await cleanupEmptyDirs(rt, { libraryId: library.id, apply: true });
+    const dirs = await readdir(join(media, "剧"));
+    expect(dirs).not.toContain("某剧 老目录"); // 全是 Kura 残留 → 整个目录没了
+    expect(dirs).toContain("有字幕的"); // 有字幕 → 目录留着
+    expect(await readdir(join(media, "剧/有字幕的"))).toEqual(["某剧 - 第1集.zh.srt"]); // 海报删了
+    expect(await readdir(join(media, "剧/还有影片"))).toContain("poster.jpg"); // 还有影片 → 一点不动
+    expect(report.kept.some((item) => item.dir.endsWith("有字幕的"))).toBe(true);
+  });
+});

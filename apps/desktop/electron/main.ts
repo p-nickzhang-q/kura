@@ -8,6 +8,7 @@ import {
   AUTO_PROXY,
   EXIT,
   createLibrary,
+  cleanupEmptyDirs,
   deleteLibrary,
   renameLibrary,
   createDmmSource,
@@ -734,6 +735,16 @@ function registerIpc(): void {
     if (!tmdb) throw new Error("未配置 TMDB API key（设置页填写，或环境变量 KURA_TMDB_API_KEY）");
     return scrapeShow(rt, { key: input.key, tmdb });
   });
+
+  // 「整理」只清它这次搬空的目录; 影片早就搬完、旧目录里只剩海报时, 得单独清一次
+  ipcMain.handle("library:cleanup", (_event, input: { libraryId?: number; apply?: boolean }) =>
+    exclusive("清理空目录", () =>
+      cleanupEmptyDirs(mustRuntime(), {
+        ...(input.libraryId !== undefined ? { libraryId: input.libraryId } : {}),
+        apply: input.apply === true,
+      }),
+    ),
+  );
 
   ipcMain.handle("library:remove", (_event, input: { libraryId: number }) => {
     mustLibrary(input.libraryId);

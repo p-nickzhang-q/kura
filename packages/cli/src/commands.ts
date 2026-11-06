@@ -11,6 +11,7 @@ import {
   TEMPLATE_PLACEHOLDERS,
   actorIndexDrift,
   bindDirectory,
+  cleanupEmptyDirs,
   clearFileEpisode,
   cachedPoster,
   cancelTask,
@@ -663,6 +664,41 @@ export const COMMANDS: Command[] = [
       } else {
         lines.push("(dry-run, 未动磁盘; 加 --apply 执行)");
       }
+      return lines.join("\n");
+    },
+  },
+
+  {
+    name: "cleanup",
+    summary: "清理: 删掉只剩海报/nfo 的空壳目录 (默认 dry-run, --apply 才删)",
+    needsDb: true,
+    args: [
+      { name: "library", type: "string", description: "库名或 id (省略 = 所有库)", positional: true },
+      { name: "apply", type: "boolean", description: "真的删 (默认只列清单)", default: false },
+    ],
+    async run(ctx, args) {
+      const ref = args.positionals.library;
+      const library = ref ? requireLibrary(ctx, ref) : null;
+      return cleanupEmptyDirs(ctx.rt!, {
+        ...(library ? { libraryId: library.id } : {}),
+        apply: Boolean(args.options.apply),
+      });
+    },
+    render(data: {
+      dryRun: boolean;
+      removedDirs: string[];
+      removedFiles: string[];
+      kept: { dir: string; files: string[] }[];
+    }) {
+      const lines = [
+        `清理${data.dryRun ? " (dry-run, 未删)" : ""}: 目录 ${data.removedDirs.length} 个 · 文件 ${data.removedFiles.length} 个`,
+      ];
+      for (const dir of data.removedDirs.slice(0, 30)) lines.push(`  ✗ ${dir}`);
+      if (data.removedDirs.length > 30) lines.push(`  … 还有 ${data.removedDirs.length - 30} 个`);
+      for (const item of data.kept.slice(0, 10)) {
+        lines.push(`  留着 ${item.dir} (${item.files.join("、")})`);
+      }
+      if (data.dryRun && data.removedDirs.length > 0) lines.push("加 --apply 真的删。");
       return lines.join("\n");
     },
   },
