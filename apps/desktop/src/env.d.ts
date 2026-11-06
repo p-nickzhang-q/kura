@@ -282,8 +282,11 @@ interface KuraBridge {
     dir: string,
     key: string,
     paths?: string[],
+    season?: number,
   ): Promise<{ key: string; dir: string; bound: number; episodes: number; stillUnparsed: string[] }>;
   itemEpisodes(key: string): Promise<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats }>;
+  itemDirs(key: string): Promise<{ key: string; dirs: { dir: string; files: number; episodeFrom: number | null; episodeTo: number | null; season: number | null }[] }>;
+  setDirSeason(libraryId: number, dir: string, season: number, key?: string): Promise<{ files: number; season: number; episodesAdded: number }>;
   rebindItem(key: string, newKey: string): Promise<{ from: string; to: string; moved: number; scraped: { declared: number; bound: number; missing: number } | null }>;
   unbindItem(key: string): Promise<{ unbound: number }>;
   scrapeShow(key: string): Promise<{ key: string; ok: boolean; fields: string[]; episodes: number; declared: number; bound: number; missing: number; error?: string }>;

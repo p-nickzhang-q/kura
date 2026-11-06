@@ -221,6 +221,14 @@ export function bindDirectory(
     key: string;
     /** 只想绑这些文件时显式给出 (电影候选 = 单个文件)。 */
     paths?: string[];
+    /**
+     * 强制指定季号 (覆盖从文件名/目录解析出来的季)。
+     *
+     * 用在同一部剧被拆成多个目录时: `仁医` 与 `仁医2` 都绑同一个 TMDB 身份, 但前者是
+     * 第 1 季、后者是第 2 季 —— 文件名里没有季号时, 解析结果会全都落在第 1 季,
+     * 于是两季的集号撞在一起。
+     */
+    season?: number;
     dryRun?: boolean;
   },
 ): BindResult {
@@ -273,15 +281,20 @@ export function bindDirectory(
   }
 
   const key = options.key.toLowerCase();
+  if (options.season !== undefined && (!Number.isInteger(options.season) || options.season < 0)) {
+    throw new AppError(`季号必须是非负整数: ${options.season}`, EXIT.USAGE, { season: options.season });
+  }
   const stillUnparsed: string[] = [];
-  const episodes: { season: number; episode: number }[] = [];
+  const episodes: { season: number; episode: number; path: string }[] = [];
   for (const file of files) {
     // 电影本来就没有集号 —— 它不是"缺集号", 不该出现在待补清单里
-    if (!file.season || !file.episode) {
+    if (!file.episode) {
       if (target.kind === "tv") stillUnparsed.push(file.path);
       continue;
     }
-    episodes.push({ season: file.season, episode: file.episode });
+    // 季号: 显式给的优先, 否则用解析出来的 (解析不出时 scan 已经写成 1)
+    const season = options.season ?? file.season ?? 1;
+    episodes.push({ season, episode: file.episode, path: file.path });
   }
 
   if (options.dryRun) {
@@ -295,9 +308,13 @@ export function bindDirectory(
     // 条目类型(电影/剧集)来自身份键, 不是库的域。
     rt.db.run("insert or ignore into items (number, content_type, domain) values (?, '', ?)", [key, target.kind]);
 
-    const update = rt.db.run.bind(rt.db);
     for (const file of files) {
-      update("update media_files set number = ? where path = ?", [key, file.path]);
+      // 季号可能要改 (同一部剧拆成多个目录的常见情形), 所以和 number 一起写
+      rt.db.run("update media_files set number = ?, season = coalesce(?, season) where path = ?", [
+        key,
+        options.season ?? null,
+        file.path,
+      ]);
     }
 
     for (const entry of episodes) {
@@ -380,6 +397,97 @@ export function rebindItem(rt: Runtime, options: { key: string; newKey: string; 
   });
 
   return { from, to, moved: files.length, oldRemoved: true, bound };
+}
+
+export interface ItemDir {
+  dir: string;
+  files: number;
+  episodeFrom: number | null;
+  episodeTo: number | null;
+  season: number | null;
+}
+
+/** 一个已绑定条目由哪些文件夹提供 (同一部剧被拆成多个目录时用得上)。 */
+export function listItemDirs(rt: Runtime, key: string): ItemDir[] {
+  const rows = rt.db.all<{ path: string; season: number | null; episode: number | null }>(
+    "select path, season, episode from media_files where number = ? order by path",
+    [key.toLowerCase()],
+  );
+  const buckets = new Map<string, ItemDir>();
+  for (const row of rows) {
+    const dir = showDirOf(row.path);
+    const entry = buckets.get(dir) ?? { dir, files: 0, episodeFrom: null, episodeTo: null, season: row.season ?? null };
+    entry.files++;
+    if (row.episode !== null) {
+      entry.episodeFrom = entry.episodeFrom === null ? row.episode : Math.min(entry.episodeFrom, row.episode);
+      entry.episodeTo = entry.episodeTo === null ? row.episode : Math.max(entry.episodeTo, row.episode);
+    }
+    buckets.set(dir, entry);
+  }
+  return [...buckets.values()].sort((a, b) => a.dir.localeCompare(b.dir));
+}
+
+/**
+ * 把某个目录下的文件整批改成第 N 季。
+ *
+ * 用在同一部剧被拆成多个目录、而文件名里没有季号的情况: `仁医` 与 `仁医2` 都绑同一个
+ * TMDB 身份, 但后者是第二季。不改的话两季的集号会撞在第 1 季上(每集两个文件)。
+ */
+export function setDirectorySeason(
+  rt: Runtime,
+  options: { dir: string; season: number; key?: string; libraryId?: number },
+): { files: number; season: number; episodesAdded: number } {
+  if (!Number.isInteger(options.season) || options.season < 0) {
+    throw new AppError(`季号必须是非负整数: ${options.season}`, EXIT.USAGE, { season: options.season });
+  }
+  const dir = options.dir.replace(/[\\/]+$/, "");
+  const prefix = `${dir}${sep}`;
+  const where = ["(path = ? or path like ? || '%')", "number is not null"];
+  const params: (string | number)[] = [dir, prefix];
+  if (options.key) {
+    where.push("number = ?");
+    params.push(options.key.toLowerCase());
+  }
+  if (options.libraryId !== undefined) {
+    where.push("library_id = ?");
+    params.push(options.libraryId);
+  }
+
+  const files = rt.db.all<{ path: string; number: string; episode: number | null }>(
+    `select path, number, episode from media_files where ${where.join(" and ")} order by path`,
+    params,
+  );
+  if (files.length === 0) {
+    throw new AppError(`这个目录下没有已绑定的文件: ${dir}`, EXIT.NOT_FOUND, { dir });
+  }
+
+  rt.db.exec("begin");
+  let episodesAdded = 0;
+  try {
+    rt.db.run(
+      `update media_files set season = ? where ${where.join(" and ")}`,
+      [options.season, ...params],
+    );
+    const seen = new Set<string>();
+    for (const file of files) {
+      if (file.episode === null) continue;
+      const dedupe = `${file.number}|${options.season}|${file.episode}`;
+      if (seen.has(dedupe)) continue;
+      seen.add(dedupe);
+      // 集行对齐到新季号: 不建的话"盘上几集"会一直是 0
+      rt.db.run("insert or ignore into episodes (number, season, episode) values (?, ?, ?)", [
+        file.number,
+        options.season,
+        file.episode,
+      ]);
+      episodesAdded++;
+    }
+    rt.db.exec("commit");
+  } catch (err) {
+    rt.db.exec("rollback");
+    throw err;
+  }
+  return { files: files.length, season: options.season, episodesAdded };
 }
 
 /** 解绑: 把这个目录下的文件退回未识别。集行跟着条目走, 条目没人指向时一并删掉。 */

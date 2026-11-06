@@ -48,6 +48,7 @@ import {
   syncNfoTask,
   retryTask,
   actorIndexDrift,
+  setDirectorySeason,
   deleteLibrary,
   exportTvNfo,
   scrapeShow,
@@ -770,17 +771,17 @@ export const COMMANDS: Command[] = [
   {
     name: "file",
     summary:
-      "文件: list [--library 库] [--unparsed] | reveal <番号> | dirs [--library 库] | bind <目录> --tmdb <身份> | unbind <目录> | set-episode <路径> --episode N [--season N]",
+      "文件: list [--library 库] | reveal <番号> | dirs | bind <目录> --tmdb <身份> [--season N] | unbind <目录> | set-season <目录> --season N | set-episode <路径> --episode N",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "list | reveal | dirs | bind | unbind | set-episode", positional: true, default: "list" },
+      { name: "action", type: "string", description: "list | reveal | dirs | bind | unbind | set-season | set-episode", positional: true, default: "list" },
       { name: "number", type: "string", description: "reveal: 番号; bind/unbind: 目录; set-episode: 文件路径", positional: true },
       { name: "library", type: "string", description: "只看某个库" },
       { name: "unparsed", type: "boolean", description: "只看认不出番号的文件", default: false },
       { name: "limit", type: "number", description: "条数", default: 200 },
       { name: "tmdb", type: "string", description: "bind: TMDB 身份, 如 tmdb:tv:1399" },
       { name: "episode", type: "number", description: "set-episode: 集号" },
-      { name: "season", type: "number", description: "set-episode: 季号 (默认沿用索引里的, 再不行第 1 季)" },
+      { name: "season", type: "number", description: "bind/set-season: 强制季号 (同一部剧拆成多个目录时用)" },
       { name: "dry-run", type: "boolean", description: "bind: 只报告会绑多少文件", default: false },
     ],
     async run(ctx, args) {
@@ -805,7 +806,16 @@ export const COMMANDS: Command[] = [
         const library = args.options.library
           ? requireLibrary(ctx, String(args.options.library))
           : requireSingleLibrary(ctx);
-        return { result: bindDirectory(ctx.rt!, { libraryId: library.id, dir, key, dryRun: Boolean(args.options["dry-run"]) }) };
+        const season = args.options.season === undefined ? undefined : Number(args.options.season);
+        return {
+          result: bindDirectory(ctx.rt!, {
+            libraryId: library.id,
+            dir,
+            key,
+            ...(season === undefined ? {} : { season }),
+            dryRun: Boolean(args.options["dry-run"]),
+          }),
+        };
       }
 
       if (action === "unbind") {
@@ -815,6 +825,17 @@ export const COMMANDS: Command[] = [
           ? requireLibrary(ctx, String(args.options.library))
           : requireSingleLibrary(ctx);
         return { unbound: unbindDirectory(ctx.rt!, { libraryId: library.id, dir }) };
+      }
+
+      if (action === "set-season") {
+        const dir = args.positionals.number;
+        if (!dir) throw new AppError("用法: file set-season <目录> --season 2", EXIT.USAGE);
+        const season = Number(args.options.season);
+        if (!Number.isInteger(season) || season < 0) throw new AppError("缺少 --season <非负整数>", EXIT.USAGE);
+        const library = args.options.library
+          ? requireLibrary(ctx, String(args.options.library))
+          : requireSingleLibrary(ctx);
+        return { result: setDirectorySeason(ctx.rt!, { dir, season, libraryId: library.id }) };
       }
 
       if (action === "set-episode") {

@@ -18,7 +18,11 @@ contextBridge.exposeInMainWorld("kura", {
     return () => ipcRenderer.removeListener("suggest:progress", handler);
   },
   bindMany: (libraryId, items) => ipcRenderer.invoke("file:bind-many", { libraryId, items }),
-  bindDir: (libraryId, dir, key, paths) => ipcRenderer.invoke("file:bind", { libraryId, dir, key, ...(paths ? { paths } : {}) }),
+  bindDir: (libraryId, dir, key, paths, season) =>
+    ipcRenderer.invoke("file:bind", { libraryId, dir, key, ...(paths ? { paths } : {}), ...(season === undefined ? {} : { season }) }),
+  itemDirs: (key) => ipcRenderer.invoke("item:dirs", { key }),
+  setDirSeason: (libraryId, dir, season, key) =>
+    ipcRenderer.invoke("file:set-season", { libraryId, dir, season, ...(key ? { key } : {}) }),
   itemEpisodes: (key) => ipcRenderer.invoke("item:episodes", { key }),
   rebindItem: (key, newKey) => ipcRenderer.invoke("item:rebind", { key, newKey }),
   unbindItem: (key) => ipcRenderer.invoke("item:unbind", { key }),

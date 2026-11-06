@@ -220,7 +220,14 @@ const bindDialog = ref<{
   rebindKey?: string;
   /** rebind 模式下的标题(条目当前名)。 */
   label?: string;
+  /** 强制季号(同一部剧拆成多个目录时用): 空 = 按文件名/目录自动。 */
+  season: string;
 } | null>(null);
+
+/** 已绑定条目的来源文件夹 (同一部剧可能来自多个目录)。 */
+const itemDirs = ref<{ dir: string; files: number; episodeFrom: number | null; episodeTo: number | null; season: number | null }[]>([]);
+/** 每行"改成第 N 季"的输入值。 */
+const seasonDraft = ref<Record<string, string>>({});
 /** 待绑定目录的搜索建议 (dir → 建议)。批量找建议的结果, 不是决定。 */
 const suggestions = ref<Record<string, KuraBindingSuggestion>>({});
 /** 勾选要绑的建议 (dir 列表)。 */
@@ -415,11 +422,35 @@ async function refreshUnparsed(): Promise<void> {
 /** 打开详情时顺带读集列表 (只有影视条目有)。 */
 async function loadEpisodes(key: string, domain: string | undefined): Promise<void> {
   episodeView.value = null;
+  itemDirs.value = [];
   if (!domain || domain === "av") return;
   try {
     episodeView.value = await window.kura.itemEpisodes(key);
+    // 同一部剧可能来自多个目录(仁医 / 仁医2), 各自可能是不同季
+    const dirs = await window.kura.itemDirs(key).catch(() => ({ dirs: [] }));
+    itemDirs.value = dirs.dirs.filter((dir) => dir.files > 1 || dir.season !== null);
   } catch {
     episodeView.value = null;
+  }
+}
+
+/** 把某个来源目录整体改成第 N 季。 */
+async function applyDirSeason(dir: string): Promise<void> {
+  if (selectedId.value === null || !detail.value) return;
+  const raw = (seasonDraft.value[dir] ?? "").trim();
+  const season = Number(raw);
+  if (!Number.isInteger(season) || season < 0) {
+    errors.value.push("季号要填非负整数");
+    return;
+  }
+  try {
+    const result = await window.kura.setDirSeason(selectedId.value, dir, season, detail.value.key);
+    note.value = `「${dir.split(/[\\/]/).pop()}」已改为第 ${result.season} 季: ${result.files} 个文件`;
+    seasonDraft.value[dir] = "";
+    await loadEpisodes(detail.value.key, detail.value.domain);
+    await refreshTasks().catch(() => undefined);
+  } catch (err) {
+    errors.value.push(`改季: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -509,6 +540,7 @@ function openRebindDialog(): void {
     mode: "rebind",
     rebindKey: detail.value.key,
     label: `${detail.value.title ?? detail.value.key}`,
+    season: "",
   };
 }
 
@@ -535,6 +567,7 @@ function openBindDialog(dir: KuraBindableDir): void {
     query: suggestions.value[dir.dir]?.query || dir.name,
     hits: [],
     busy: false,
+    season: "",
   };
 }
 
@@ -583,7 +616,14 @@ async function bindDir(hit: KuraTmdbHit): Promise<void> {
   dialog.busy = true;
   try {
     // paths 来自 Vue 的响应式对象, 直接传会抛 "An object could not be cloned"
-    const result = await window.kura.bindDir(selectedId.value, candidate.dir, hit.key, plainArray(candidate.paths));
+    const season = dialog.season.trim() === "" ? undefined : Number(dialog.season);
+    const result = await window.kura.bindDir(
+      selectedId.value,
+      candidate.dir,
+      hit.key,
+      plainArray(candidate.paths),
+      season,
+    );
     const scraped = (result as { scraped?: { declared: number; bound: number; missing: number } | null }).scraped;
     note.value = scraped
       ? `已绑定「${hit.title}」: ${result.bound} 个文件 · ${result.episodes} 集 · 缺 ${scraped.missing} 集${
@@ -1872,6 +1912,30 @@ async function testDmm(): Promise<void> {
                   <button type="button" :disabled="busy" class="danger-ghost" @click="unbindCurrent">解绑</button>
                   <button type="button" :disabled="busy" @click="rescrapeShow">重新刮削</button>
                 </header>
+                <!-- 同一部剧拆成多个目录时, 各目录可能是不同季 (仁医 / 仁医2) -->
+                <div v-if="itemDirs.length > 1" class="item-dirs">
+                  <p class="season-title">来源文件夹</p>
+                  <div v-for="dir in itemDirs" :key="dir.dir" class="item-dir">
+                    <span class="mono" :title="dir.dir">{{ dir.dir.split(/[\\/]/).pop() }}</span>
+                    <span class="muted">
+                      {{ dir.files }} 个文件
+                      <template v-if="dir.episodeFrom !== null"> · 第 {{ dir.episodeFrom }}–{{ dir.episodeTo }} 集</template>
+                      · 第 {{ dir.season ?? "?" }} 季
+                    </span>
+                    <input
+                      v-model="seasonDraft[dir.dir]"
+                      type="number"
+                      min="0"
+                      :placeholder="String(dir.season ?? 1)"
+                      :aria-label="`把 ${dir.dir} 改成第几季`"
+                    />
+                    <button type="button" :disabled="!seasonDraft[dir.dir]" @click="applyDirSeason(dir.dir)">改季</button>
+                  </div>
+                  <p class="muted hint">
+                    两个文件夹都指向同一部剧时（例如第一季和第二季），把其中一个改成第 2 季，否则两季的集号会撞在第一季上。
+                  </p>
+                </div>
+
                 <p v-if="!episodeView || episodeView.episodes.length === 0" class="muted">
                   还没有集信息。点「重新刮削」从 TMDB 拉一次。
                 </p>
@@ -2386,6 +2450,11 @@ async function testDmm(): Promise<void> {
         <button type="button" :class="{ on: bindDialog.kind === 'movie' }" @click="bindDialog.kind = 'movie'; bindDialog.hits = []">电影</button>
         <span class="muted">· 从文件名推断的，可以改</span>
       </div>
+      <label v-if="bindDialog.kind === 'tv' && bindDialog.mode !== 'rebind'" class="bind-season">
+        <span class="muted">季</span>
+        <input v-model="bindDialog.season" type="number" min="0" placeholder="自动" aria-label="强制季号" />
+        <span class="muted">留空 = 按文件名/目录自动判断；同一部剧的第二个目录填 2</span>
+      </label>
       <div class="bind-search">
         <input
           v-model="bindDialog.query"
@@ -3431,6 +3500,50 @@ td.suggest-cell {
 .bind-bar button:not(.primary) {
   min-height: 44px;
   padding: 8px 12px;
+}
+
+.item-dirs {
+  margin-bottom: 8px;
+}
+
+.item-dir {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: var(--fs-label);
+  padding: 4px 0;
+}
+
+.item-dir .mono {
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item-dir input {
+  width: 56px;
+  height: 44px;
+  padding: 0 8px;
+}
+
+.item-dir button {
+  min-height: 44px;
+  padding: 4px 12px;
+  font-size: var(--fs-label);
+}
+
+.bind-season {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: var(--fs-label);
+}
+
+.bind-season input {
+  width: 64px;
+  height: 44px;
+  padding: 0 8px;
 }
 
 /* 绑定面板: 借 lightbox 的遮罩, 自己是一张宽卡片 */

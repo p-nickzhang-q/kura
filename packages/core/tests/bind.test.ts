@@ -9,6 +9,8 @@ import {
   countBindableDirs,
   listBindableDirs,
   rebindItem,
+  listItemDirs,
+  setDirectorySeason,
   setFileEpisode,
   unbindDirectory,
 } from "../src/tasks/bind";
@@ -263,5 +265,65 @@ describe("改绑", () => {
 
   test("没有文件的条目无从改绑", () => {
     expect(() => rebindItem(rt, { key: "tmdb:tv:9", newKey: "tmdb:tv:10" })).toThrow(/没有登记到任何文件/);
+  });
+});
+
+describe("同一部剧拆成多个目录", () => {
+  test("第二个目录可以绑到同一身份并指定为第 2 季", async () => {
+    await makeShow("仁医", ["仁医 - 第1集.mp4", "仁医 - 第2集.mp4"]);
+    await makeShow("仁医2", ["仁医2 - 第1集.mp4", "仁医2 - 第2集.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "仁医"), key: "tmdb:tv:46198" });
+    // 关键: 第二个目录绑同一身份, 但显式指定第 2 季
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "仁医2"), key: "tmdb:tv:46198", season: 2 });
+
+    const rows = rt.db.all<{ season: number; episode: number }>(
+      "select season, episode from media_files where number = 'tmdb:tv:46198' order by season, episode",
+    );
+    expect(rows).toEqual([
+      { season: 1, episode: 1 },
+      { season: 1, episode: 2 },
+      { season: 2, episode: 1 },
+      { season: 2, episode: 2 },
+    ]);
+    // 没有重复的 (季, 集)
+    const dup = rt.db.get<{ n: number }>(
+      `select count(*) as n from (select season, episode, count(*) c from media_files
+        where number = 'tmdb:tv:46198' group by season, episode having c > 1)`,
+    );
+    expect(dup?.n).toBe(0);
+  });
+
+  test("setDirectorySeason: 已绑错季的目录可以整体改季", async () => {
+    await makeShow("A", ["A - 第1集.mp4", "A - 第2集.mp4"]);
+    await makeShow("B", ["B - 第1集.mp4", "B - 第2集.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    // 两个目录都绑成同一部剧, 季号都没指定 → 全落在第 1 季
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "A"), key: "tmdb:tv:7" });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "B"), key: "tmdb:tv:7" });
+    expect(rt.db.get<{ n: number }>("select count(*) as n from media_files where season = 2")?.n).toBe(0);
+
+    const result = setDirectorySeason(rt, { dir: join(media, "B"), season: 2, key: "tmdb:tv:7" });
+    expect(result.files).toBe(2);
+    expect(result.season).toBe(2);
+    expect(rt.db.get<{ n: number }>("select count(*) as n from media_files where season = 2")?.n).toBe(2);
+    // 集行跟着补出来
+    expect(rt.db.get<{ n: number }>("select count(*) as n from episodes where number = 'tmdb:tv:7' and season = 2")?.n).toBe(2);
+  });
+
+  test("listItemDirs: 列出这个条目的来源文件夹", async () => {
+    await makeShow("A", ["A - 第1集.mp4"]);
+    await makeShow("B", ["B - 第1集.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "A"), key: "tmdb:tv:8" });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "B"), key: "tmdb:tv:8", season: 2 });
+
+    const dirs = listItemDirs(rt, "tmdb:tv:8");
+    expect(dirs.map((dir) => dir.season)).toEqual([1, 2]);
+    expect(dirs.map((dir) => dir.files)).toEqual([1, 1]);
   });
 });

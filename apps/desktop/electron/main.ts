@@ -69,6 +69,8 @@ import {
   resolveTmdbEnv,
   exitCodeName,
   listBindableDirs,
+  listItemDirs,
+  setDirectorySeason,
   countBindableDirs,
   countBindableKinds,
   listEpisodes,
@@ -654,13 +656,14 @@ function registerIpc(): void {
     return tmdb.search(input.kind, input.query.trim());
   });
 
-  ipcMain.handle("file:bind", async (_event, input: { libraryId: number; dir: string; key: string; paths?: string[] }) => {
+  ipcMain.handle("file:bind", async (_event, input: { libraryId: number; dir: string; key: string; paths?: string[]; season?: number }) => {
     const rt = mustRuntime();
     const result = bindDirectory(rt, {
       libraryId: input.libraryId,
       dir: input.dir,
       key: input.key,
       ...(input.paths ? { paths: input.paths } : {}),
+      ...(input.season !== undefined ? { season: input.season } : {}),
     });
     // 绑完立刻刮一次: 绑定按钮的语义是"让这部剧有数据", 不该让人再点一次刮削
     const tmdb = await tmdbClient(rt);
@@ -693,6 +696,23 @@ function registerIpc(): void {
     const dir = dirname(files[0]!.path);
     const unbound = unbindDirectory(rt, { libraryId, dir, key: input.key });
     return { unbound };
+  });
+
+  ipcMain.handle("item:dirs", (_event, input: { key: string }) => ({
+    key: input.key,
+    dirs: listItemDirs(mustRuntime(), input.key),
+  }));
+
+  // 同一部剧拆成多个目录时(仁医 / 仁医2), 把其中一个目录整体改成第 N 季
+  ipcMain.handle("file:set-season", (_event, input: { libraryId: number; dir: string; season: number; key?: string }) => {
+    const rt = mustRuntime();
+    const result = setDirectorySeason(rt, {
+      dir: input.dir,
+      season: input.season,
+      ...(input.key ? { key: input.key } : {}),
+      libraryId: input.libraryId,
+    });
+    return result;
   });
 
   ipcMain.handle("item:episodes", (_event, input: { key: string }) => {
