@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AppError, EXIT } from "../src/exit";
 import { HttpClient, type FetchLike } from "../src/net/http";
-import { createTmdbClient, parseTmdbKey, redactUrl, toMovieFields, toSearchHits, toSeason, toShowFields } from "../src/sources/tmdb";
+import { createTmdbClient, imageUrls, parseTmdbKey, redactUrl, toMovieFields, toSearchHits, toSeason, toShowFields } from "../src/sources/tmdb";
 
 const fixture = (name: string): Record<string, unknown> =>
   JSON.parse(readFileSync(join(import.meta.dir, "fixtures", name), "utf8")) as Record<string, unknown>;
@@ -224,5 +224,34 @@ describe("key 不外泄", () => {
     } catch (err) {
       expect(JSON.stringify((err as AppError).details ?? {})).not.toContain("supersecret");
     }
+  });
+});
+
+
+describe("图片地址", () => {
+  test("poster_path / backdrop_path 拼成 CDN 地址 (以前漏了 → 下载图片报'没有图片 URL')", () => {
+    const fields = toShowFields({
+      name: "示例剧",
+      poster_path: "/abc.jpg",
+      backdrop_path: "/def.jpg",
+      credits: { cast: [] },
+    });
+    expect(fields.poster_urls).toEqual([
+      "https://image.tmdb.org/t/p/w500/abc.jpg",
+      "https://image.tmdb.org/t/p/original/abc.jpg",
+    ]);
+    expect(fields.thumb_urls?.[0]).toBe("https://image.tmdb.org/t/p/w780/def.jpg");
+  });
+
+  test("没有图就不给地址 (不编造), 电影走同一套", () => {
+    expect(toShowFields({ name: "无图剧" }).poster_urls).toBeUndefined();
+    const movie = toMovieFields({ title: "无图电影" });
+    expect(movie.poster_urls).toBeUndefined();
+    expect(movie.thumb_urls).toBeUndefined();
+  });
+
+  test("路径少了前导斜杠也能拼对", () => {
+    expect(imageUrls("abc.jpg", ["w500"])).toEqual(["https://image.tmdb.org/t/p/w500/abc.jpg"]);
+    expect(imageUrls(null, ["w500"])).toBeUndefined();
   });
 });

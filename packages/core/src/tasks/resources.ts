@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
+import { locateEpisode } from "../domain/episodes";
 import type { Metadata } from "../domain/types";
 import type { HttpClient } from "../net/http";
 import type { Runtime } from "../runtime";
@@ -231,10 +232,45 @@ export async function placeImagesBesideVideo(
   const skipped: string[] = [];
   const errors: string[] = [];
 
-  const videos = rt.db.all<{ path: string }>("select path from media_files where number = ? order by path", [
-    metadata.number ?? metadata.key,
-  ]);
+  const key = metadata.number ?? metadata.key;
+  const videos = rt.db.all<{ path: string }>("select path from media_files where number = ? order by path", [key]);
   if (videos.length === 0) return { saved, skipped, errors };
+
+  // 剧集不逐集贴图: Emby / Jellyfin 要的是**目录级** `poster.jpg` + `fanart.jpg`,
+  // 一部 165 集的剧逐集复制同一张海报 = 165 份冗余, 而且媒体服务器一张都不认。
+  const domain = rt.db.get<{ domain: string }>("select domain from items where number = ?", [key])?.domain;
+  if (domain === "tv") {
+    const roots = new Map<number, string>();
+    for (const row of rt.db.all<{ id: number; root: string }>("select id, root from libraries")) roots.set(row.id, row.root);
+    const dirs = new Set<string>();
+    for (const video of videos) {
+      if (!existsSync(video.path)) continue;
+      const libraryId = rt.db.get<{ library_id: number }>("select library_id from media_files where path = ?", [video.path])?.library_id;
+      const root = libraryId !== undefined ? roots.get(libraryId) ?? "" : "";
+      dirs.add(locateEpisode(video.path, root)?.showDir ?? dirname(video.path));
+    }
+    for (const dir of dirs) {
+      for (const [name, image] of [
+        ["poster", images.poster],
+        ["fanart", images.thumb],
+      ] as const) {
+        if (!image) continue;
+        const target = join(dir, `${name}${extname(image.path) || ".jpg"}`);
+        try {
+          const existing = statSync(target, { throwIfNoEntry: false });
+          if (existing && existing.size === image.size) {
+            skipped.push(target);
+            continue;
+          }
+          await copyFile(image.path, target);
+          saved.push(target);
+        } catch (err) {
+          errors.push(`${target}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+    return { saved, skipped, errors };
+  }
 
   for (const video of videos) {
     if (!existsSync(video.path)) continue;

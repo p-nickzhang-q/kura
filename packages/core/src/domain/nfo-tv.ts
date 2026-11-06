@@ -14,7 +14,7 @@ import type { NfoUpdate } from "./nfo";
  * 生成的, 里面有 `<art>` `<mpaa>` `<rating>` `<thumb>` 这些我们不认识的元素 —— 整份覆盖
  * 等于删掉不可逆。
  */
-export type TvNfoRoot = "tvshow" | "episodedetails";
+export type TvNfoRoot = "tvshow" | "episodedetails" | "movie";
 
 export interface TvShowNfoFields {
   title?: string | null;
@@ -25,6 +25,19 @@ export interface TvShowNfoFields {
   genres?: string[];
   actors?: string[];
   /** `tmdb:tv:1399` → 写 `<uniqueid type="tmdb">1399</uniqueid>`。 */
+  tmdbId?: string | null;
+}
+
+/** 电影: 根 `<movie>`, 与剧不是同一份词表(没有 `<season>`, 有 `<runtime>`)。 */
+export interface MovieNfoFields {
+  title?: string | null;
+  originalTitle?: string | null;
+  plot?: string | null;
+  premiered?: string | null;
+  studio?: string | null;
+  runtimeMin?: number | null;
+  genres?: string[];
+  actors?: string[];
   tmdbId?: string | null;
 }
 
@@ -50,6 +63,22 @@ export function renderTvShowNfo(fields: TvShowNfoFields): string {
   pushUniqueId(lines, fields.tmdbId);
   for (const actor of dedupe(fields.actors ?? [])) lines.push("  <actor>", `    <name>${escapeXml(actor)}</name>`, "  </actor>");
   lines.push("</tvshow>");
+  return `${lines.join("\n")}\n`;
+}
+
+/** 从零生成一份电影 nfo。 */
+export function renderMovieNfo(fields: MovieNfoFields): string {
+  const lines: string[] = ["<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\" ?>", "<movie>"];
+  push(lines, "title", fields.title);
+  push(lines, "originaltitle", fields.originalTitle);
+  push(lines, "plot", fields.plot);
+  push(lines, "premiered", fields.premiered);
+  push(lines, "studio", fields.studio);
+  if (fields.runtimeMin && fields.runtimeMin > 0) push(lines, "runtime", String(fields.runtimeMin));
+  for (const genre of dedupe(fields.genres ?? [])) push(lines, "genre", genre);
+  pushUniqueId(lines, fields.tmdbId);
+  for (const actor of dedupe(fields.actors ?? [])) lines.push("  <actor>", `    <name>${escapeXml(actor)}</name>`, "  </actor>");
+  lines.push("</movie>");
   return `${lines.join("\n")}\n`;
 }
 
@@ -183,7 +212,11 @@ function push(lines: string[], tag: string, value: string | null | undefined): v
 
 function pushUniqueId(lines: string[], tmdbId: string | null | undefined): void {
   if (!tmdbId) return;
-  lines.push(`  <uniqueid type="tmdb">${escapeXml(tmdbId)}</uniqueid>`);
+  const id = escapeXml(tmdbId);
+  // 两种写法都给: Emby / Jellyfin 认 `uniqueid`(要 default="true" 才当主 id),
+  // Kodi 老版本只认 `<tmdbid>`。少写一个, 对方的刮削器就会自作主张按文件名重搜。
+  lines.push(`  <tmdbid>${id}</tmdbid>`);
+  lines.push(`  <uniqueid type="tmdb" default="true">${id}</uniqueid>`);
 }
 
 function dedupe(values: string[]): string[] {

@@ -67,6 +67,8 @@ interface TmdbTvResponse {
   original_name?: string;
   overview?: string;
   first_air_date?: string;
+  poster_path?: string | null;
+  backdrop_path?: string | null;
   episode_run_time?: number[];
   genres?: { name?: string }[];
   networks?: { name?: string }[];
@@ -80,6 +82,8 @@ interface TmdbMovieResponse {
   original_title?: string;
   overview?: string;
   release_date?: string;
+  poster_path?: string | null;
+  backdrop_path?: string | null;
   runtime?: number;
   genres?: { name?: string }[];
   production_companies?: { name?: string }[];
@@ -103,6 +107,26 @@ interface TmdbSearchResponse {
 }
 
 /** 剧级字段映射。纯函数, 便于用一份录制的真实响应做穷举测试。 */
+/**
+ * TMDB 的图片地址是**拼出来的**: 元数据里只有 `poster_path`(`/abc.jpg`), 域名与尺寸在
+ * `https://image.tmdb.org/t/p/<size><path>`。这个 CDN 不需要 key, 也不占 API 额度。
+ *
+ * 之前漏了这一步, 于是影视条目入库后没有 `poster_urls` —— 点"下载图片"直接报
+ * 「该条目没有图片 URL」(av 域的 javdb/dmm 是直接给整条 URL 的, 照那边抄就漏了)。
+ */
+export const TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p";
+
+/** 给一个 `poster_path` 出多个尺寸的候选地址, 由下载器逐个试。 */
+export function imageUrls(path: string | null | undefined, sizes: string[]): string[] | undefined {
+  const clean = path?.trim();
+  if (!clean) return undefined;
+  const suffix = clean.startsWith("/") ? clean : `/${clean}`;
+  return sizes.map((size) => `${TMDB_IMAGE_BASE}/${size}${suffix}`);
+}
+
+const POSTER_SIZES = ["w500", "original"];
+const BACKDROP_SIZES = ["w780", "original"];
+
 export function toShowFields(payload: TmdbTvResponse): RawFields {
   const fields: RawFields = {};
   if (payload.name) fields.title = payload.name;
@@ -117,6 +141,11 @@ export function toShowFields(payload: TmdbTvResponse): RawFields {
   const cast = (payload.credits?.cast ?? []).map((item) => item.name).filter((name): name is string => Boolean(name));
   // 剧级 cast 已经按 TMDB 的排序归一 —— 前几位就是主演, 集级客串不进索引 (ADR 0008 决策 8)
   if (cast.length > 0) fields.actors = cast;
+  const posters = imageUrls(payload.poster_path, POSTER_SIZES);
+  if (posters) fields.poster_urls = posters;
+  // 剧照(横版)当 thumb —— 媒体服务器把它当 fanart/背景图
+  const backdrops = imageUrls(payload.backdrop_path, BACKDROP_SIZES);
+  if (backdrops) fields.thumb_urls = backdrops;
   return fields;
 }
 
@@ -132,6 +161,10 @@ export function toMovieFields(payload: TmdbMovieResponse): RawFields {
   if (payload.runtime && payload.runtime > 0) fields.duration_min = payload.runtime;
   const cast = (payload.credits?.cast ?? []).map((item) => item.name).filter((name): name is string => Boolean(name));
   if (cast.length > 0) fields.actors = cast;
+  const posters = imageUrls(payload.poster_path, POSTER_SIZES);
+  if (posters) fields.poster_urls = posters;
+  const backdrops = imageUrls(payload.backdrop_path, BACKDROP_SIZES);
+  if (backdrops) fields.thumb_urls = backdrops;
   return fields;
 }
 

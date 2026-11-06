@@ -3,7 +3,15 @@ import { sep } from "node:path";
 import { parseTmdbKey } from "../sources/tmdb";
 import { locateEpisode } from "../domain/episodes";
 import { nfoPathFor } from "../domain/nfo";
-import { mergeTvNfo, renderEpisodeNfo, renderTvShowNfo, type EpisodeNfoFields, type TvShowNfoFields } from "../domain/nfo-tv";
+import {
+  mergeTvNfo,
+  renderEpisodeNfo,
+  renderMovieNfo,
+  renderTvShowNfo,
+  type EpisodeNfoFields,
+  type MovieNfoFields,
+  type TvShowNfoFields,
+} from "../domain/nfo-tv";
 import type { Runtime } from "../runtime";
 import { createTask, runTask, type TaskRow } from "./queue";
 
@@ -19,8 +27,8 @@ export type TvNfoAction = "create" | "update" | "skip" | "error";
 
 export interface TvNfoEntry {
   path: string;
-  /** `tvshow` 或 `episode`。 */
-  kind: "tvshow" | "episode";
+  /** `tvshow` / `episode` / `movie`。 */
+  kind: "tvshow" | "episode" | "movie";
   key: string;
   action: TvNfoAction;
   /** 改了什么;dry-run 时就是给人看的清单。 */
@@ -120,6 +128,35 @@ export async function exportTvNfo(rt: Runtime, options: TvNfoOptions): Promise<T
       actors: parseList(show.actors),
       tmdbId: tmdb ? String(tmdb.id) : null,
     };
+
+    // 电影: <视频名>.nfo 根 <movie>。
+    // 曾经把电影也当成剧写进 `<目录>/tvshow.nfo` —— Emby 于是把整个电影文件夹当电视剧,
+    // 一部电影变成"剧集 0 季 0 集", 而真正的 movie nfo 根本没生成。
+    if (tmdb?.kind === "movie") {
+      const target = nfoPathFor(files[0]!.path);
+      const movieFields: MovieNfoFields = {
+        title: show.title,
+        originalTitle: show.title_original,
+        plot: show.plot,
+        premiered: show.release_date,
+        studio: show.studio,
+        runtimeMin: show.duration_min,
+        genres: parseList(show.tags),
+        actors: parseList(show.actors),
+        tmdbId: String(tmdb.id),
+      };
+      const entry = await writeOne({
+        path: target,
+        kind: "movie",
+        key: show.number,
+        apply: options.apply,
+        render: () => renderMovieNfo(movieFields),
+        merge: (original) => mergeTvNfo(original, "movie", movieFields),
+      });
+      tally(report, entry);
+      options.onProgress?.({ index: index + 1, total: shows.length, key: show.number, action: entry.action });
+      continue;
+    }
 
     // 剧级: <剧目录>/tvshow.nfo
     const showEntry = await writeOne({
@@ -238,7 +275,7 @@ function showDirOf(path: string, roots: Map<number, string>, rt: Runtime): strin
 
 interface WriteArgs {
   path: string;
-  kind: "tvshow" | "episode";
+  kind: "tvshow" | "episode" | "movie";
   key: string;
   apply: boolean;
   render: () => string;

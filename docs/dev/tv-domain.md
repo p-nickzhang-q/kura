@@ -151,6 +151,22 @@ kura file set-episode <路径> --episode 5 [--season 1]   # 绑了目录但文�
 
 详情页会提示"盘上有 N 集不在来源的集列表里", 并把那些集的标签标成「集号对不上」。
 
+## 四之四、图片与 NFO 的形状(媒体服务器兼容)
+
+**图片地址是拼出来的**: TMDB 只给 `poster_path`(`/abc.jpg`), 完整地址是
+`https://image.tmdb.org/t/p/<size><path>`(`imageUrls()`)。这个 CDN 不占 API 额度也不需要 key。
+漏了这一步的后果是"下载图片"直接报「该条目没有图片 URL」。
+
+**图片落位按媒体服务器的习惯**:
+- 剧: 剧目录 `poster.jpg` + `fanart.jpg`(不逐集复制 —— 165 集的剧会变成 165 份同一张图, 而且 Emby 一张都不认)
+- 电影: 视频旁边 `<视频名>-poster.jpg` / `-thumb.jpg`
+
+**NFO 根元素按类型分**: 剧 `tvshow.nfo`(`<tvshow>`), 集 `<视频名>.nfo`(`<episodedetails>`),
+电影 `<视频名>.nfo`(`<movie>`)。电影**不能**写 `tvshow.nfo` —— Emby 见到会把整个文件夹当电视剧。
+
+**身份写两遍**: `<tmdbid>` (Kodi 老版本) + `<uniqueid type="tmdb" default="true">`
+(Emby / Jellyfin 只认带 `default="true"` 的那个当主 id)。少写一个, 对方的刮削器会按文件名自己重搜。
+
 ## 五、缺集
 
 ```

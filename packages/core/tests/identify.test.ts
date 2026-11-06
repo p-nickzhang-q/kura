@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { detectContentType, extractNumber, identify, parseFileInfo } from "../src/domain/identify";
+import { detectContentType, extractNumber, identify, normalizeItemKey, parseFileInfo } from "../src/domain/identify";
 
 describe("extractNumber", () => {
   test("有码: 大小写与分隔符都归一", () => {
@@ -118,5 +118,16 @@ describe("国产线索不能撞上番号", () => {
     for (const file of ["MD-0123.mp4", "MDX-0123.mp4", "91CM-123.mp4", "91KZ-666.mp4", "国产-某某.mp4"]) {
       expect(detectContentType(extractNumber(file) ?? "", file)).toBe("chinese");
     }
+  });
+});
+
+describe("normalizeItemKey", () => {
+  test("番号大写, 带站点前缀的身份小写", () => {
+    expect(normalizeItemKey("ssis-001")).toBe("SSIS-001");
+    expect(normalizeItemKey("SSIS-001")).toBe("SSIS-001");
+    // 影视身份库里是小写 —— CLI 之前统一 toUpperCase, 于是查不到条目
+    expect(normalizeItemKey("TMDB:TV:54")).toBe("tmdb:tv:54");
+    expect(normalizeItemKey(" tmdb:movie:13 ")).toBe("tmdb:movie:13");
+    expect(normalizeItemKey("javdb:2X9K1")).toBe("javdb:2x9k1");
   });
 });

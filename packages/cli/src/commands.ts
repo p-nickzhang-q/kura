@@ -11,6 +11,7 @@ import {
   getItem,
   isItemSortField,
   isSiteKey,
+  normalizeItemKey,
   listItems,
   countItems,
   countPending,
@@ -684,7 +685,7 @@ export const COMMANDS: Command[] = [
 
       const number = args.positionals.number;
       if (!number) throw new AppError("用法: translate <番号> | translate --pending", EXIT.USAGE);
-      return translateItem(ctx.rt!, number.toUpperCase(), translator);
+      return translateItem(ctx.rt!, normalizeItemKey(number), translator);
     },
     render(data: unknown) {
       if (data && typeof data === "object" && "repaired" in data) {
@@ -724,7 +725,7 @@ export const COMMANDS: Command[] = [
     async run(ctx, args) {
       const action = args.positionals.action ?? "fetch";
       if (action !== "fetch") throw new AppError(`未知动作: ${action}`, EXIT.USAGE, { action });
-      const key = args.positionals.number!.toUpperCase();
+      const key = normalizeItemKey(args.positionals.number!);
       const item = getItem(ctx.rt!, key);
       if (!item) throw new AppError(`条目不存在: ${key}`, EXIT.NOT_FOUND, { number: key });
 
@@ -852,7 +853,7 @@ export const COMMANDS: Command[] = [
       if (action === "reveal") {
         const number = args.positionals.number;
         if (!number) throw new AppError("用法: file reveal <番号>", EXIT.USAGE);
-        const key = number.toUpperCase();
+        const key = normalizeItemKey(number);
         const files = ctx.rt!.db.all<{ path: string; size: number }>(
           "select path, size from media_files where number = ? order by path",
           [key],
@@ -925,7 +926,7 @@ export const COMMANDS: Command[] = [
       if (action === "get") {
         const number = args.positionals.number;
         if (!number) throw new AppError("用法: item get <番号>", EXIT.USAGE);
-        const item = getItem(ctx.rt!, number.toUpperCase());
+        const item = getItem(ctx.rt!, normalizeItemKey(number));
         if (!item) throw new AppError(`条目不存在: ${number}`, EXIT.NOT_FOUND, { number });
         return { item };
       }
@@ -983,14 +984,15 @@ export const COMMANDS: Command[] = [
             EXIT.USAGE,
           );
         }
-        const result = retypeItem(ctx.rt!, number.toUpperCase(), type);
-        return { number: number.toUpperCase(), ...result };
+        const key = normalizeItemKey(number);
+        const result = retypeItem(ctx.rt!, key, type);
+        return { number: key, ...result };
       }
 
       if (action === "set" || action === "lock" || action === "unlock") {
         const number = args.positionals.number;
         if (!number) throw new AppError(`用法: item ${action} <番号> ...`, EXIT.USAGE);
-        const key = number.toUpperCase();
+        const key = normalizeItemKey(number);
 
         if (action === "set") {
           const patch: Partial<Record<FieldKey, string | string[] | number>> = {};

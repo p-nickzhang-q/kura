@@ -59,6 +59,18 @@ export function isSiteKey(value: string): boolean {
   return value.includes(":");
 }
 
+/**
+ * 人写的身份 → 库里存的身份。
+ *
+ * 番号是大写 (`SSIS-001`), 带站点前缀的 (`javdb:2x9k1` / `tmdb:tv:1399`) 全小写。
+ * 统一在这里归一: 之前 CLI 各命令直接 `toUpperCase()`, 于是 `kura resource fetch tmdb:tv:54`
+ * 去查 `TMDB:TV:54` —— 明明条目在库里, 却报"条目不存在"。
+ */
+export function normalizeItemKey(raw: string): string {
+  const trimmed = raw.trim();
+  return trimmed.includes(":") ? trimmed.toLowerCase() : trimmed.toUpperCase();
+}
+
 const AMATEUR_HINTS = /\b(SIRO|LUXU|GACHI|PACOPACOMAMA|10MUSUME|HEYZO|TOKYO-HOT)\b/;
 /**
  * 国产/中文厂牌线索。

@@ -41,7 +41,16 @@ export type {
 export { DIMENSIONS, TEMPLATE_PLACEHOLDERS, dimensionTemplate, findDimension, templatePlaceholders, unknownPlaceholders } from "./domain/dimensions";
 export type { Dimension } from "./domain/dimensions";
 
-export { detectContentType, extractNumber, identify, isSiteKey, normalizeText, parseFileInfo, siteKey } from "./domain/identify";
+export {
+  detectContentType,
+  extractNumber,
+  identify,
+  isSiteKey,
+  normalizeItemKey,
+  normalizeText,
+  parseFileInfo,
+  siteKey,
+} from "./domain/identify";
 export { aggregate, mergeWithPinned } from "./domain/aggregate";
 export { applyPlan, buildNfo, buildPlan, escapeXml, renderTemplate, targetState } from "./domain/materialize";
 export type { ApplyResult, Library, Plan, PlanEntry, PlanInput, TargetState } from "./domain/materialize";

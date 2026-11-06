@@ -44,7 +44,9 @@ describe("渲染", () => {
     expect(xml).toContain("简介 &amp; 特殊字符 &lt;test&gt;");
     // 题材去重
     expect(xml.match(/<genre>/g)).toHaveLength(1);
-    expect(xml).toContain('<uniqueid type="tmdb">1399</uniqueid>');
+    // Emby/Jellyfin 认 uniqueid(default="true" 才是主 id), Kodi 老版本认 <tmdbid>
+    expect(xml).toContain('<tmdbid>1399</tmdbid>');
+    expect(xml).toContain('<uniqueid type="tmdb" default="true">1399</uniqueid>');
     expect(xml).toContain("<actor>");
   });
 
@@ -137,7 +139,8 @@ describe("导出到磁盘", () => {
     const show = await readFile(join(showDir, "tvshow.nfo"), "utf8");
     expect(show).toContain("<tvshow>");
     expect(show).toContain("<title>示例剧名</title>");
-    expect(show).toContain('<uniqueid type="tmdb">1399</uniqueid>');
+    expect(show).toContain('<tmdbid>1399</tmdbid>');
+    expect(show).toContain('<uniqueid type="tmdb" default="true">1399</uniqueid>');
 
     const episode = await readFile(join(showDir, "Season 01", "某剧 - S01E01.nfo"), "utf8");
     expect(episode).toContain("<episodedetails>");
@@ -176,5 +179,30 @@ describe("导出到磁盘", () => {
     await scan(rt, { library: findLibrary(rt.db, String(libraryId))! });
     await exportTvNfo(rt, { libraryId, apply: true });
     await expect(readFile(join(showDir, "Season 01", "特典映像.nfo"), "utf8")).rejects.toThrow();
+  });
+});
+
+
+describe("电影 NFO", () => {
+  test("电影写 <视频名>.nfo 且根是 <movie>, 不往目录里塞 tvshow.nfo", async () => {
+    await mkdir(join(media, "某电影"), { recursive: true });
+    await writeFile(join(media, "某电影", "某电影 2019.mkv"), "x");
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    const { bindDirectory } = await import("../src/tasks/bind");
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "某电影"), key: "tmdb:movie:13" });
+    rt.db.run("update items set title = '阿甘正传', plot = '人生就像一盒巧克力', release_date = '1994-07-06', duration_min = 142 where number = 'tmdb:movie:13'");
+
+    const report = await exportTvNfo(rt, { apply: true });
+    expect(report.created).toBe(1);
+    expect(report.entries[0]?.kind).toBe("movie");
+
+    const nfo = await readFile(join(media, "某电影", "某电影 2019.nfo"), "utf8");
+    expect(nfo).toContain("<movie>");
+    expect(nfo).toContain("<title>阿甘正传</title>");
+    expect(nfo).toContain("<runtime>142</runtime>");
+    expect(nfo).toContain('<uniqueid type="tmdb" default="true">13</uniqueid>');
+    // 电影目录里不该出现 tvshow.nfo —— Emby 见到会把整个文件夹当电视剧
+    await expect(readFile(join(media, "某电影", "tvshow.nfo"), "utf8")).rejects.toThrow();
   });
 });
