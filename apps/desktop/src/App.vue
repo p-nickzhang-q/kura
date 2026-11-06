@@ -182,8 +182,15 @@ const pageCount = computed(() => Math.max(1, Math.ceil(itemTotal.value / pageSiz
 const detail = ref<KuraItem | null>(null);
 const dimension = ref("");
 const unparsedFiles = ref<{ path: string; size: number; libraryId: number }[]>([]);
-/** 影视库的未识别页: 一目录一部剧的候选。 */
+/** 影视库的未识别页: 一个候选 = 一部剧(目录) 或 一部电影(文件)。 */
 const bindableDirs = ref<KuraBindableDir[]>([]);
+/** 候选总数(分页用): 真库里可能有上百个电影候选。 */
+const bindTotal = ref(0);
+const bindLimit = ref(100);
+/** 候选分类计数(剧 / 电影), 给工具栏说人话用。 */
+const bindKinds = ref({ tv: 0, movie: 0 });
+/** 候选筛选: 真库里电影候选可能几百个, 和剧混在一起看不过来。 */
+const bindKind = ref<"" | "tv" | "movie">("tv");
 /** 正在等确认删除的库 id (就地两段式确认, 不弹 window.confirm)。 */
 const removingId = ref<number | null>(null);
 /** 建库菜单: 先选域, 再选目录 (域决定识别方式, 事后改不了)。 */
@@ -201,6 +208,8 @@ const suggestions = ref<Record<string, KuraBindingSuggestion>>({});
 /** 勾选要绑的建议 (dir 列表)。 */
 const suggestPicked = ref<string[]>([]);
 const suggestBusy = ref(false);
+/** 批量找建议的进度: 一个目录一次 TMDB 往返, 没有进度就像卡死。 */
+const suggestProgress = ref<{ index: number; total: number; dir: string } | null>(null);
 /** 打开中的剧的集列表 (影视条目才有)。 */
 const episodeView = ref<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats } | null>(null);
 const unparsedCount = ref(0);
@@ -238,6 +247,7 @@ const dmmTest = ref<KuraDmmTest | null>(null);
 
 let unsubscribe: (() => void) | null = null;
 let unsubscribeProgress: (() => void) | null = null;
+let unsubscribeSuggest: (() => void) | null = null;
 let unsubscribeTranslate: (() => void) | null = null;
 let unsubscribeNfo: (() => void) | null = null;
 
@@ -259,6 +269,9 @@ onMounted(async () => {
   unsubscribeNfo = window.kura.onNfoProgress((update) => {
     nfoProgress.value = { index: update.index, total: update.total, key: update.key };
   });
+  unsubscribeSuggest = window.kura.onSuggestProgress((update) => {
+    suggestProgress.value = update;
+  });
   unsubscribeProgress = window.kura.onScrapeProgress((update) => {
     progress.value = update;
     // 每 5 条刷一次当前页: 刮到的结果立刻可见, 又不会每条都去查库。
@@ -269,6 +282,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopTasksPolling();
+  unsubscribeSuggest?.();
   unsubscribe?.();
   unsubscribeProgress?.();
   unsubscribeTranslate?.();
@@ -362,11 +376,21 @@ async function refreshUnparsed(): Promise<void> {
   unparsedFiles.value = result.files;
   unparsedCount.value = result.total;
 
-  // 影视库的"未识别"是目录级的: 一个目录 = 一部剧的候选
+  // 影视库的"未识别"是候选级的: 剧 = 一个目录, 电影 = 一个文件
   if (isVideoMode.value) {
-    bindableDirs.value = await window.kura.bindableDirs(selectedId.value ?? undefined).catch(() => []);
+    const result = await window.kura
+      .bindableDirs(selectedId.value ?? undefined, {
+        limit: bindLimit.value,
+        ...(bindKind.value ? { kind: bindKind.value } : {}),
+      })
+      .catch(() => ({ dirs: [] as KuraBindableDir[], total: 0, tv: 0, movie: 0 }));
+    bindableDirs.value = result.dirs;
+    bindTotal.value = result.total;
+    bindKinds.value = { tv: result.tv, movie: result.movie };
   } else {
     bindableDirs.value = [];
+    bindTotal.value = 0;
+    bindKinds.value = { tv: 0, movie: 0 };
   }
 }
 
@@ -388,8 +412,11 @@ async function loadEpisodes(key: string, domain: string | undefined): Promise<vo
 async function findSuggestions(): Promise<void> {
   if (selectedId.value === null) return;
   suggestBusy.value = true;
+  suggestProgress.value = { index: 0, total: 0, dir: "准备中" };
+  runningLabel.value = `找绑定建议 · ${selected.value?.name ?? ""}`;
   try {
-    const result = await window.kura.tmdbSuggest(selectedId.value);
+    // 只搜当前筛选的那一类: 电影候选几百个, 一起搜会卡很久且大多没结果
+    const result = await window.kura.tmdbSuggest(selectedId.value, bindKind.value || undefined);
     if (result.error) {
       errors.value.push(result.error);
       return;
@@ -401,11 +428,17 @@ async function findSuggestions(): Promise<void> {
       .map((item) => item.dir);
     const total = result.suggestions.length;
     const hit = result.suggestions.filter((item) => item.hit).length;
-    note.value = `找到 ${hit}/${total} 个建议 · 已勾选 ${suggestPicked.value.length} 个高把握的, 确认后一次绑完`;
+    note.value = result.cancelled
+      ? `已停止 · 完成 ${total} 个目录 (${hit} 个有建议)`
+      : `找到 ${hit}/${total} 个建议 · 已勾选 ${suggestPicked.value.length} 个高把握的, 确认后一次绑完`;
+    // 任务记录了这次搜索, 任务页能看到进度与结果
+    void refreshTasks();
   } catch (err) {
     errors.value.push(`批量找建议: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     suggestBusy.value = false;
+    suggestProgress.value = null;
+    runningLabel.value = "";
   }
 }
 
@@ -445,6 +478,17 @@ async function bindPicked(): Promise<void> {
   }
 }
 
+/** 打开绑定面板: 预填建议里的搜索词(已剥掉年份/发布标记), 没有就用候选名。 */
+function openBindDialog(dir: KuraBindableDir): void {
+  bindDialog.value = {
+    dir,
+    kind: dir.kind === "tv" ? "tv" : "movie",
+    query: suggestions.value[dir.dir]?.query || dir.name,
+    hits: [],
+    busy: false,
+  };
+}
+
 /** 绑定对话框: 先搜 TMDB, 再绑整个目录并顺手刮一次。 */
 async function searchTmdb(): Promise<void> {
   const dialog = bindDialog.value;
@@ -465,7 +509,7 @@ async function bindDir(hit: KuraTmdbHit): Promise<void> {
   if (!dialog || selectedId.value === null) return;
   dialog.busy = true;
   try {
-    const result = await window.kura.bindDir(selectedId.value, dialog.dir.dir, hit.key);
+    const result = await window.kura.bindDir(selectedId.value, dialog.dir.dir, hit.key, dialog.dir.paths);
     const scraped = (result as { scraped?: { declared: number; bound: number; missing: number } | null }).scraped;
     note.value = scraped
       ? `已绑定「${hit.title}」: ${result.bound} 个文件 · ${result.episodes} 集 · 缺 ${scraped.missing} 集${
@@ -1780,9 +1824,24 @@ async function testDmm(): Promise<void> {
         <div v-else-if="tab === 'unparsed' && isVideoMode" class="pane">
           <div class="toolbar">
             <span class="muted">
-              待绑定的目录: {{ bindableDirs.length }} 个（影视没有番号，要先绑到 TMDB 才知道是哪一部）
+              待绑定 {{ bindKinds.tv }} 部剧 · {{ bindKinds.movie }} 部电影
+              <span class="hint">（影视没有番号，要先绑到 TMDB 才知道是哪一部）</span>
             </span>
             <span class="spacer" />
+            <div class="kind-filter">
+              <button type="button" class="chip" :class="{ on: bindKind === 'tv' }" @click="bindKind = 'tv'; bindLimit = 100; refreshUnparsed()">
+                剧集 {{ bindKinds.tv }}
+              </button>
+              <button type="button" class="chip" :class="{ on: bindKind === 'movie' }" @click="bindKind = 'movie'; bindLimit = 100; refreshUnparsed()">
+                电影 {{ bindKinds.movie }}
+              </button>
+              <button type="button" class="chip" :class="{ on: bindKind === '' }" @click="bindKind = ''; bindLimit = 100; refreshUnparsed()">
+                全部
+              </button>
+            </div>
+            <span v-if="suggestProgress" class="muted nowrap">
+              搜索中 {{ suggestProgress.index }}/{{ suggestProgress.total || "?" }} · {{ suggestProgress.dir }}
+            </span>
             <button type="button" :disabled="busy || suggestBusy || bindableDirs.length === 0" @click="findSuggestions">
               {{ suggestBusy ? "搜索中…" : "批量找建议" }}
             </button>
@@ -1791,7 +1850,7 @@ async function testDmm(): Promise<void> {
             <thead>
               <tr>
                 <th v-if="Object.keys(suggestions).length > 0" class="pick" />
-                <th>目录</th><th>情况</th><th>建议</th><th />
+                <th>候选</th><th>建议</th><th />
               </tr>
             </thead>
             <tbody>
@@ -1805,18 +1864,29 @@ async function testDmm(): Promise<void> {
                     @change="toggleSuggest(dir.dir)"
                   />
                 </td>
-                <td class="path-cell mono" :title="dir.dir">
-                  {{ dir.name }}
-                  <span class="badge">{{ dir.kind === "tv" ? "剧集" : "电影" }}</span>
-                </td>
-                <!-- 三列压成一列: 7 列会把表格撑到动作按钮换行, 每行变成两行高 -->
-                <td class="mono nowrap" :class="{ warn: dir.kind === 'tv' && dir.parsed < dir.files }">
-                  <template v-if="dir.kind === 'tv'">
-                    {{ dir.parsed }}/{{ dir.files }} 集
-                    <span v-if="dir.seasons.length > 0" class="muted"> · 季 {{ dir.seasons.join(",") }}</span>
-                    <span v-if="dir.parsed < dir.files" class="muted"> · {{ dir.files - dir.parsed }} 个认不出</span>
-                  </template>
-                  <template v-else>{{ dir.files }} 个文件</template>
+                <!-- 名字 + 类型 + 元信息堆在一个单元格里: 单独开"情况"列会把动作按钮挤出屏幕 -->
+                <td class="path-cell" :title="dir.dir">
+                  <div class="cand-name mono">
+                    {{ dir.name }}
+                    <span class="badge accent" v-if="dir.kind === 'tv'">剧集</span>
+                    <span class="badge" v-else>电影</span>
+                    <!-- 名字像同一部剧的散集, 但集号没认出来: 绑成电影是错的, 提示补集号 -->
+                    <span
+                      v-if="dir.suspectSeries"
+                      class="badge warn"
+                      title="目录里多个文件名字相近, 像同一部剧的分集, 但文件名里认不出集号。补集号后重扫更合适。"
+                    >
+                      可能是一部剧
+                    </span>
+                  </div>
+                  <div class="cand-meta muted">
+                    <template v-if="dir.kind === 'tv'">
+                      {{ dir.parsed }}/{{ dir.files }} 集识出
+                      <template v-if="dir.seasons.length > 0"> · S{{ dir.seasons.join(",") }}</template>
+                      <span v-if="dir.parsed < dir.files" class="warn"> · {{ dir.files - dir.parsed }} 待补集号</span>
+                    </template>
+                    <template v-else>单个视频文件</template>
+                  </div>
                 </td>
                 <td class="suggest-cell">
                   <div class="suggest-line">
@@ -1838,7 +1908,7 @@ async function testDmm(): Promise<void> {
                   <button
                     type="button"
                     :disabled="busy || selectedId === null"
-                    @click="bindDialog = { dir, kind: dir.kind, query: suggestions[dir.dir]?.query || dir.name, hits: [], busy: false }"
+                    @click="openBindDialog(dir)"
                   >
                     {{ suggestions[dir.dir]?.hit ? "换一个" : "绑定到 TMDB" }}
                   </button>
@@ -1846,10 +1916,15 @@ async function testDmm(): Promise<void> {
                 </td>
               </tr>
               <tr v-if="bindableDirs.length === 0">
-                <td colspan="5" class="muted">没有待绑定的目录。扫一遍库，或者它们都已经绑过了。</td>
+                <td colspan="4" class="muted">没有待绑定的候选。扫一遍库，或者它们都已经绑过了。</td>
               </tr>
             </tbody>
           </table>
+          <!-- 真库里电影候选可能上百个: 分批显示, 别一次塞 400 行 -->
+          <div v-if="bindTotal > bindableDirs.length" class="bind-more">
+            <span class="muted">已显示 {{ bindableDirs.length }} / {{ bindTotal }} 个候选</span>
+            <button type="button" :disabled="busy" @click="bindLimit += 100; refreshUnparsed()">再显示 100 个</button>
+          </div>
           <!-- 勾选后才出现的动作条: 没勾选时不占位置, 也不制造"这里有东西等着点"的错觉 -->
           <div v-if="suggestPicked.length > 0" class="bind-bar">
             <span>已勾选 {{ suggestPicked.length }} 个</span>
@@ -3171,6 +3246,34 @@ button:disabled {
   white-space: nowrap;
 }
 
+/* 候选单元格: 名字一行 + 元信息一行; 限宽让动作按钮始终在屏幕内 */
+.pane td.path-cell {
+  max-width: 460px;
+}
+
+.cand-name {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cand-name .badge {
+  flex: none;
+  margin-left: 0;
+  padding: 2px 8px;
+}
+
+.cand-meta {
+  font-size: var(--fs-label);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* 影视目录名可能很长 (发布组前缀 + 季 + 画质), 限宽 + 省略号, 完整路径走 title */
 .pane td.path-cell {
   max-width: 300px;
@@ -3194,6 +3297,33 @@ td.suggest-cell {
 .suggest-cell .badge {
   margin-left: 0;
   padding: 2px 8px;
+}
+
+.kind-filter {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.kind-filter .chip {
+  cursor: pointer;
+}
+
+.bind-more {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.bind-more button {
+  min-height: 44px;
+  padding: 8px 16px;
+}
+
+.badge.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
 }
 
 /* 勾选后的动作条: 贴在表格下方, 不浮在内容上遮挡 */

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createLibrary } from "../src/db/rows";
 import { openRuntime, type Runtime } from "../src/runtime";
 import { countFiles, listFiles, scan } from "../src/tasks/scan";
-import { listBindableDirs } from "../src/tasks/bind";
+import { bindDirectory, listBindableDirs } from "../src/tasks/bind";
 
 let root: string;
 let rt: Runtime;
@@ -164,8 +164,56 @@ describe("电影与剧集混在一个库", () => {
     await scan(rt, { library });
 
     const dirs = listBindableDirs(rt, { libraryId: library.id });
-    // 只看"每个目录被判成什么", 不依赖排序
-    expect(Object.fromEntries(dirs.map((dir) => [dir.name, dir.kind]))).toEqual({ 电影: "movie", 某剧: "tv" });
+    // 剧按目录做候选; 电影按**文件**做候选(一个文件一部片)
+    const byKind = dirs.map((dir) => `${dir.kind}:${dir.name}`).sort();
+    expect(byKind).toEqual(["movie:某电影 (2019).mkv", "tv:某剧"]);
+  });
+});
+
+describe("多文件却认不出集号的目录", () => {
+  test("按文件给候选 —— 绝不能把整目录当成一部片", async () => {
+    // 用户真库里的样子: `movie\各种电影\` 里躺着一堆互不相关的片子
+    await makeShow(join(media, "各种电影"), "各种电影", ["a 片.mp4", "b 片.mp4", "c 片.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const dirs = listBindableDirs(rt, { libraryId: library.id });
+    expect(dirs).toHaveLength(3);
+    expect(dirs.every((dir) => dir.kind === "movie" && dir.files === 1)).toBe(true);
+    // 名字互不相关: 不提示"可能是同一部剧"
+    expect(dirs.every((dir) => !dir.suspectSeries)).toBe(true);
+  });
+
+  test("同目录文件名共享前缀时标出「可能是同剧散集」", async () => {
+    await makeShow(join(media, "某剧"), "某剧", [
+      "【修复】某剧 001绝版.mp4",
+      "【修复】某剧 002绝版.mp4",
+      "【修复】某剧 003绝版.mp4",
+    ]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const dirs = listBindableDirs(rt, { libraryId: library.id });
+    expect(dirs).toHaveLength(3);
+    expect(dirs.every((dir) => dir.suspectSeries === true)).toBe(true);
+  });
+
+  test("单文件目录是电影候选, 绑定只动那一个文件", async () => {
+    await makeShow(join(media, "电影"), "电影", ["甲片 (2019).mp4"]);
+    await makeShow(join(media, "电影"), "电影", ["乙片 (2021).mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const dirs = listBindableDirs(rt, { libraryId: library.id });
+    expect(dirs.map((dir) => dir.kind)).toEqual(["movie", "movie"]);
+    expect(dirs.map((dir) => dir.files)).toEqual([1, 1]);
+
+    // 绑其中一个: 只该动那一个文件
+    const first = dirs.find((dir) => dir.name.includes("甲片"))!;
+    bindDirectory(rt, { libraryId: library.id, dir: first.dir, key: "tmdb:movie:603", paths: first.paths });
+    const still = listBindableDirs(rt, { libraryId: library.id });
+    expect(still).toHaveLength(1);
+    expect(still[0]?.name).toContain("乙片");
   });
 });
 

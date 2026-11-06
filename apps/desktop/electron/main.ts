@@ -30,6 +30,7 @@ import {
   updateLibraryTemplate,
   HttpClient,
   type FetchInit,
+  type FetchLike,
   isDmmConfigured,
   maskSettings,
   resolveDmmEnv,
@@ -66,10 +67,13 @@ import {
   resolveTmdbEnv,
   exitCodeName,
   listBindableDirs,
+  countBindableDirs,
+  countBindableKinds,
   listEpisodes,
   createTmdbClient,
   scrapeShow,
   suggestBindings,
+  suggestBindingsTask,
   scan,
   scrape,
   scrapeKeysTask,
@@ -274,10 +278,26 @@ function registerProtocols(): void {
  * 设在 defaultSession 上的, 只有 Chromium 的栈认这份设置。用 Node fetch 等于绕过
  * 用户配的代理 —— 在有墙的网络里就是必然失败。
  */
-function tmdbClient(rt: Runtime) {
+async function tmdbClient(rt: Runtime) {
   const env = resolveTmdbEnv(rt.settings);
   if (!env.apiKey) return null;
-  return createTmdbClient({ http: createHttp(), env });
+  // 两件事都是实测逼出来的:
+  //  1. 走 Node 的 fetch(core 的 HttpClient), 不走 Electron 的 net.fetch —— 后者在
+  //     "系统代理不可用"的环境里到 api.themoviedb.org 会直接 15s 超时;
+  //  2. 限速放松到 150ms: TMDB 是 API(额度 50 req/s), 按抓站点的 1.2s 排队,
+  //     批量找建议 23 部剧要等一分多钟。
+  // Node fetch 在某些环境下直接失败(undici 的 "fetch failed"), Chromium 的 net.fetch
+  // 在另一些环境下超时 —— 两个都试, 谁通用谁。
+  const hybrid: FetchLike = async (url, init) => {
+    try {
+      return await fetch(url, init);
+    } catch (err) {
+      const cause = err instanceof Error && typeof err.cause === "object" && err.cause ? String((err.cause as Error).message ?? "") : "";
+      console.warn(`[tmdb] Node fetch 失败(${cause || (err as Error).message}), 改用 Chromium 网络栈`);
+      return browserFetch(url, init);
+    }
+  };
+  return createTmdbClient({ http: new HttpClient({ fetchImpl: hybrid, minIntervalMs: 150 }), env });
 }
 
 function mustRuntime(): Runtime {
@@ -510,13 +530,28 @@ function registerIpc(): void {
   });
 
   // ── 影视域 ────────────────────────────────────────────────────────────────
-  ipcMain.handle("file:dirs", (_event, input: { libraryId?: number } = {}) =>
-    listBindableDirs(mustRuntime(), { libraryId: input.libraryId ?? undefined }),
+  ipcMain.handle(
+    "file:dirs",
+    (
+      _event,
+      input: { libraryId?: number; limit?: number; offset?: number; kind?: "tv" | "movie" } = {},
+    ) => {
+    const rt = mustRuntime();
+    const options = { libraryId: input.libraryId ?? undefined, ...(input.kind ? { kind: input.kind } : {}) };
+    const kinds = countBindableKinds(rt, { libraryId: input.libraryId ?? undefined });
+    return {
+      dirs: listBindableDirs(rt, { ...options, limit: input.limit ?? 100, offset: input.offset ?? 0 }),
+      // total 是"当前筛选下的总数"(分页用); tv/movie 是两种候选各自的总数(筛选按钮上的数字)
+      total: countBindableDirs(rt, options),
+      tv: kinds.tv,
+      movie: kinds.movie,
+    };
+    },
   );
 
   ipcMain.handle("tmdb:test", async (_event, probeId?: number) => {
     const rt = mustRuntime();
-    const tmdb = tmdbClient(rt);
+    const tmdb = await tmdbClient(rt);
     if (!tmdb) return { ok: false, status: "missing-key", error: "未配置 TMDB API key" };
     const id = Number.isInteger(probeId) && Number(probeId) > 0 ? Number(probeId) : 1399;
     try {
@@ -535,19 +570,36 @@ function registerIpc(): void {
     }
   });
 
-  // 批量建议: 只搜不写库 —— 绑哪个由人确认 (ADR 0008 决策 4)
-  ipcMain.handle("tmdb:suggest", async (_event, input: { libraryId?: number } = {}) => {
-    const rt = mustRuntime();
-    const tmdb = await tmdbClient(rt);
-    if (!tmdb) return { suggestions: [], error: "未配置 TMDB API key（设置页填写）" };
-    const suggestions = await suggestBindings(rt, { tmdb, libraryId: input.libraryId ?? undefined, limit: 40 });
-    return { suggestions, error: null };
-  });
+  /**
+   * 批量建议: 只搜不写库 —— 绑哪个由人确认 (ADR 0008 决策 4)。
+   *
+   * 走任务队列 + 进度事件: 一个目录一次 TMDB 往返, 40 个目录就是几十秒,
+   * 没有进度的话界面看起来像卡死了。
+   */
+  ipcMain.handle("tmdb:suggest", async (_event, input: { libraryId?: number; kind?: "tv" | "movie" } = {}) =>
+    exclusive("找绑定建议", async (signal) => {
+      const rt = mustRuntime();
+      const tmdb = await tmdbClient(rt);
+      if (!tmdb) return { suggestions: [], taskId: null, error: "未配置 TMDB API key（设置页填写）" };
+      const { task, result } = await suggestBindingsTask(
+        rt,
+        {
+          tmdb,
+          libraryId: input.libraryId ?? undefined,
+          ...(input.kind ? { kind: input.kind } : {}),
+          limit: 100,
+          onProgress: (progress) => win?.webContents.send("suggest:progress", progress),
+        },
+        signal,
+      );
+      return { suggestions: result ?? [], taskId: task.id, error: null, cancelled: signal.aborted };
+    }),
+  );
 
   // 一次绑多个目录: 逐个绑 + 顺手刮, 一个失败不中断整批
   ipcMain.handle(
     "file:bind-many",
-    async (_event, input: { libraryId: number; items: { dir: string; key: string }[] }) => {
+    async (_event, input: { libraryId: number; items: { dir: string; key: string; paths?: string[] }[] }) => {
       const rt = mustRuntime();
       const tmdb = await tmdbClient(rt);
       const results: {
@@ -564,7 +616,12 @@ function registerIpc(): void {
 
       for (const item of input.items) {
         try {
-          const bound = bindDirectory(rt, { libraryId: input.libraryId, dir: item.dir, key: item.key });
+          const bound = bindDirectory(rt, {
+            libraryId: input.libraryId,
+            dir: item.dir,
+            key: item.key,
+            ...(item.paths ? { paths: item.paths } : {}),
+          });
           const scraped = tmdb ? await scrapeShow(rt, { key: bound.key, tmdb }) : null;
           results.push({
             dir: item.dir,
@@ -595,9 +652,14 @@ function registerIpc(): void {
     return tmdb.search(input.kind, input.query.trim());
   });
 
-  ipcMain.handle("file:bind", async (_event, input: { libraryId: number; dir: string; key: string }) => {
+  ipcMain.handle("file:bind", async (_event, input: { libraryId: number; dir: string; key: string; paths?: string[] }) => {
     const rt = mustRuntime();
-    const result = bindDirectory(rt, { libraryId: input.libraryId, dir: input.dir, key: input.key });
+    const result = bindDirectory(rt, {
+      libraryId: input.libraryId,
+      dir: input.dir,
+      key: input.key,
+      ...(input.paths ? { paths: input.paths } : {}),
+    });
     // 绑完立刻刮一次: 绑定按钮的语义是"让这部剧有数据", 不该让人再点一次刮削
     const tmdb = await tmdbClient(rt);
     if (!tmdb) return { ...result, scraped: null };

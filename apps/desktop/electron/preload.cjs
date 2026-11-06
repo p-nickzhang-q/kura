@@ -6,12 +6,19 @@ contextBridge.exposeInMainWorld("kura", {
   info: () => ipcRenderer.invoke("app:info"),
   libraries: () => ipcRenderer.invoke("library:list"),
   // 影视域的几条: 待绑定目录 / TMDB 搜索 / 绑定 / 集列表 / 单部刮削
-  bindableDirs: (libraryId) => ipcRenderer.invoke("file:dirs", libraryId === undefined ? {} : { libraryId }),
+  bindableDirs: (libraryId, paging) =>
+    ipcRenderer.invoke("file:dirs", { ...(libraryId === undefined ? {} : { libraryId }), ...(paging ?? {}) }),
   tmdbSearch: (kind, query) => ipcRenderer.invoke("tmdb:search", { kind, query }),
   tmdbTest: (probeId) => ipcRenderer.invoke("tmdb:test", probeId),
-  tmdbSuggest: (libraryId) => ipcRenderer.invoke("tmdb:suggest", libraryId === undefined ? {} : { libraryId }),
+  tmdbSuggest: (libraryId, kind) =>
+    ipcRenderer.invoke("tmdb:suggest", { ...(libraryId === undefined ? {} : { libraryId }), ...(kind ? { kind } : {}) }),
+  onSuggestProgress: (callback) => {
+    const handler = (_event, update) => callback(update);
+    ipcRenderer.on("suggest:progress", handler);
+    return () => ipcRenderer.removeListener("suggest:progress", handler);
+  },
   bindMany: (libraryId, items) => ipcRenderer.invoke("file:bind-many", { libraryId, items }),
-  bindDir: (libraryId, dir, key) => ipcRenderer.invoke("file:bind", { libraryId, dir, key }),
+  bindDir: (libraryId, dir, key, paths) => ipcRenderer.invoke("file:bind", { libraryId, dir, key, ...(paths ? { paths } : {}) }),
   itemEpisodes: (key) => ipcRenderer.invoke("item:episodes", { key }),
   scrapeShow: (key) => ipcRenderer.invoke("scrape:show", { key }),
   addLibrary: (domain) => ipcRenderer.invoke("library:add", domain ? { domain } : {}),

@@ -61,13 +61,17 @@ interface KuraEpisode {
 
 /** 未识别页里"待绑定的目录" (一个目录 = 一部剧的候选)。 */
 interface KuraBindableDir {
+  /** 剧集 → 剧目录; 电影 → 那一个文件的路径。 */
   dir: string;
   name: string;
   files: number;
   parsed: number;
   seasons: number[];
-  /** 从文件名推断: 有集号 → tv, 没有 → movie。绑定面板据此决定搜哪个库。 */
-  kind: "tv" | "movie";
+  kind: "tv" | "movie" | "unknown";
+  /** 绑定时会动到的文件。 */
+  paths: string[];
+  /** 来自"多文件无集号"的目录, 且名字像同一部剧的散集 —— 提示补集号而不是绑成电影。 */
+  suspectSeries?: boolean;
 }
 
 interface KuraBindingSuggestion {
@@ -75,7 +79,7 @@ interface KuraBindingSuggestion {
   name: string;
   files: number;
   parsed: number;
-  kind: "tv" | "movie";
+  kind: "tv" | "movie" | "unknown";
   query: string;
   year: string | null;
   hit: { key: string; title: string; year: string | null; id: number } | null;
@@ -258,12 +262,26 @@ interface KuraBridge {
   info(): Promise<KuraAppInfo>;
   libraries(): Promise<KuraLibrary[]>;
   addLibrary(domain?: "av" | "video"): Promise<KuraLibrary | null>;
-  bindableDirs(libraryId?: number): Promise<KuraBindableDir[]>;
+  bindableDirs(
+    libraryId?: number,
+    paging?: { limit?: number; offset?: number; kind?: "tv" | "movie" },
+  ): Promise<{ dirs: KuraBindableDir[]; total: number; tv: number; movie: number }>;
   tmdbSearch(kind: "tv" | "movie", query: string): Promise<KuraTmdbHit[]>;
   tmdbTest(probeId?: number): Promise<KuraTmdbTest>;
-  tmdbSuggest(libraryId?: number): Promise<{ suggestions: KuraBindingSuggestion[]; error: string | null }>;
-  bindMany(libraryId: number, items: { dir: string; key: string }[]): Promise<{ results: KuraBindManyResult[] }>;
-  bindDir(libraryId: number, dir: string, key: string): Promise<{ key: string; dir: string; bound: number; episodes: number; stillUnparsed: string[] }>;
+  tmdbSuggest(libraryId?: number, kind?: "tv" | "movie"): Promise<{
+    suggestions: KuraBindingSuggestion[];
+    taskId: number | null;
+    error: string | null;
+    cancelled?: boolean;
+  }>;
+  onSuggestProgress(callback: (update: { index: number; total: number; dir: string }) => void): () => void;
+  bindMany(libraryId: number, items: { dir: string; key: string; paths?: string[] }[]): Promise<{ results: KuraBindManyResult[] }>;
+  bindDir(
+    libraryId: number,
+    dir: string,
+    key: string,
+    paths?: string[],
+  ): Promise<{ key: string; dir: string; bound: number; episodes: number; stillUnparsed: string[] }>;
   itemEpisodes(key: string): Promise<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats }>;
   scrapeShow(key: string): Promise<{ key: string; ok: boolean; fields: string[]; episodes: number; declared: number; bound: number; missing: number; error?: string }>;
   scan(libraryId: number, options?: { force?: boolean }): Promise<KuraScanReport>;

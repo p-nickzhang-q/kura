@@ -1,5 +1,6 @@
 import { sep } from "node:path";
 import { AppError, EXIT } from "../exit";
+import { basename } from "node:path";
 import { locateEpisode, showDirOf } from "../domain/episodes";
 import { parseTmdbKey } from "../sources/tmdb";
 import type { Runtime } from "../runtime";
@@ -15,25 +16,41 @@ import type { Runtime } from "../runtime";
  */
 
 export interface BindableDir {
-  /** 剧目录 (有季目录时是它的上一层)。 */
+  /**
+   * 候选键:
+   *  - 剧集 → 剧目录 (传 `某个剧` 就绑这整个剧)
+   *  - 电影 → **文件路径本身** (一个文件就是一部片)
+   */
   dir: string;
-  /** 目录名, 给界面直接显示。 */
+  /** 给界面直接显示: 剧目录名, 或电影文件名。 */
   name: string;
+  /** 这次绑上会涉及多少个文件。 */
   files: number;
-  /** 其中能解析出集号的文件数; files > parsed 说明还有文件需要手工补集号。 */
+  /** 其中能解析出集号的文件数 (电影恒为 0)。 */
   parsed: number;
   seasons: number[];
   /**
-   * 从文件名推断的类型: 有集号 → 剧集, 没有 → 电影。
-   * 绑定面板据此决定去 TMDB 搜剧还是搜片 (人仍然可以改)。
+   * 从文件名推断的类型。
+   *
+   * `unknown` = 一个目录里多个文件, 却一个集号都认不出 —— **不能**当成一部电影绑,
+   * 否则整目录十几个文件会被写进同一个 TMDB id。它要么是命名没被认出来的剧
+   * (补集号后重扫), 要么是一堆彼此无关的视频 (逐个按电影绑)。
    */
-  kind: "tv" | "movie";
+  kind: "tv" | "movie" | "unknown";
+  /** 绑定时会动到的文件。 */
+  paths: string[];
+  /**
+   * 这个文件来自"多文件、无集号"的目录, 且同目录的文件名共享同一前缀 ——
+   * 大概率是同一部剧的散集, 只是命名没被认出来。**只是提示**: 仍然按单文件(电影)绑,
+   * 不会把整目录写进同一个 TMDB id。
+   */
+  suspectSeries?: boolean;
 }
 
-/** 未识别页要的清单: 有哪些目录等着绑定, 各自多少文件。 */
+/** 未识别页要的清单: 有哪些东西等着绑定。 */
 export function listBindableDirs(
   rt: Runtime,
-  options: { libraryId?: number; limit?: number; offset?: number } = {},
+  options: { libraryId?: number; limit?: number; offset?: number; kind?: "tv" | "movie" } = {},
 ): BindableDir[] {
   const where: string[] = ["number is null"];
   const params: (number | string)[] = [];
@@ -53,40 +70,111 @@ export function listBindableDirs(
     roots.set(row.id, row.root);
   }
 
-  const byDir = new Map<string, BindableDir & { seasonSet: Set<number> }>();
+  interface Bucket {
+    dir: string;
+    name: string;
+    paths: string[];
+    parsed: number;
+    seasonSet: Set<number>;
+  }
+  const buckets = new Map<string, Bucket>();
+
   for (const row of rows) {
     const located = locateEpisode(row.path, roots.get(row.library_id) ?? "");
-    // 认不出集号的文件也归到"剧目录"(父目录是 Season 01 就再上一层): 它要跟同剧的
-    // 其它文件一起出现在清单里, 人绑完目录再给这几个补集号。
+    // 认不出集号的文件也归到"剧目录"(父目录是 Season 01 就再上一层)
     const dir = located?.showDir ?? showDirOf(row.path);
-    const entry =
-      byDir.get(dir) ??
+    const bucket =
+      buckets.get(dir) ??
       ({
         dir,
-        name: dir.split(sep).filter(Boolean).pop() ?? dir,
-        files: 0,
+        name: basename(dir) || dir || "（库根目录）",
+        paths: [],
         parsed: 0,
-        seasons: [],
         seasonSet: new Set<number>(),
-        kind: "movie" as "tv" | "movie",
-      } as BindableDir & { seasonSet: Set<number> });
-    entry.files++;
+      } as Bucket);
+    bucket.paths.push(row.path);
     if (row.season !== null) {
-      entry.parsed++;
-      entry.seasonSet.add(row.season);
-      entry.kind = "tv";
+      bucket.parsed++;
+      bucket.seasonSet.add(row.season);
     }
-    byDir.set(dir, entry);
+    buckets.set(dir, bucket);
   }
 
-  return [...byDir.values()]
-    .map(({ seasonSet, ...entry }) => ({ ...entry, seasons: [...seasonSet].sort((a, b) => a - b) }))
-    .sort((a, b) => a.dir.localeCompare(b.dir))
+  const out: BindableDir[] = [];
+  for (const bucket of buckets.values()) {
+    if (bucket.parsed > 0) {
+      // 剧: 整个目录一起绑
+      out.push({
+        dir: bucket.dir,
+        name: bucket.name || "（库根目录）",
+        files: bucket.paths.length,
+        parsed: bucket.parsed,
+        seasons: [...bucket.seasonSet].sort((a, b) => a - b),
+        kind: "tv",
+        paths: bucket.paths,
+      });
+      continue;
+    }
+    if (bucket.paths.length === 1) {
+      // 单文件: 这就是一部电影 (目录名带不带年份都无所谓)
+      const file = bucket.paths[0]!;
+      out.push({
+        dir: file,
+        name: basename(file),
+        files: 1,
+        parsed: 0,
+        seasons: [],
+        kind: "movie",
+        paths: [file],
+      });
+      continue;
+    }
+    // 多文件却一个集号都认不出: 可能是"一目录多部片", 也可能是"一部剧的散集没认出来"。
+    // 分不清就**按文件给候选** —— 绑一个文件只影响一个文件, 绝不会把 165 个文件写进同一个 id。
+    // 名字像同一部剧时打个标记, 界面上提示"补集号可能更好"。
+    const suspect = sharedPrefix(bucket.paths) !== "";
+    for (const file of bucket.paths) {
+      out.push({
+        dir: file,
+        name: basename(file),
+        files: 1,
+        parsed: 0,
+        seasons: [],
+        kind: "movie",
+        paths: [file],
+        ...(suspect ? { suspectSeries: true } : {}),
+      });
+    }
+  }
+
+  // 剧在前: 一部剧一条候选, 电影可能上百条, 混在一起会把剧埋掉
+  const kindRank = (kind: BindableDir["kind"]) => (kind === "tv" ? 0 : kind === "movie" ? 1 : 2);
+  const filtered = options.kind
+    ? out.filter((entry) => (options.kind === "tv" ? entry.kind === "tv" : entry.kind !== "tv"))
+    : out;
+  return filtered
+    .sort((a, b) => kindRank(a.kind) - kindRank(b.kind) || a.dir.localeCompare(b.dir))
     .slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? 200));
 }
 
-export function countBindableDirs(rt: Runtime, options: { libraryId?: number } = {}): number {
+export function countBindableDirs(
+  rt: Runtime,
+  options: { libraryId?: number; kind?: "tv" | "movie" } = {},
+): number {
   return listBindableDirs(rt, { ...options, limit: Number.MAX_SAFE_INTEGER }).length;
+}
+
+/** 候选分类计数 —— 界面要说"35 部剧 / 920 部电影", 而不是一个笼统的总数。 */
+export function countBindableKinds(
+  rt: Runtime,
+  options: { libraryId?: number } = {},
+): { total: number; tv: number; movie: number } {
+  const all = listBindableDirs(rt, { ...options, limit: Number.MAX_SAFE_INTEGER });
+  return {
+    total: all.length,
+    tv: all.filter((dir) => dir.kind === "tv").length,
+    movie: all.filter((dir) => dir.kind !== "tv").length,
+  };
 }
 
 export interface BindingSuggestion {
@@ -94,7 +182,7 @@ export interface BindingSuggestion {
   name: string;
   files: number;
   parsed: number;
-  kind: "tv" | "movie";
+  kind: "tv" | "movie" | "unknown";
   /** 实际发出去的搜索词 (剥掉了年份/发布标记)。 */
   query: string;
   year: string | null;
@@ -124,7 +212,15 @@ export interface BindResult {
  */
 export function bindDirectory(
   rt: Runtime,
-  options: { libraryId: number; dir: string; key: string; dryRun?: boolean },
+  options: {
+    libraryId: number;
+    /** 剧: 剧目录。电影: 那一集文件的路径 (候选的 `dir` 字段)。 */
+    dir: string;
+    key: string;
+    /** 只想绑这些文件时显式给出 (电影候选 = 单个文件)。 */
+    paths?: string[];
+    dryRun?: boolean;
+  },
 ): BindResult {
   const target = parseTmdbKey(options.key);
   if (!target) {
@@ -152,15 +248,23 @@ export function bindDirectory(
 
   const dir = options.dir.replace(/[\\/]+$/, "");
   const prefix = `${dir}${sep}`;
-  const files = rt.db.all<{ path: string; season: number | null; episode: number | null }>(
-    `select path, season, episode from media_files
-     where library_id = ? and number is null and (path = ? or path like ? || '%')
-     order by path`,
-    [library.id, dir, prefix],
-  );
+  // 显式 paths 优先: 电影候选就是一个文件, 用目录前缀会把同目录的其它片子一起绑进去
+  const files = options.paths
+    ? rt.db.all<{ path: string; season: number | null; episode: number | null }>(
+        `select path, season, episode from media_files where library_id = ? and number is null and path in (${options.paths
+          .map(() => "?")
+          .join(", ")}) order by path`,
+        [library.id, ...options.paths],
+      )
+    : rt.db.all<{ path: string; season: number | null; episode: number | null }>(
+        `select path, season, episode from media_files
+         where library_id = ? and number is null and (path = ? or path like ? || '%')
+         order by path`,
+        [library.id, dir, prefix],
+      );
 
   if (files.length === 0) {
-    throw new AppError(`这个目录下没有待绑定的文件: ${dir}`, EXIT.NOT_FOUND, {
+    throw new AppError(`没有待绑定的文件: ${dir}`, EXIT.NOT_FOUND, {
       dir,
       hint: "先跑 scan, 或者确认这些文件已经属于别的条目",
     });
@@ -287,6 +391,24 @@ export function setFileEpisode(
     throw err;
   }
   return { path: row.path, number: row.number, season, episode };
+}
+
+/**
+ * 同目录多个文件的"公共前缀"(去掉扩展名后)。用来猜它们是不是同一部剧的散集。
+ *
+ * 要求至少 2 个字符: 一个字符的前缀几乎总能撞上, 提示就成了噪声。
+ */
+function sharedPrefix(paths: string[]): string {
+  if (paths.length < 2) return "";
+  const stems = paths.map((path) => basename(path).replace(/\.[^.]+$/, ""));
+  let prefix = stems[0] ?? "";
+  for (const stem of stems.slice(1)) {
+    let index = 0;
+    while (index < prefix.length && index < stem.length && prefix[index] === stem[index]) index++;
+    prefix = prefix.slice(0, index);
+    if (prefix.length < 2) return "";
+  }
+  return prefix.trim();
 }
 
 function parentOf(path: string): string {
