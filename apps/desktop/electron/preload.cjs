@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld("kura", {
   scrapeShow: (key) => ipcRenderer.invoke("scrape:show", { key }),
   addLibrary: (domain) => ipcRenderer.invoke("library:add", domain ? { domain } : {}),
   scan: (libraryId, options = {}) => ipcRenderer.invoke("scan:start", { libraryId, force: options.force === true }),
+  // 清理空壳目录: 影片早就搬完、旧目录里只剩海报时用 (整理不会再触发清理)
+  cleanupLibrary: (libraryId, apply) => ipcRenderer.invoke("library:cleanup", { libraryId, apply }),
   removeLibrary: (libraryId) => ipcRenderer.invoke("library:remove", { libraryId }),
   renameLibrary: (libraryId, name) => ipcRenderer.invoke("library:rename", { libraryId, name }),
   setLibraryTemplate: (libraryId, dimension) => ipcRenderer.invoke("library:set-template", { libraryId, dimension }),

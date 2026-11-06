@@ -396,7 +396,7 @@ interface KuraBridge {
     poster: { path: string; size: number } | null;
     thumb: { path: string; size: number } | null;
   }>;
-  libraryCleanup(libraryId: number, apply: boolean): Promise<{
+  cleanupLibrary(libraryId: number, apply: boolean): Promise<{
     dryRun: boolean;
     removedDirs: string[];
     removedFiles: string[];

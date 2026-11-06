@@ -677,7 +677,7 @@ async function bindDir(hit: KuraTmdbHit): Promise<void> {
 /** 清掉只剩海报/nfo 的空壳目录: 先干跑列清单, 再确认。 */
 async function cleanupDirs(): Promise<void> {
   if (selectedId.value === null) return;
-  const preview = await run("清理空目录", () => window.kura.libraryCleanup(selectedId.value!, false));
+  const preview = await run("清理空目录", () => window.kura.cleanupLibrary(selectedId.value!, false));
   if (!preview) return;
   if (preview.removedDirs.length === 0) {
     note.value = "没有需要清理的目录（剩下的都有影片或你自己的文件）";
@@ -691,7 +691,7 @@ async function cleanupDirs(): Promise<void> {
   if (!window.confirm(`删除 ${preview.removedDirs.length} 个空壳目录（${preview.removedFiles.length} 个文件）？\n\n${listing}${more}\n\n只删「没有影片、只剩海报与 nfo」的目录。`)) {
     return;
   }
-  const done = await run("清理空目录", () => window.kura.libraryCleanup(selectedId.value!, true));
+  const done = await run("清理空目录", () => window.kura.cleanupLibrary(selectedId.value!, true));
   if (done) {
     note.value = `已清理 ${done.removedDirs.length} 个目录、${done.removedFiles.length} 个文件${
       done.kept.length ? ` · ${done.kept.length} 个目录里还有你的文件, 留着` : ""
