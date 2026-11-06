@@ -180,6 +180,9 @@ const MIGRATIONS: string[] = [
   // v12 — 影视条目的演员没进索引 (刮削时直接写了 items.actors 的 JSON)。
   // 症状是"演员筛选里搜不到这些剧的演员"。修复动作与 v10 相同: 重建全部索引。
   ``,
+
+  // v13 — 纯数据修复: 清理绑定时误写进 episodes 的"文件行"(动作在 AFTER_MIGRATIONS[13])
+  ``,
 ];
 
 /**
@@ -190,7 +193,21 @@ const AFTER_MIGRATIONS: Record<number, (db: Db) => void> = {
   8: (db) => backfillActors(db),
   10: (db) => repairActorData(db),
   12: (db) => repairActorData(db),
+  13: (db) => cleanFilePlantedEpisodes(db),
 };
+
+/**
+ * 删掉"由文件生成"的集行。
+ *
+ * 绑定目录时曾经顺手把 `(number, season, episode)` 插进 episodes —— 那张表应该只装
+ * 来源声明的集列表。污染后果: 成长的烦恼真声明 166 集, 加上 165 个文件行报出 310 集。
+ * 文件行没有 field_sources (刮削写入的都有), 据此可精确清理。
+ */
+function cleanFilePlantedEpisodes(db: Db): void {
+  const columns = db.all<{ name: string }>("pragma table_info(episodes)");
+  if (columns.length === 0) return;
+  db.run("delete from episodes where field_sources is null");
+}
 
 export function migrate(db: Db): number {
   const row = db.get<{ user_version: number }>("pragma user_version");

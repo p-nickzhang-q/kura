@@ -76,6 +76,7 @@ import {
   listEpisodes,
   createTmdbClient,
   scrapeShow,
+  spreadAbsoluteEpisodes,
   suggestBindings,
   suggestBindingsTask,
   scan,
@@ -713,6 +714,12 @@ function registerIpc(): void {
       libraryId: input.libraryId,
     });
     return result;
+  });
+
+  // 合集包常见"001集…165集"跨季连续编号: 按播出顺序摊到各季
+  ipcMain.handle("item:spread-seasons", (_event, input: { key: string; dir?: string }) => {
+    const rt = mustRuntime();
+    return spreadAbsoluteEpisodes(rt, { key: input.key, ...(input.dir ? { dir: input.dir } : {}) });
   });
 
   ipcMain.handle("item:episodes", (_event, input: { key: string }) => {

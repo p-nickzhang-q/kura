@@ -134,6 +134,9 @@ const currentDomain = computed<"av" | "video" | null>(() => {
 });
 /** 影视模式的界面分支 (电影与剧集在同一个域里, 由条目类型再分)。 */
 const isVideoMode = computed(() => currentDomain.value === "video");
+/** 盘上有、但不在声明集列表里的集数 —— 集号对不上的信号。 */
+const undeclaredCount = computed(() => (episodeView.value?.episodes ?? []).filter((ep) => ep.undeclared).length);
+
 /** 详情页按季分组。 */
 const seasonGroups = computed(() => {
   const groups = new Map<number, KuraEpisode[]>();
@@ -433,6 +436,25 @@ async function loadEpisodes(key: string, domain: string | undefined): Promise<vo
     itemDirs.value = dirs.dirs.filter((dir) => dir.files > 1 || dir.season !== null);
   } catch {
     episodeView.value = null;
+  }
+}
+
+/**
+ * 按"整部剧的绝对集号"把文件摊到各季。
+ *
+ * 国内合集包常是 `001集 … 165集` 跨季连续编号, 文件名里没有季号 ——
+ * 全落在第 1 季, 于是集号与声明的第 1 季对不上。
+ */
+async function spreadSeasons(): Promise<void> {
+  if (!detail.value) return;
+  try {
+    const result = await window.kura.spreadSeasons(detail.value.key);
+    note.value = `已按播出顺序摊到各季: ${result.mapped} 个文件 (${result.from} → ${result.to})${
+      result.unmapped > 0 ? ` · ${result.unmapped} 个文件超出声明的 ${result.declared} 集` : ""
+    }`;
+    await loadEpisodes(detail.value.key, detail.value.domain);
+  } catch (err) {
+    errors.value.push(`摊到各季: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -1948,6 +1970,14 @@ async function testDmm(): Promise<void> {
                     </span>
                   </span>
                   <span class="spacer" />
+                  <button
+                    type="button"
+                    :disabled="busy || !episodeView || episodeView.stats.declared === 0"
+                    :title="`按播出顺序把文件摊到各季（合集包常见 001…165 这种跨季连续编号）`"
+                    @click="spreadSeasons"
+                  >
+                    摊到各季
+                  </button>
                   <button type="button" :disabled="busy" @click="openRebindDialog">改绑</button>
                   <button type="button" :disabled="busy" class="danger-ghost" @click="unbindCurrent">解绑</button>
                   <button type="button" :disabled="busy" @click="rescrapeShow">重新刮削</button>
@@ -1977,6 +2007,9 @@ async function testDmm(): Promise<void> {
                   </p>
                 </div>
 
+                <p v-if="undeclaredCount > 0" class="warn">
+                  盘上有 {{ undeclaredCount }} 集不在来源的集列表里（集号可能对不上，点「摊到各季」按播出顺序重排）
+                </p>
                 <p v-if="!episodeView || episodeView.episodes.length === 0" class="muted">
                   还没有集信息。点「重新刮削」从 TMDB 拉一次。
                 </p>
@@ -1986,7 +2019,8 @@ async function testDmm(): Promise<void> {
                     <li v-for="episode in group.episodes" :key="`${episode.season}-${episode.episode}`" :class="{ missing: !episode.hasFile }">
                       <span class="ep mono">E{{ String(episode.episode).padStart(2, "0") }}</span>
                       <span class="ep-title">{{ episode.title || "（无集名）" }}</span>
-                      <span v-if="!episode.hasFile" class="warn">盘上没有</span>
+                      <span v-if="episode.undeclared" class="warn" title="来源的集列表里没有这一集">集号对不上</span>
+                      <span v-else-if="!episode.hasFile" class="warn">盘上没有</span>
                     </li>
                   </ul>
                 </div>

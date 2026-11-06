@@ -1,3 +1,4 @@
+import { sep } from "node:path";
 import { AppError, EXIT } from "../exit";
 import { parseTmdbKey, type TmdbClient, type TmdbShow } from "../sources/tmdb";
 import type { Runtime } from "../runtime";
@@ -121,6 +122,8 @@ export function episodeStats(rt: Runtime, keys: string[]): Record<string, Episod
   const out: Record<string, EpisodeStats> = {};
   if (keys.length === 0) return out;
   const placeholders = keys.map(() => "?").join(", ");
+  // 声明 = episodes 表(来源给的集列表); 盘上 = media_files 里有季号的集。
+  // 两者都不含对方的行 —— 混算过一次, 结果 165 集的剧报出 310 集。
   for (const row of rt.db.all<{ number: string; n: number }>(
     `select number, count(*) as n from episodes where number in (${placeholders}) group by number`,
     keys,
@@ -140,10 +143,18 @@ export function episodeStats(rt: Runtime, keys: string[]): Record<string, Episod
 }
 
 /** 一个剧的所有集(按季、集号排序), 详情页按季分组用。 */
-export function listEpisodes(
-  rt: Runtime,
-  key: string,
-): { season: number; episode: number; title: string | null; airDate: string | null; runtimeMin: number | null; hasFile: boolean }[] {
+export interface EpisodeView {
+  season: number;
+  episode: number;
+  title: string | null;
+  airDate: string | null;
+  runtimeMin: number | null;
+  hasFile: boolean;
+  /** 盘上有这一集, 但来源的集列表里没有这个 (季,集) —— 集号可能对不上。 */
+  undeclared?: boolean;
+}
+
+export function listEpisodes(rt: Runtime, key: string): EpisodeView[] {
   const rows = rt.db.all<{
     season: number;
     episode: number;
@@ -158,7 +169,7 @@ export function listEpisodes(
      from episodes e where e.number = ? order by e.season, e.episode`,
     [key],
   );
-  return rows.map((row) => ({
+  const declared = rows.map((row) => ({
     season: row.season,
     episode: row.episode,
     title: row.title,
@@ -166,6 +177,92 @@ export function listEpisodes(
     runtimeMin: row.duration_min,
     hasFile: row.file_count > 0,
   }));
+
+  // 盘上有、但声明里没有的 (季,集): 不显示的话这些文件在详情页里"消失"了,
+  // 而这正是"集号对不上"最需要被看见的地方。
+  const seen = new Set(declared.map((row) => `${row.season}-${row.episode}`));
+  const extra = rt.db
+    .all<{ season: number; episode: number; n: number }>(
+      `select season, episode, count(*) as n from media_files
+       where number = ? and season is not null and episode is not null
+       group by season, episode`,
+      [key],
+    )
+    .filter((row) => !seen.has(`${row.season}-${row.episode}`))
+    .map((row) => ({
+      season: row.season,
+      episode: row.episode,
+      title: null,
+      airDate: null,
+      runtimeMin: null,
+      hasFile: true,
+      undeclared: true,
+    }));
+
+  return [...declared, ...extra].sort((a, b) => a.season - b.season || a.episode - b.episode);
+}
+
+/**
+ * 按"整部剧的绝对集号"把文件摊到各季。
+ *
+ * 国内资源站的合集常常是 `001集 … 165集` 这种**跨季连续编号**(成长的烦恼 7 季 166 集),
+ * 文件名里没有季号, 于是全落在第 1 季、且集号与声明的第 1 季对不上。
+ * 这里按播出顺序把第 i 个文件映射到声明的第 i 集 —— 只认 aired order, 不做别的排序。
+ */
+export function spreadAbsoluteEpisodes(
+  rt: Runtime,
+  options: { key: string; dir?: string },
+): { key: string; files: number; declared: number; mapped: number; unmapped: number; from: string; to: string } {
+  const key = options.key.toLowerCase();
+  const declared = rt.db.all<{ season: number; episode: number }>(
+    "select season, episode from episodes where number = ? order by season, episode",
+    [key],
+  );
+  if (declared.length === 0) {
+    throw new AppError("这个条目还没有声明的集列表, 先刮削一次", EXIT.NEEDS_INPUT, { key });
+  }
+
+  const where = ["number = ?", "episode is not null"];
+  const params: (string | number)[] = [key];
+  if (options.dir) {
+    where.push("path like ?");
+    params.push(`${options.dir.replace(/[\\/]+$/, "")}${sep}%`);
+  }
+  const files = rt.db.all<{ path: string; season: number | null; episode: number | null }>(
+    `select path, season, episode from media_files where ${where.join(" and ")} order by season, episode, path`,
+    params,
+  );
+  if (files.length === 0) throw new AppError("这个条目没有带集号的文件", EXIT.NOT_FOUND, { key });
+
+  const limit = Math.min(files.length, declared.length);
+  rt.db.exec("begin");
+  try {
+    for (let index = 0; index < limit; index++) {
+      const file = files[index]!;
+      const target = declared[index]!;
+      rt.db.run("update media_files set season = ?, episode = ? where path = ?", [
+        target.season,
+        target.episode,
+        file.path,
+      ]);
+    }
+    rt.db.exec("commit");
+  } catch (err) {
+    rt.db.exec("rollback");
+    throw err;
+  }
+
+  const first = declared[0]!;
+  const last = declared[limit - 1]!;
+  return {
+    key,
+    files: files.length,
+    declared: declared.length,
+    mapped: limit,
+    unmapped: Math.max(0, files.length - limit),
+    from: `S${first.season}E${first.episode}`,
+    to: `S${last.season}E${last.episode}`,
+  };
 }
 
 export interface ScrapeShowsResult {

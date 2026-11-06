@@ -23,7 +23,7 @@ describe("迁移", () => {
     const { db } = await openDb(dbFile);
     try {
       const version = migrate(db);
-      expect(version).toBe(12);
+      expect(version).toBe(13);
 
       const columns = db.all<{ name: string }>("pragma table_info(libraries)").map((row) => row.name);
       expect(columns).toContain("organize_enabled");
@@ -71,7 +71,7 @@ describe("迁移", () => {
       db.run("insert into libraries (name, root) values ('老库', '/old')");
       db.exec("pragma user_version = 3");
 
-      expect(migrate(db)).toBe(12);
+      expect(migrate(db)).toBe(13);
       const row = db.get<{ name: string; organize_enabled: number }>(
         "select name, organize_enabled from libraries",
       );
@@ -97,8 +97,8 @@ describe("迁移", () => {
     const { db } = await openDb(dbFile);
     try {
       migrate(db);
-      expect(migrate(db)).toBe(12);
-      expect(migrate(db)).toBe(12);
+      expect(migrate(db)).toBe(13);
+      expect(migrate(db)).toBe(13);
     } finally {
       db.close();
     }
@@ -168,7 +168,7 @@ describe("迁移", () => {
       db.run("insert into media_files (path, library_id, number, size, mtime_ms) values ('/old/a.mp4', 1, 'SSIS-915', 1, 1)");
       db.exec("pragma user_version = 8");
 
-      expect(migrate(db)).toBe(12);
+      expect(migrate(db)).toBe(13);
 
       // 域列: 老数据全部落在 av 域
       expect(db.get<{ domain: string }>("select domain from libraries")?.domain).toBe("av");

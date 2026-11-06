@@ -164,3 +164,56 @@ describe("批量找建议", () => {
     expect(task.status).toBe("cancelled");
   });
 });
+
+describe("声明集数不被文件污染", () => {
+  test("绑定目录不写 episodes; 声明集数只算来源给的集", async () => {
+    await mkdir(join(media, "某剧"), { recursive: true });
+    for (let i = 1; i <= 5; i++) await writeFile(join(media, "某剧", `某剧 - 第${i}集.mp4`), "x");
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    const { bindDirectory } = await import("../src/tasks/bind");
+    const { episodeStats } = await import("../src/tasks/scrape-show");
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:54" });
+
+    // 来源声明 3 集 (比如 TMDB 只给了 3 集)
+    rt.db.run("insert into episodes (number, season, episode, title, field_sources) values ('tmdb:tv:54', 1, 1, 'A', '{\"title\":\"tmdb\"}')");
+    rt.db.run("insert into episodes (number, season, episode, title, field_sources) values ('tmdb:tv:54', 1, 2, 'B', '{\"title\":\"tmdb\"}')");
+    rt.db.run("insert into episodes (number, season, episode, title, field_sources) values ('tmdb:tv:54', 1, 3, 'C', '{\"title\":\"tmdb\"}')");
+
+    const stats = episodeStats(rt, ["tmdb:tv:54"])["tmdb:tv:54"];
+    // 声明 = 3 (不是 5 个文件 + 3)
+    expect(stats?.declared).toBe(3);
+    expect(stats?.bound).toBe(5);
+  });
+
+  test("按绝对集号摊到各季: 165 集的文件分到 7 季", async () => {
+    await mkdir(join(media, "成长的烦恼"), { recursive: true });
+    for (let i = 1; i <= 6; i++) await writeFile(join(media, "成长的烦恼", `成长的烦恼 ${String(i).padStart(3, "0")}集.mp4`), "x");
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    const { bindDirectory } = await import("../src/tasks/bind");
+    const { spreadAbsoluteEpisodes } = await import("../src/tasks/scrape-show");
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "成长的烦恼"), key: "tmdb:tv:54" });
+
+    // 声明: S1 有 2 集, S2 有 4 集
+    for (const [season, episode] of [[1, 1], [1, 2], [2, 1], [2, 2], [2, 3], [2, 4]] as const) {
+      rt.db.run("insert into episodes (number, season, episode, title, field_sources) values ('tmdb:tv:54', ?, ?, 'X', '{}')", [season, episode]);
+    }
+
+    const result = spreadAbsoluteEpisodes(rt, { key: "tmdb:tv:54" });
+    expect(result.mapped).toBe(6);
+    expect(result.unmapped).toBe(0);
+
+    const files = rt.db.all<{ season: number; episode: number }>(
+      "select season, episode from media_files order by season, episode",
+    );
+    expect(files).toEqual([
+      { season: 1, episode: 1 },
+      { season: 1, episode: 2 },
+      { season: 2, episode: 1 },
+      { season: 2, episode: 2 },
+      { season: 2, episode: 3 },
+      { season: 2, episode: 4 },
+    ]);
+  });
+});

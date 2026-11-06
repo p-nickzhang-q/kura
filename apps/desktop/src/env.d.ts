@@ -57,6 +57,8 @@ interface KuraEpisode {
   airDate: string | null;
   runtimeMin: number | null;
   hasFile: boolean;
+  /** 盘上有这一集, 但来源的集列表里没有 → 集号可能对不上。 */
+  undeclared?: boolean;
 }
 
 /** 未识别页里"待绑定的目录" (一个目录 = 一部剧的候选)。 */
@@ -286,7 +288,8 @@ interface KuraBridge {
   ): Promise<{ key: string; dir: string; bound: number; episodes: number; stillUnparsed: string[] }>;
   itemEpisodes(key: string): Promise<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats }>;
   itemDirs(key: string): Promise<{ key: string; dirs: { dir: string; files: number; episodeFrom: number | null; episodeTo: number | null; season: number | null }[] }>;
-  setDirSeason(libraryId: number, dir: string, season: number, key?: string): Promise<{ files: number; season: number; episodesAdded: number }>;
+  setDirSeason(libraryId: number, dir: string, season: number, key?: string): Promise<{ files: number; season: number }>;
+  spreadSeasons(key: string, dir?: string): Promise<{ key: string; files: number; declared: number; mapped: number; unmapped: number; from: string; to: string }>;
   rebindItem(key: string, newKey: string): Promise<{ from: string; to: string; moved: number; scraped: { declared: number; bound: number; missing: number } | null }>;
   unbindItem(key: string): Promise<{ unbound: number }>;
   scrapeShow(key: string): Promise<{ key: string; ok: boolean; fields: string[]; episodes: number; declared: number; bound: number; missing: number; error?: string }>;

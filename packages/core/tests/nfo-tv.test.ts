@@ -115,9 +115,9 @@ describe("导出到磁盘", () => {
     bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧 (2019)"), key: "tmdb:tv:1399" });
 
     rt.db.run("update items set title = '示例剧名', title_original = 'Example', plot = '简介', studio = '示例台' where number = 'tmdb:tv:1399'");
-    // 绑定已经建过集行, 这里只补集名 (真实流程里来自刮削)
-    rt.db.run("update episodes set title = '第一集' where number = 'tmdb:tv:1399' and season = 1 and episode = 1");
-    rt.db.run("update episodes set title = '第二集' where number = 'tmdb:tv:1399' and season = 1 and episode = 2");
+    // 集行代表"来源声明的集"(真实流程里来自刮削), 绑定本身不再写这张表
+    rt.db.run("insert into episodes (number, season, episode, title) values ('tmdb:tv:1399', 1, 1, '第一集')");
+    rt.db.run("insert into episodes (number, season, episode, title) values ('tmdb:tv:1399', 1, 2, '第二集')");
     return { libraryId: library.id, showDir: join(media, "某剧 (2019)") };
   }
 

@@ -79,7 +79,9 @@ describe("目录级绑定", () => {
     const result = bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1399" });
     expect(result.key).toBe("tmdb:tv:1399");
     expect(result.bound).toBe(12);
-    expect(result.episodes).toBe(12);
+    // 绑定只动 media_files: episodes 是"来源声明的集", 不由文件生成
+    expect(result.episodes).toBe(0);
+    expect(rt.db.get<{ n: number }>("select count(*) as n from episodes")?.n).toBe(0);
     expect(result.stillUnparsed).toEqual([]);
 
     const item = rt.db.get<{ number: string; domain: string; content_type: string }>(
@@ -90,11 +92,11 @@ describe("目录级绑定", () => {
     // 影视条目没有内容类型 (列是 NOT NULL, 用空串)
     expect(item?.content_type).toBe("");
 
-    const episodes = rt.db.all<{ season: number; episode: number }>(
-      "select season, episode from episodes where number = 'tmdb:tv:1399' order by episode",
+    const files2 = rt.db.all<{ season: number; episode: number }>(
+      "select season, episode from media_files where number = 'tmdb:tv:1399' order by episode",
     );
-    expect(episodes).toHaveLength(12);
-    expect(episodes[11]).toEqual({ season: 1, episode: 12 });
+    expect(files2).toHaveLength(12);
+    expect(files2[11]).toEqual({ season: 1, episode: 12 });
 
     // 绑完就不再是"未识别"
     expect(listFiles(rt, { libraryId: library.id, unparsedOnly: true })).toHaveLength(0);
@@ -125,7 +127,6 @@ describe("目录级绑定", () => {
 
     const result = bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:7" });
     expect(result.bound).toBe(2);
-    expect(result.episodes).toBe(1);
     expect(result.stillUnparsed).toHaveLength(1);
     // 文件有了身份(不再进未识别), 但没有集号
     const files = listFiles(rt, { libraryId: library.id });
@@ -214,10 +215,10 @@ describe("手工补集号", () => {
     const result = setFileEpisode(rt, { path: target, season: 1, episode: 2 });
     expect(result.number).toBe("tmdb:tv:9");
 
-    const episodes = rt.db.all<{ episode: number }>(
-      "select episode from episodes where number = 'tmdb:tv:9' order by episode",
+    const files = rt.db.all<{ episode: number }>(
+      "select episode from media_files where number = 'tmdb:tv:9' and episode is not null order by episode",
     );
-    expect(episodes.map((row) => row.episode)).toEqual([1, 2]);
+    expect(files.map((row) => row.episode)).toEqual([1, 2]);
   });
 
   test("文件不在索引里报 NOT_FOUND", () => {
@@ -243,14 +244,12 @@ describe("改绑", () => {
 
     const result = rebindItem(rt, { key: "tmdb:tv:1", newKey: "tmdb:tv:2" });
     expect(result.moved).toBe(2);
-    expect(result.bound?.episodes).toBe(2);
 
     // 旧条目与它的集没了
     expect(rt.db.get<{ c: number }>("select count(*) c from items where number = 'tmdb:tv:1'")?.c).toBe(0);
-    expect(rt.db.get<{ c: number }>("select count(*) c from episodes where number = 'tmdb:tv:1'")?.c).toBe(0);
-    // 新条目接住了文件与集
+    // 新条目接住了文件
     expect(rt.db.get<{ c: number }>("select count(*) c from items where number = 'tmdb:tv:2'")?.c).toBe(1);
-    expect(rt.db.get<{ c: number }>("select count(*) c from episodes where number = 'tmdb:tv:2'")?.c).toBe(2);
+    expect(rt.db.get<{ c: number }>("select count(*) c from media_files where number = 'tmdb:tv:2'")?.c).toBe(2);
     const numbers = rt.db.all<{ number: string }>("select number from media_files");
     expect(numbers.every((row) => row.number === "tmdb:tv:2")).toBe(true);
   });
@@ -310,8 +309,8 @@ describe("同一部剧拆成多个目录", () => {
     expect(result.files).toBe(2);
     expect(result.season).toBe(2);
     expect(rt.db.get<{ n: number }>("select count(*) as n from media_files where season = 2")?.n).toBe(2);
-    // 集行跟着补出来
-    expect(rt.db.get<{ n: number }>("select count(*) as n from episodes where number = 'tmdb:tv:7' and season = 2")?.n).toBe(2);
+    // 声明集(episodes)不受改季影响 —— 它只装来源给的集列表
+    expect(rt.db.get<{ n: number }>("select count(*) as n from episodes")?.n).toBe(0);
   });
 
   test("listItemDirs: 列出这个条目的来源文件夹", async () => {

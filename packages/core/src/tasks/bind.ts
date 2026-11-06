@@ -317,13 +317,8 @@ export function bindDirectory(
       ]);
     }
 
-    for (const entry of episodes) {
-      rt.db.run("insert or ignore into episodes (number, season, episode) values (?, ?, ?)", [
-        key,
-        entry.season,
-        entry.episode,
-      ]);
-    }
+    // 这里**不写** episodes: 那张表是"来源声明的集", 不是"盘上有哪些集"。
+    // 混着写会让声明集数虚高(成长的烦恼: 真声明 166, 加上 165 个文件行变成 310)。
 
     rt.db.run("update items set updated_at = unixepoch() where number = ?", [key]);
     rt.db.exec("commit");
@@ -436,7 +431,7 @@ export function listItemDirs(rt: Runtime, key: string): ItemDir[] {
 export function setDirectorySeason(
   rt: Runtime,
   options: { dir: string; season: number; key?: string; libraryId?: number },
-): { files: number; season: number; episodesAdded: number } {
+): { files: number; season: number } {
   if (!Number.isInteger(options.season) || options.season < 0) {
     throw new AppError(`季号必须是非负整数: ${options.season}`, EXIT.USAGE, { season: options.season });
   }
@@ -462,32 +457,18 @@ export function setDirectorySeason(
   }
 
   rt.db.exec("begin");
-  let episodesAdded = 0;
   try {
     rt.db.run(
       `update media_files set season = ? where ${where.join(" and ")}`,
       [options.season, ...params],
     );
-    const seen = new Set<string>();
-    for (const file of files) {
-      if (file.episode === null) continue;
-      const dedupe = `${file.number}|${options.season}|${file.episode}`;
-      if (seen.has(dedupe)) continue;
-      seen.add(dedupe);
-      // 集行对齐到新季号: 不建的话"盘上几集"会一直是 0
-      rt.db.run("insert or ignore into episodes (number, season, episode) values (?, ?, ?)", [
-        file.number,
-        options.season,
-        file.episode,
-      ]);
-      episodesAdded++;
-    }
+    // 同样不写 episodes —— 那是声明集。改季只动文件。
     rt.db.exec("commit");
   } catch (err) {
     rt.db.exec("rollback");
     throw err;
   }
-  return { files: files.length, season: options.season, episodesAdded };
+  return { files: files.length, season: options.season };
 }
 
 /** 解绑: 把这个目录下的文件退回未识别。集行跟着条目走, 条目没人指向时一并删掉。 */

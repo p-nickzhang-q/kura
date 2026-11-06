@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld("kura", {
   bindDir: (libraryId, dir, key, paths, season) =>
     ipcRenderer.invoke("file:bind", { libraryId, dir, key, ...(paths ? { paths } : {}), ...(season === undefined ? {} : { season }) }),
   itemDirs: (key) => ipcRenderer.invoke("item:dirs", { key }),
+  spreadSeasons: (key, dir) => ipcRenderer.invoke("item:spread-seasons", { key, ...(dir ? { dir } : {}) }),
   setDirSeason: (libraryId, dir, season, key) =>
     ipcRenderer.invoke("file:set-season", { libraryId, dir, season, ...(key ? { key } : {}) }),
   itemEpisodes: (key) => ipcRenderer.invoke("item:episodes", { key }),
