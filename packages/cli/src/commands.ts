@@ -320,7 +320,14 @@ export const COMMANDS: Command[] = [
     render(data: {
       libraries?: { name: string; root: string; template: string; organizeEnabled?: boolean }[];
       library?: { name: string; root: string; template: string; organizeEnabled?: boolean };
+      removedFiles?: number;
+      orphanItems?: number;
     }) {
+      // remove 动作返回的是 {removedFiles, orphanItems}, 不是 library —— 以前会走到底部
+      // 那句"还没有媒体库", 看着像整库都没了一样。
+      if (typeof data.removedFiles === "number") {
+        return `已删除媒体库 (磁盘上的文件一个都没动)\n  清掉索引 ${data.removedFiles} 个文件${data.orphanItems ? `\n  保留 ${data.orphanItems} 个条目 (条目跨库, 元数据没删)` : ""}`;
+      }
       if (data.library) {
         const mode = data.library.organizeEnabled === false ? "只索引 (不整理)" : "允许整理";
         return `${data.library.name} → ${data.library.root}\n  模板: ${data.library.template}\n  模式: ${mode}`;
@@ -893,10 +900,22 @@ export const COMMANDS: Command[] = [
       });
       return { count: files.length, files };
     },
-    render(data: { count?: number; number?: string; files: { path: string; number?: string | null }[] }) {
-      if (data.number) {
-        return data.files.map((file) => file.path).join("\n");
+    render(data: {
+      count?: number;
+      number?: string;
+      files?: { path: string; number?: string | null }[];
+      result?: Record<string, unknown>;
+    }) {
+      // bind / unbind / set-season / set-episode / clear-episode 返回的是 {result},
+      // 这里曾经直接读 data.files.map —— 单条动作成功后照样崩在渲染上
+      // (报 "undefined is not an object (evaluating 'Z.files.map')", 看着像命令失败了)。
+      if (data.result) {
+        return Object.entries(data.result)
+          .map(([field, value]) => `${field}: ${Array.isArray(value) ? value.join(", ") : String(value ?? "")}`)
+          .join("\n");
       }
+      if (!data.files) return "完成。";
+      if (data.number) return data.files.map((file) => file.path).join("\n");
       if (data.count === 0) return "没有匹配的文件。";
       return data.files
         .map((file) => `${(file.number ?? "(未识别)").padEnd(14)} ${file.path}`)
