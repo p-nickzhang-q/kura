@@ -192,3 +192,66 @@ describe("名字规则", () => {
     expect(episodeBaseName("成长的烦恼", 7, 165)).toBe("成长的烦恼 - S07E165");
   });
 });
+
+describe("搬空的源目录", () => {
+  test("空目录被清掉, 还有文件的不动", async () => {
+    // 仁医 / 仁医2 两个目录被搬空 → 都该删; 仁医里放一个认不出的文件 → 留着
+    await touch(join(media, "仁医", "仁医 - 第1集.mp4"));
+    await touch(join(media, "仁医2", "仁医2 - 第2集.mp4"));
+    await touch(join(media, "某剧", "某剧 - 第1集.mp4"));
+    await touch(join(media, "某剧", "某剧 幕后花絮.mkv"));
+
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "仁医"), key: "tmdb:tv:1" });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "仁医2"), key: "tmdb:tv:2" });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:3" });
+    rt.db.run("update items set title = '仁医', release_date = '2009-10-11' where number = 'tmdb:tv:1'");
+    rt.db.run("update items set title = '仁医二', release_date = '2011-04-17' where number = 'tmdb:tv:2'");
+    rt.db.run("update items set title = '某剧', release_date = '2020-01-01' where number = 'tmdb:tv:3'");
+    // 花絮有身份但认不出集号 → 留在源目录, 目录因此不能删
+    rt.db.run("update media_files set number = 'tmdb:tv:3' where path like '%花絮%'");
+
+    const report = await organizeVideo(rt, { library, apply: true });
+    const left = await readdir(media);
+
+    expect(left).not.toContain("仁医");
+    expect(left).not.toContain("仁医2");
+    expect(left).toContain("某剧");
+    expect(await readdir(join(media, "某剧"))).toEqual(["某剧 幕后花絮.mkv"]);
+    expect(report.removedDirs?.length).toBe(2);
+    expect(report.leftoverDirs?.some((item) => item.dir.endsWith("某剧"))).toBe(true);
+    // 提醒里说清楚为什么没删
+    expect(report.warnings.some((warning) => warning.includes("目录没删"))).toBe(true);
+  });
+
+  test("干跑不删任何目录", async () => {
+    await touch(join(media, "某剧", "某剧 - 第1集.mp4"));
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:9" });
+    rt.db.run("update items set title = '某剧' where number = 'tmdb:tv:9'");
+
+    const report = await organizeVideo(rt, { library });
+    expect(report.applied).toBeNull();
+    expect(await readdir(media)).toContain("某剧");
+  });
+});
+
+
+describe("目标目录就是源目录时", () => {
+  test("没有年份 → 目录名相同, 不该把它当成'搬空的旧目录'", async () => {
+    await touch(join(media, "无年份剧", "无年份剧 - 第1集.mp4"));
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "无年份剧"), key: "tmdb:tv:7" });
+    rt.db.run("update items set title = '无年份剧' where number = 'tmdb:tv:7'");
+
+    const report = await organizeVideo(rt, { library, apply: true });
+    // 文件搬进 无年份剧/Season 01/, 目录本身留着(它是新结构)
+    expect(await readdir(join(media, "无年份剧"))).toContain("Season 01");
+    expect(report.removedDirs ?? []).toEqual([]);
+    // 也不该冒出"目录没删"的提醒
+    expect(report.warnings.some((warning) => warning.includes("目录没删"))).toBe(false);
+  });
+});

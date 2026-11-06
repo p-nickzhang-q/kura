@@ -1,3 +1,4 @@
+import { readdir, rmdir } from "node:fs/promises";
 import { copyFile, mkdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { CONTENT_TYPE_LABEL, type FileInfo, type LibraryDomain, type Metadata } from "./types";
@@ -255,4 +256,57 @@ async function moveFile(from: string, to: string): Promise<void> {
     await copyFile(from, to);
     await unlink(from);
   }
+}
+
+export interface PruneResult {
+  /** 真的删掉的空目录 (由深到浅)。 */
+  removed: string[];
+  /** 原本要删、但里面还有东西的目录, 附上前几个文件名 —— 让人知道该不该自己清。 */
+  leftover: { dir: string; files: string[] }[];
+}
+
+/**
+ * 整理之后清掉被搬空的源目录。
+ *
+ * 只删**空目录**: `rmdir` 对非空目录会失败, 这里正好把它当成安全阀 —— 旧的 nfo、
+ * 海报、字幕、认不出集号的文件都会让目录留下来。整理只负责把影片搬到新结构,
+ * 不该顺手删掉用户自己的东西。
+ *
+ * 会一路往上清到库根(不含), 所以 `PPTV/仁医/` 空了之后, 只剩 `PPTV` 也会一起清掉。
+ * 所有路径都必须在库根内 —— 模板被改坏时宁可什么都不删。
+ */
+export async function pruneEmptyDirs(roots: string[], dirs: string[]): Promise<PruneResult> {
+  const result: PruneResult = { removed: [], leftover: [] };
+  const normalizedRoots = roots.map((root) => resolve(root));
+  const inside = (path: string): boolean =>
+    normalizedRoots.some((root) => path.startsWith(`${root}${sep}`) && path !== root);
+
+  // 由深到浅: 先清最里层, 清了才有机会清掉父目录
+  const queue = new Set<string>();
+  for (const dir of dirs) {
+    let current = resolve(dir);
+    while (inside(current)) {
+      queue.add(current);
+      current = dirname(current);
+    }
+  }
+  const ordered = [...queue].sort((a, b) => b.split(sep).length - a.split(sep).length);
+
+  for (const dir of ordered) {
+    try {
+      await rmdir(dir);
+      result.removed.push(dir);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") continue; // 已经被父目录的清理带走, 或本来就不在
+      // ENOTEMPTY / EEXIST / EBUSY: 里面还有东西, 报给人看, 不删
+      try {
+        const files = await readdir(dir);
+        result.leftover.push({ dir, files: files.slice(0, 5) });
+      } catch {
+        result.leftover.push({ dir, files: [] });
+      }
+    }
+  }
+  return result;
 }

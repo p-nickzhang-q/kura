@@ -1362,7 +1362,11 @@ async function apply(): Promise<void> {
     plan.value = report.plan;
     planWarnings.value = report.warnings ?? [];
     const failed = (report.applied ?? []).filter((result) => !result.ok);
-    note.value = `已整理, 失败 ${failed.length} 项`;
+    const pruned = report.removedDirs?.length ?? 0;
+    const leftover = report.leftoverDirs?.length ?? 0;
+    note.value = `已整理, 失败 ${failed.length} 项${pruned ? ` · 清理了 ${pruned} 个空目录` : ""}${
+      leftover ? ` · ${leftover} 个旧目录里还有文件, 没删` : ""
+    }`;
     confirmApply.value = false;
     await refreshAll();
   }

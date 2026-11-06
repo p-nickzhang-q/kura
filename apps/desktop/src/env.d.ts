@@ -183,6 +183,10 @@ interface KuraOrganizeReport {
   reason?: string;
   /** 影视库整理的人话提醒: 认不出集号、抢同一目标、没有缓存海报… */
   warnings?: string[];
+  /** 搬空之后删掉的源目录。 */
+  removedDirs?: string[];
+  /** 源目录里还有东西、所以没删的。 */
+  leftoverDirs?: { dir: string; files: string[] }[];
 }
 
 interface KuraScrapeBatch {

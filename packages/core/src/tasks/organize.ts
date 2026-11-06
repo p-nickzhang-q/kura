@@ -1,5 +1,6 @@
-import { buildPlan, applyPlan, type ApplyResult, type Library, type Plan, type PlanInput } from "../domain/materialize";
+import { buildPlan, applyPlan, pruneEmptyDirs, type ApplyResult, type Library, type Plan, type PlanInput } from "../domain/materialize";
 import type { Metadata } from "../domain/types";
+import { dirname, sep } from "node:path";
 import { parsePhase, rowToMetadata, type ItemRow } from "../db/rows";
 import type { Runtime } from "../runtime";
 import { cachedPoster, cachedThumb, findSidecarImages } from "./resources";
@@ -16,6 +17,10 @@ export interface OrganizeReport {
   /** 该库被设为"只索引不整理", 本次什么都没算也没动。 */
   skipped?: boolean;
   reason?: string;
+  /** 搬空之后删掉的源目录。 */
+  removedDirs?: string[];
+  /** 源目录里还有东西(nfo/图片/字幕)、所以没删的。 */
+  leftoverDirs?: { dir: string; files: string[] }[];
 }
 
 /**
@@ -84,5 +89,15 @@ export async function organize(rt: Runtime, opts: OrganizeOptions): Promise<Orga
     }
   }
 
-  return { plan, applied };
+  if (!applied) return { plan, applied };
+
+  // 搬空的源目录顺手清掉 —— 只删空目录, 还有东西的一律留着并报出来
+  const targets = plan.entries.filter((entry) => entry.action !== "skip" && entry.to).map((entry) => entry.to!);
+  const sources = applied
+    .filter((result) => result.ok && result.entry.action === "move" && result.entry.from)
+    .map((result) => dirname(result.entry.from!))
+    // 目标目录可能就是源目录本身: 那是新结构, 不是"搬空的旧目录"
+    .filter((dir) => !targets.some((target) => target === dir || target.startsWith(`${dir}${sep}`)));
+  const prune = await pruneEmptyDirs([opts.library.root], sources);
+  return { plan, applied, removedDirs: prune.removed, leftoverDirs: prune.leftover };
 }

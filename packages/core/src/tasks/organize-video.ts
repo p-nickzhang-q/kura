@@ -1,6 +1,7 @@
-import { extname, join, resolve, sep } from "node:path";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import {
   applyPlan,
+  pruneEmptyDirs,
   sanitizeName,
   targetState,
   type ApplyResult,
@@ -44,6 +45,10 @@ export interface VideoOrganizeReport {
   reason?: string;
   /** 人话提醒: 认不出集号的、抢同一目标的、源目录会留下的东西。 */
   warnings: string[];
+  /** 搬空之后删掉的源目录。 */
+  removedDirs?: string[];
+  /** 源目录里还有东西、所以没删的 (旧的 nfo/图片/字幕/认不出集号的文件)。 */
+  leftoverDirs?: { dir: string; files: string[] }[];
 }
 
 export interface VideoOrganizeOptions {
@@ -275,6 +280,7 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
   const plan: Plan = { libraryId: opts.library.id, libraryRoot: root, entries, summary };
   const applied = apply ? await applyPlan(plan) : null;
 
+  let prune: { removed: string[]; leftover: { dir: string; files: string[] }[] } | null = null;
   if (applied) {
     // 搬完立刻改索引: 否则下次扫描会把同一文件当成 "旧路径消失 + 新路径出现"。
     rt.db.exec("begin");
@@ -291,7 +297,27 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
     }
   }
 
-  return { plan, applied, warnings };
+  if (applied) {
+    // 目标目录可能就是源目录本身(没有年份时 `仁医` → `仁医`): 那是新结构, 不能当成"搬空的旧目录"
+    const targets = plan.entries
+      .filter((entry) => entry.action !== "skip" && entry.to)
+      .map((entry) => entry.to!);
+    const sources = applied
+      .filter((result) => result.ok && result.entry.action === "move" && result.entry.from)
+      .map((result) => dirname(result.entry.from!))
+      .filter((dir) => !targets.some((target) => target === dir || target.startsWith(`${dir}${sep}`)));
+    prune = await pruneEmptyDirs([root], sources);
+    for (const item of prune.leftover.slice(0, 10)) {
+      warnings.push(`${item.dir}: 还有 ${item.files.length} 个文件 (${item.files.join("、")}), 目录没删`);
+    }
+  }
+
+  return {
+    plan,
+    applied,
+    warnings,
+    ...(prune ? { removedDirs: prune.removed, leftoverDirs: prune.leftover } : {}),
+  };
 }
 
 function skipReason(state: "same" | "occupied" | "unknown"): string {
