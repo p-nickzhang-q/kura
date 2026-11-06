@@ -221,13 +221,15 @@ const bindDialog = ref<{
   /** rebind 模式下的标题(条目当前名)。 */
   label?: string;
   /** 强制季号(同一部剧拆成多个目录时用): 空 = 按文件名/目录自动。 */
-  season: string;
+  season: string | number;
 } | null>(null);
 
 /** 已绑定条目的来源文件夹 (同一部剧可能来自多个目录)。 */
 const itemDirs = ref<{ dir: string; files: number; episodeFrom: number | null; episodeTo: number | null; season: number | null }[]>([]);
 /** 每行"改成第 N 季"的输入值。 */
-const seasonDraft = ref<Record<string, string>>({});
+// 注意: `<input type="number">` 上的 v-model 会被 Vue 转成 number(looseToNumber),
+// 所以这里可能是 string, 也可能是 number —— 一律用 numberDraft() 读, 别直接 .trim()
+const seasonDraft = ref<Record<string, string | number>>({});
 /** 待绑定目录的搜索建议 (dir → 建议)。批量找建议的结果, 不是决定。 */
 const suggestions = ref<Record<string, KuraBindingSuggestion>>({});
 /** 勾选要绑的建议 (dir 列表)。 */
@@ -437,8 +439,7 @@ async function loadEpisodes(key: string, domain: string | undefined): Promise<vo
 /** 把某个来源目录整体改成第 N 季。 */
 async function applyDirSeason(dir: string): Promise<void> {
   if (selectedId.value === null || !detail.value) return;
-  const raw = (seasonDraft.value[dir] ?? "").trim();
-  const season = Number(raw);
+  const season = Number(numberDraft(seasonDraft.value[dir]));
   if (!Number.isInteger(season) || season < 0) {
     errors.value.push("季号要填非负整数");
     return;
@@ -559,6 +560,12 @@ async function unbindCurrent(): Promise<void> {
   }
 }
 
+/** 读数字输入框: v-model 可能给 string 也可能给 number(number 输入框)。 */
+function numberDraft(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
 /** 打开绑定面板: 预填建议里的搜索词(已剥掉年份/发布标记), 没有就用候选名。 */
 function openBindDialog(dir: KuraBindableDir): void {
   bindDialog.value = {
@@ -616,7 +623,8 @@ async function bindDir(hit: KuraTmdbHit): Promise<void> {
   dialog.busy = true;
   try {
     // paths 来自 Vue 的响应式对象, 直接传会抛 "An object could not be cloned"
-    const season = dialog.season.trim() === "" ? undefined : Number(dialog.season);
+    const seasonText = numberDraft(dialog.season);
+    const season = seasonText === "" ? undefined : Number(seasonText);
     const result = await window.kura.bindDir(
       selectedId.value,
       candidate.dir,
