@@ -62,6 +62,7 @@ export async function suggestBindings(rt: Runtime, options: SuggestOptions): Pro
       files: dir.files,
       parsed: dir.parsed,
       kind: dir.kind,
+      paths: dir.paths,
       query: guess.title,
       year: guess.year,
       hit: null,

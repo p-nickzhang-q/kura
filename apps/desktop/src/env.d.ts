@@ -80,6 +80,7 @@ interface KuraBindingSuggestion {
   files: number;
   parsed: number;
   kind: "tv" | "movie" | "unknown";
+  paths: string[];
   query: string;
   year: string | null;
   hit: { key: string; title: string; year: string | null; id: number } | null;

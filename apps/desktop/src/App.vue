@@ -165,6 +165,17 @@ const taskPercent = computed(() =>
   taskProgress.value ? Math.min(100, Math.round((taskProgress.value.index / taskProgress.value.total) * 100)) : 0,
 );
 const searchDraft = ref("");
+/**
+ * 传给 IPC 的数组一律过这里。
+ *
+ * Vue 的响应式数组是 Proxy, `ipcRenderer.invoke` 的结构化克隆克隆不了它 ——
+ * 报错是难懂的 "An object could not be cloned"。这个坑踩过三次(nfo 番号、翻译选中、绑定),
+ * 所以留一个显式函数, 让"要转普通值"这件事在调用处看得见。
+ */
+function plainArray<T>(values: readonly T[] | undefined): T[] {
+  return values ? [...values] : [];
+}
+
 /** 刷新请求的序号, 用来丢弃乱序返回的旧结果。 */
 let refreshSeq = 0;
 /** 遮罩里的大图地址; null = 没在放大。 */
@@ -454,7 +465,7 @@ async function bindPicked(): Promise<void> {
   const items = suggestPicked.value
     .map((dir) => suggestions.value[dir])
     .filter((item): item is KuraBindingSuggestion => Boolean(item?.hit))
-    .map((item) => ({ dir: item.dir, key: item.hit!.key }));
+    .map((item) => ({ dir: item.dir, key: item.hit!.key, paths: plainArray(item.paths) }));
   if (items.length === 0) return;
 
   suggestBusy.value = true;
@@ -509,7 +520,8 @@ async function bindDir(hit: KuraTmdbHit): Promise<void> {
   if (!dialog || selectedId.value === null) return;
   dialog.busy = true;
   try {
-    const result = await window.kura.bindDir(selectedId.value, dialog.dir.dir, hit.key, dialog.dir.paths);
+    // paths 来自 Vue 的响应式对象, 直接传会抛 "An object could not be cloned"
+    const result = await window.kura.bindDir(selectedId.value, dialog.dir.dir, hit.key, plainArray(dialog.dir.paths));
     const scraped = (result as { scraped?: { declared: number; bound: number; missing: number } | null }).scraped;
     note.value = scraped
       ? `已绑定「${hit.title}」: ${result.bound} 个文件 · ${result.episodes} 集 · 缺 ${scraped.missing} 集${

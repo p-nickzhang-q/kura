@@ -183,6 +183,8 @@ export interface BindingSuggestion {
   files: number;
   parsed: number;
   kind: "tv" | "movie" | "unknown";
+  /** 绑定时会动到的文件 (电影候选就一个)。 */
+  paths: string[];
   /** 实际发出去的搜索词 (剥掉了年份/发布标记)。 */
   query: string;
   year: string | null;
