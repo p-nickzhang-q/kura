@@ -668,7 +668,15 @@ async function reveal(path: string): Promise<void> {
   await window.kura.revealFile(path);
 }
 
-/** 详情里打开"这一部在磁盘上的位置"。库里没登记文件时给个明确的说法。 */
+/** 详情页"打开位置"的候选文件夹(一个条目可能横跨多个目录)。 */
+const revealDirs = ref<{ dir: string; files: number }[] | null>(null);
+
+/**
+ * 详情里打开"这一部在磁盘上的位置"。
+ *
+ * 一个条目可能横跨多个目录(仁医 / 仁医2 是两个季), 这时**不能默默打开第一个** ——
+ * 用户点的可能是第二季的文件。多个目录时先弹出清单让人选。
+ */
 async function revealItem(): Promise<void> {
   const key = detail.value?.key;
   if (!key) return;
@@ -677,7 +685,22 @@ async function revealItem(): Promise<void> {
     note.value = `${key} 还没有登记到任何文件`;
     return;
   }
-  await reveal(files[0]!.path);
+  const dirs = new Map<string, number>();
+  for (const file of files) {
+    const dir = file.path.slice(0, Math.max(file.path.lastIndexOf("/"), file.path.lastIndexOf("\\")));
+    dirs.set(dir, (dirs.get(dir) ?? 0) + 1);
+  }
+  if (dirs.size === 1) {
+    revealDirs.value = null;
+    await reveal(files[0]!.path);
+    return;
+  }
+  revealDirs.value = [...dirs.entries()].map(([dir, count]) => ({ dir, files: count }));
+}
+
+async function revealDir(dir: string): Promise<void> {
+  revealDirs.value = null;
+  await reveal(dir);
 }
 
 async function refreshItems(): Promise<void> {
@@ -1814,6 +1837,15 @@ async function testDmm(): Promise<void> {
                 <button type="button" class="chip" title="在资源管理器里打开这个文件" @click="revealItem">
                   打开位置
                 </button>
+                <!-- 多个目录时列出来让人自己选: 第一季和第二季在不同的文件夹里 -->
+                <div v-if="revealDirs" class="reveal-menu" role="menu">
+                  <p class="muted">这一部在 {{ revealDirs.length }} 个文件夹里:</p>
+                  <button v-for="entry in revealDirs" :key="entry.dir" type="button" role="menuitem" @click="revealDir(entry.dir)">
+                    <strong class="mono">{{ entry.dir }}</strong>
+                    <small class="muted">{{ entry.files }} 个文件</small>
+                  </button>
+                  <button type="button" class="ghost" @click="revealDirs = null">取消</button>
+                </div>
                 <button class="ghost" type="button" aria-label="关闭详情" title="关闭详情" @click="detail = null">×</button>
               </header>
               <!-- 类型决定刮削路由与整理目录, 所以做成显式可改: 判错时人得能修。
@@ -1930,6 +1962,7 @@ async function testDmm(): Promise<void> {
                       :aria-label="`把 ${dir.dir} 改成第几季`"
                     />
                     <button type="button" :disabled="!seasonDraft[dir.dir]" @click="applyDirSeason(dir.dir)">改季</button>
+                    <button type="button" @click="reveal(dir.dir)">打开</button>
                   </div>
                   <p class="muted hint">
                     两个文件夹都指向同一部剧时（例如第一季和第二季），把其中一个改成第 2 季，否则两季的集号会撞在第一季上。
@@ -3502,6 +3535,50 @@ td.suggest-cell {
   padding: 8px 12px;
 }
 
+.reveal-menu {
+  position: absolute;
+  top: 44px;
+  right: 8px;
+  z-index: 30;
+  display: grid;
+  gap: 4px;
+  max-width: 420px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 40%);
+}
+
+.reveal-menu p {
+  margin: 0 0 4px;
+  font-size: var(--fs-label);
+}
+
+.reveal-menu button {
+  display: grid;
+  gap: 2px;
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.reveal-menu button:hover {
+  border-color: var(--line-strong);
+  background: var(--panel-3);
+}
+
+.reveal-menu strong {
+  font-size: var(--fs-label);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
 .item-dirs {
   margin-bottom: 8px;
 }
@@ -4107,9 +4184,11 @@ td.pick {
 }
 
 .detail header {
+  position: relative;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   margin-bottom: 8px;
 }
 
