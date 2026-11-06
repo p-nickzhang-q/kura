@@ -64,14 +64,15 @@ export function renderTemplate(template: string, metadata: Metadata, phase?: Fil
   };
 
   return template
-    .replace(/\{(\w+)\}/g, (_, key: string) => sanitize(values[key] ?? ""))
+    .replace(/\{(\w+)\}/g, (_, key: string) => sanitizeName(values[key] ?? ""))
     .split("/")
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0 && segment !== ".")
     .join(sep);
 }
 
-function sanitize(value: string): string {
+/** 文件名/目录名消毒。导出给影视域的整理复用 —— 两处规则必须一样。 */
+export function sanitizeName(value: string): string {
   return value
     .replace(ILLEGAL, " ")
     .replace(/\s+/g, " ")

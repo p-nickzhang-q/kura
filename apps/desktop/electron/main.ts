@@ -60,6 +60,7 @@ import {
   openRuntime,
   resolvePaths,
   organize,
+  organizeVideo,
   pendingKeys,
   bindDirectory,
   rebindItem,
@@ -1130,12 +1131,21 @@ function registerIpc(): void {
     }
   });
 
-  ipcMain.handle("organize:preview", (_event, input: { libraryId: number }) =>
-    organize(mustRuntime(), { library: mustLibrary(input.libraryId) }),
-  );
+  // 影视库是另一套形状(剧目录 / Season 目录 / SxxEyy 文件名), 不走模板
+  ipcMain.handle("organize:preview", (_event, input: { libraryId: number }) => {
+    const library = mustLibrary(input.libraryId);
+    return library.domain === "av"
+      ? organize(mustRuntime(), { library })
+      : organizeVideo(mustRuntime(), { library });
+  });
 
   ipcMain.handle("organize:apply", (_event, input: { libraryId: number }) =>
-    exclusive("整理", () => organize(mustRuntime(), { library: mustLibrary(input.libraryId), apply: true })),
+    exclusive("整理", () => {
+      const library = mustLibrary(input.libraryId);
+      return library.domain === "av"
+        ? organize(mustRuntime(), { library, apply: true })
+        : organizeVideo(mustRuntime(), { library, apply: true });
+    }),
   );
 }
 

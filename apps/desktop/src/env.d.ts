@@ -163,7 +163,7 @@ interface KuraItem {
 }
 
 interface KuraPlanEntry {
-  action: "move" | "write-nfo" | "skip";
+  action: "move" | "write-nfo" | "copy-image" | "skip";
   from?: string;
   to?: string;
   reason?: string;
@@ -179,6 +179,10 @@ interface KuraPlan {
 interface KuraOrganizeReport {
   plan: KuraPlan;
   applied: { ok: boolean; error?: string }[] | null;
+  skipped?: boolean;
+  reason?: string;
+  /** 影视库整理的人话提醒: 认不出集号、抢同一目标、没有缓存海报… */
+  warnings?: string[];
 }
 
 interface KuraScrapeBatch {

@@ -60,6 +60,8 @@ const errors = ref<string[]>([]);
 const error = ref<string | null>(null);
 const note = ref<string | null>(null);
 const plan = ref<KuraPlan | null>(null);
+/** 整理计划的人话提醒(认不出集号、没有缓存海报…)。 */
+const planWarnings = ref<string[]>([]);
 const events = ref<KuraScanEvent[]>([]);
 const confirmApply = ref(false);
 
@@ -1336,6 +1338,7 @@ async function preview(): Promise<void> {
   const report = await run("生成计划", () => window.kura.organizePreview(selectedId.value!));
   if (report) {
     plan.value = report.plan;
+    planWarnings.value = report.warnings ?? [];
     tab.value = "plan";
     confirmApply.value = false;
   }
@@ -1346,6 +1349,7 @@ async function apply(): Promise<void> {
   const report = await run("整理", () => window.kura.organizeApply(selectedId.value!));
   if (report) {
     plan.value = report.plan;
+    planWarnings.value = report.warnings ?? [];
     const failed = (report.applied ?? []).filter((result) => !result.ok);
     note.value = `已整理, 失败 ${failed.length} 项`;
     confirmApply.value = false;
@@ -2220,6 +2224,7 @@ async function testDmm(): Promise<void> {
               {{ plan.summary.skip }}
               <span class="muted">(库根 {{ plan.libraryRoot }})</span>
             </p>
+            <p v-for="warning in planWarnings" :key="warning" class="warn">{{ warning }}</p>
             <ul class="plan">
               <li v-for="(entry, index) in plan.entries.slice(0, 200)" :key="index" :data-action="entry.action">
                 <span class="tag">{{ entry.action }}</span>
