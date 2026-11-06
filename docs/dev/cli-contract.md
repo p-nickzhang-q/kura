@@ -161,3 +161,5 @@ kura library list                                    # 每行带 domain 与模�
 - **一个文件只属于一个库**（`media_files.path` 是主键）：同一个根下建两个库做不到，也没必要 —— 想分开就把目录分开建两个 `video` 库。
 - 默认模板按域给：`av` → `{content_type}/{studio}/{number}`，`video` → `{series}`（剧集的 `Season {nn}` 留到 v2 的 organize 一并处理）。
 - `scan` / `scrape` / `organize` **不接受** `--domain`：它们按库执行，库自带域。给两个口径等于给 agent 两个可能矛盾的输入。
+
+- `file clear-episode <路径>`: 清掉文件的季集, 退回「认不出集号」。解析规则改准之后清理老库里的错误季集 —— 扫描刻意不覆盖已有的季集。
