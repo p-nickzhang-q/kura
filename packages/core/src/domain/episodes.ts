@@ -95,6 +95,16 @@ export function parseEpisode(fileName: string): EpisodeInfo | null {
     .map((match) => Number(match[1]))
     .filter((value) => value > 0 && !RESOLUTIONS.has(value));
 
+  // 合并集 `[BLEACH][52-53].rmvb`(两集合成一个文件)。
+  // 只有"跨 1 集"才认, 记起始集号 —— 第 53 集也在同一个文件里, 缺集名单会照实说它缺。
+  // 跨多集(如 `[01-12]`)是整季合集包, 认成第 1 集等于骗人, 交给人。
+  const range = /[[【[]?\s*(\d{1,3})\s*[-~～]\s*(\d{1,3})\s*[\]】\]]?/.exec(withoutExtension);
+  if (range) {
+    const start = Number(range[1]);
+    const end = Number(range[2]);
+    if (start > 0 && end === start + 1) return { season: null, episode: start };
+  }
+
   // 去掉扩展名与方括号包裹的发布组标记, 免得 `[Group]` 里的数字被当成集号
   const name = withoutExtension.replace(/[[(（【][^\])）】]*[\])）】]/g, " ").trim();
 
@@ -120,6 +130,10 @@ export function parseEpisode(fileName: string): EpisodeInfo | null {
 
   // `Part 2` / `Disc 1` / `CD1` 里的数字盘号不是集号
   if (/(?:^|[\s._-])(?:part|pt|disc|disk|cd|dvd|vol)[\s._-]*\d{1,2}$/i.test(name)) return null;
+
+  // 小数不是集号: `进击的巨人 - 13.5.MP4` 是特别篇(13.5), 认成第 13 集会跟真正的
+  // 第 13 集抢同一个目标位置 —— 整理时一个搬走、一个被跳过, 谁也说不清哪个是哪个。
+  if (/(?:^|[\s._-])\d{1,3}\.\d{1,2}(?:$|[\s._-])/.test(name)) return null;
 
   // 被分隔符包住的数字: `Show - 07` / `Show 07` / `Show 07_高清` / `Show_07`
   const bracketed = /(?:^|[\s._-])(\d{1,4})(?=[\s._-]|$)/.exec(name);

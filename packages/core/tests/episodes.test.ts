@@ -163,3 +163,20 @@ describe("方括号里的集号 (字幕组写法)", () => {
     expect(parseEpisode("[Group] 某剧 S02E07 [13].mkv")).toEqual({ season: 2, episode: 7 });
   });
 });
+
+describe("合并集与特别篇", () => {
+  test("两集合一: [52-53] 记起始集号", () => {
+    expect(parseEpisode("[BLEACH][52-53].rmvb")).toEqual({ season: null, episode: 52 });
+    expect(parseEpisode("[BLEACH][68-69].rmvb")).toEqual({ season: null, episode: 68 });
+  });
+
+  test("跨多集是整季合集包, 交给人 (认成第 1 集等于骗人)", () => {
+    expect(parseEpisode("[BLEACH][01-12].rmvb")).toBeNull();
+  });
+
+  test("小数是特别篇, 不是第 13 集", () => {
+    // 认成 13 会跟真正的第 13 集抢同一个目标位置
+    expect(parseEpisode("进击的巨人 - 13.5.MP4")).toBeNull();
+    expect(parseEpisode("某剧 - 第13集.MP4")).toEqual({ season: null, episode: 13 });
+  });
+});

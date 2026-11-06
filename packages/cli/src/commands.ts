@@ -11,6 +11,7 @@ import {
   TEMPLATE_PLACEHOLDERS,
   actorIndexDrift,
   bindDirectory,
+  clearFileEpisode,
   cachedPoster,
   cancelTask,
   countExhausted,
@@ -777,10 +778,16 @@ export const COMMANDS: Command[] = [
   {
     name: "file",
     summary:
-      "文件: list [--library 库] | reveal <番号> | dirs | bind <目录> --tmdb <身份> [--season N] | unbind <目录> | set-season <目录> --season N | set-episode <路径> --episode N",
+      "文件: list [--library 库] | reveal <番号> | dirs | bind <目录> --tmdb <身份> [--season N] | unbind <目录> | set-season <目录> --season N | set-episode <路径> --episode N | clear-episode <路径>",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "list | reveal | dirs | bind | unbind | set-season | set-episode", positional: true, default: "list" },
+      {
+        name: "action",
+        type: "string",
+        description: "list | reveal | dirs | bind | unbind | set-season | set-episode | clear-episode",
+        positional: true,
+        default: "list",
+      },
       { name: "number", type: "string", description: "reveal: 番号; bind/unbind: 目录; set-episode: 文件路径", positional: true },
       { name: "library", type: "string", description: "只看某个库" },
       { name: "unparsed", type: "boolean", description: "只看认不出番号的文件", default: false },
@@ -853,6 +860,14 @@ export const COMMANDS: Command[] = [
         }
         const season = args.options.season === undefined ? undefined : Number(args.options.season);
         return { result: setFileEpisode(ctx.rt!, { path, season, episode }) };
+      }
+
+      // 解析规则变准之后(比如 13.5 不再被当成第 13 集), 老库里写死的错误季集不会自己消失
+      // —— 扫描刻意不覆盖已有的季集。这条命令就是"按文件名重来一次"。
+      if (action === "clear-episode") {
+        const path = args.positionals.number;
+        if (!path) throw new AppError("用法: file clear-episode <路径>", EXIT.USAGE);
+        return { result: clearFileEpisode(ctx.rt!, { path }) };
       }
 
       if (action === "reveal") {

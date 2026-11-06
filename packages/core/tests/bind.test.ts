@@ -326,3 +326,26 @@ describe("同一部剧拆成多个目录", () => {
     expect(dirs.map((dir) => dir.files)).toEqual([1, 1]);
   });
 });
+
+describe("清掉季集", () => {
+  test("clearFileEpisode: 退回认不出集号, 身份保留", async () => {
+    const { clearFileEpisode } = await import("../src/tasks/bind");
+    const dir = join(media, "某剧");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "某剧 13.5.mkv"), "x");
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    const path = join(dir, "某剧 13.5.mkv");
+    // 先绑定(建条目), 再模拟"老库里被误认成第 13 集"
+    bindDirectory(rt, { libraryId: library.id, dir, key: "tmdb:tv:9" });
+    rt.db.run("update media_files set season = 1, episode = 13 where path = ?", [path]);
+
+    clearFileEpisode(rt, { path });
+
+    const row = rt.db.get<{ number: string | null; season: number | null; episode: number | null }>(
+      "select number, season, episode from media_files where path = ?",
+      [path],
+    );
+    expect(row).toEqual({ number: "tmdb:tv:9", season: null, episode: null });
+  });
+});

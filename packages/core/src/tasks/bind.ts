@@ -510,6 +510,25 @@ export function unbindDirectory(rt: Runtime, options: { libraryId: number; dir: 
  *
  * `episode` 必须给, `season` 不给就当第 1 季(与解析规则一致)。
  */
+/**
+ * 清掉文件的季集, 退回"认不出集号"。
+ *
+ * 为什么需要它: 扫描不覆盖已有的 (季, 集) —— 那是为了保护「改季」「摊到各季」定的东西。
+ * 代价是解析规则变准之后(比如 `13.5` 不再被当成第 13 集), 老库里已经写死的错误季集
+ * 不会自己消失, 得有一条显式的"重来一次"的路。
+ */
+export function clearFileEpisode(
+  rt: Runtime,
+  options: { path: string },
+): { path: string; number: string | null } {
+  const row = rt.db.get<{ path: string; number: string | null }>("select path, number from media_files where path = ?", [
+    options.path,
+  ]);
+  if (!row) throw new AppError(`文件不在索引里: ${options.path}`, EXIT.NOT_FOUND, { path: options.path });
+  rt.db.run("update media_files set season = null, episode = null where path = ?", [options.path]);
+  return { path: row.path, number: row.number };
+}
+
 export function setFileEpisode(
   rt: Runtime,
   options: { path: string; season?: number; episode: number },
