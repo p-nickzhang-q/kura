@@ -1299,12 +1299,17 @@ async function toggleTaskFailures(task: KuraTask): Promise<void> {
   taskFailureList.value = (await window.kura.taskFailures(task.id)) ?? [];
 }
 
-/** 任务时间带日期: 只给 `15:20` 的话, 昨天的任务和刚才的任务看起来一模一样。 */
+/**
+ * 任务时间: 年月日 + 时分。
+ *
+ * 只给 `15:20` 的话, 昨天的任务和刚才的任务看起来一模一样; 只给月日又看不出去年那批 ——
+ * 任务历史是按「做过多轮」用的, 年份必须写上。
+ */
 function formatTime(seconds: number | null): string {
   if (!seconds) return "—";
   const date = new Date(seconds * 1000);
   const pad = (value: number): string => String(value).padStart(2, "0");
-  return `${date.getMonth() + 1}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 /** 「停止」按钮按当前在跑的东西分派 —— 三者共用一个 AbortController。 */
