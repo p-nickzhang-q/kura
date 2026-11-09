@@ -76,6 +76,25 @@ interface KuraBindableDir {
   suspectSeries?: boolean;
 }
 
+interface KuraUnrecognizedFile {
+  path: string;
+  name: string;
+  season: number | null;
+  episode: number | null;
+  size: number;
+}
+
+/** 影视库未识别页的树节点: 一个目录 = 一部剧/一部电影/一个合集。 */
+interface KuraUnrecognizedDir {
+  dir: string;
+  name: string;
+  files: KuraUnrecognizedFile[];
+  parsed: number;
+  seasons: number[];
+  kind: "tv" | "movie";
+  year: string | null;
+}
+
 interface KuraBindingSuggestion {
   dir: string;
   name: string;
@@ -289,6 +308,7 @@ interface KuraBridge {
   }>;
   onSuggestProgress(callback: (update: { index: number; total: number; dir: string }) => void): () => void;
   bindMany(libraryId: number, items: { dir: string; key: string; paths?: string[] }[]): Promise<{ results: KuraBindManyResult[] }>;
+  unrecognizedDirs(libraryId?: number, limit?: number): Promise<{ dirs: KuraUnrecognizedDir[] }>;
   bindLocalDir(
     libraryId: number,
     dir: string,

@@ -6,7 +6,7 @@ import { createLibrary } from "../src/db/rows";
 import { isLocalKey, localItemKey } from "../src/domain/identify";
 import type { Library } from "../src/domain/materialize";
 import { openRuntime, type Runtime } from "../src/runtime";
-import { bindLocalDirectory } from "../src/tasks/bind";
+import { bindLocalDirectory, listUnrecognizedDirs } from "../src/tasks/bind";
 import { countPending, listItems } from "../src/tasks/scrape";
 import { listEpisodes } from "../src/tasks/scrape-show";
 import { scan } from "../src/tasks/scan";
@@ -165,5 +165,48 @@ describe("本地条目的集显示", () => {
 
     const episodes = listEpisodes(rt, key);
     expect(episodes).toHaveLength(0);
+  });
+});
+
+describe("未识别树 (影视库专用)", () => {
+  test("按目录分组, 文件带集号, 判据与扫描一致", async () => {
+    await mkdir(join(media, "某剧"), { recursive: true });
+    await writeFile(join(media, "某剧", "某剧 第1集.mp4"), "x");
+    await writeFile(join(media, "某剧", "某剧 第2集.mp4"), "x");
+    await writeFile(join(media, "某剧", "特典映像.mp4"), "x");
+    await mkdir(join(media, "散装"), { recursive: true });
+    await writeFile(join(media, "散装", "甲片.mp4"), "x");
+    await writeFile(join(media, "散装", "乙片.mp4"), "x");
+
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const tree = listUnrecognizedDirs(rt, { libraryId: library.id });
+    expect(tree.map((node) => `${node.kind}:${node.name}:${node.files.length}`)).toEqual([
+      "tv:某剧:3", // 两个集号 + 一个特典 → 剧
+      "movie:散装:2", // 两个都没有集号 → 两个独立电影候选
+    ]);
+    const show = tree[0]!;
+    expect(show.parsed).toBe(2);
+    expect(show.files.map((file) => file.episode)).toEqual([1, 2, null]);
+  });
+
+  test("目录名里的年份被提出来, 给 TMDB 搜索预填", async () => {
+    await mkdir(join(media, "某电影 (2019)"), { recursive: true });
+    await writeFile(join(media, "某电影 (2019)", "某电影 (2019).mkv"), "x");
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const tree = listUnrecognizedDirs(rt, { libraryId: library.id });
+    expect(tree[0]?.year).toBe("2019");
+    expect(tree[0]?.kind).toBe("movie");
+  });
+
+  test("已绑定的文件不出现在树里", async () => {
+    const library = await setupVideo();
+    const dir = join(media, "bilibili", "115406106794717-黑熊精新歌《差一点》");
+    bindLocalDirectory(rt, { libraryId: library.id, dir });
+    const tree = listUnrecognizedDirs(rt, { libraryId: library.id });
+    expect(tree.some((node) => node.files.some((file) => file.path.includes("成片_ys")))).toBe(false);
   });
 });

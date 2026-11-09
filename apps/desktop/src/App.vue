@@ -210,13 +210,19 @@ const pageCount = computed(() => Math.max(1, Math.ceil(itemTotal.value / pageSiz
 const detail = ref<KuraItem | null>(null);
 const dimension = ref("");
 const unparsedFiles = ref<{ path: string; size: number; libraryId: number }[]>([]);
-/** 影视库的未识别页: 一个候选 = 一部剧(目录) 或 一部电影(文件)。 */
-const bindableDirs = ref<KuraBindableDir[]>([]);
+/**
+ * 影视库的未识别页 = 一棵树: 目录一层, 文件一层。
+ *
+ * 平铺候选看不出"这些文件属于哪个目录", 而"这是剧还是散装视频"恰恰要看目录内容;
+ * 反过来只能整目录绑又会把一目录 12 部互不相关的电影写进同一个 TMDB id。
+ * 所以两层都给动作: 整目录 / 单个文件, 各自可以匹配 TMDB 或手动加入。
+ */
+const unrecognizedDirs = ref<KuraUnrecognizedDir[]>([]);
+/** 哪些目录展开了。默认展开小目录, 几百个文件的大目录折起来。 */
+const expandedDirs = ref<Record<string, boolean>>({});
+const treeQuery = ref("");
 /** 候选总数(分页用): 真库里可能有上百个电影候选。 */
-const bindTotal = ref(0);
-const bindLimit = ref(100);
 /** 候选分类计数(剧 / 电影), 给工具栏说人话用。 */
-const bindKinds = ref({ tv: 0, movie: 0 });
 /** 候选筛选: 真库里电影候选可能几百个, 和剧混在一起看不过来。 */
 const bindKind = ref<"" | "tv" | "movie">("tv");
 /** 正在等确认删除的库 id (就地两段式确认, 不弹 window.confirm)。 */
@@ -428,22 +434,78 @@ async function refreshUnparsed(): Promise<void> {
   unparsedFiles.value = result.files;
   unparsedCount.value = result.total;
 
-  // 影视库的"未识别"是候选级的: 剧 = 一个目录, 电影 = 一个文件
+  // 影视库的"未识别"是树: 目录 + 目录下的文件
   if (isVideoMode.value) {
     const result = await window.kura
-      .bindableDirs(selectedId.value ?? undefined, {
-        limit: bindLimit.value,
-        ...(bindKind.value ? { kind: bindKind.value } : {}),
-      })
-      .catch(() => ({ dirs: [] as KuraBindableDir[], total: 0, tv: 0, movie: 0 }));
-    bindableDirs.value = result.dirs;
-    bindTotal.value = result.total;
-    bindKinds.value = { tv: result.tv, movie: result.movie };
+      .unrecognizedDirs(selectedId.value ?? undefined, 500)
+      .catch(() => ({ dirs: [] as KuraUnrecognizedDir[] }));
+    unrecognizedDirs.value = result.dirs;
   } else {
-    bindableDirs.value = [];
-    bindTotal.value = 0;
-    bindKinds.value = { tv: 0, movie: 0 };
+    unrecognizedDirs.value = [];
   }
+}
+
+/** 树的筛选与计数 (全在前端算: 目录数最多几百, 不值得来回打 IPC)。 */
+const treeNodes = computed(() => {
+  const query = treeQuery.value.trim().toLowerCase();
+  return unrecognizedDirs.value.filter((node) => {
+    if (bindKind.value && node.kind !== bindKind.value) return false;
+    if (!query) return true;
+    return (
+      node.name.toLowerCase().includes(query) ||
+      node.dir.toLowerCase().includes(query) ||
+      node.files.some((file) => file.name.toLowerCase().includes(query))
+    );
+  });
+});
+
+const treeStats = computed(() => {
+  const nodes = unrecognizedDirs.value;
+  return {
+    dirs: nodes.length,
+    files: nodes.reduce((sum, node) => sum + node.files.length, 0),
+    tv: nodes.filter((node) => node.kind === "tv").length,
+    movie: nodes.filter((node) => node.kind !== "tv").length,
+  };
+});
+
+/** 小目录默认展开; 一百多个文件的那种默认折起来, 否则滚到天边。 */
+function isExpanded(node: KuraUnrecognizedDir): boolean {
+  return expandedDirs.value[node.dir] ?? node.files.length <= 10;
+}
+
+function toggleDir(node: KuraUnrecognizedDir): void {
+  expandedDirs.value = { ...expandedDirs.value, [node.dir]: !isExpanded(node) };
+}
+
+/** 树节点 → 绑定对话框认识的候选形状 (整目录)。 */
+function dirCandidate(node: KuraUnrecognizedDir): KuraBindableDir {
+  return {
+    dir: node.dir,
+    name: node.name,
+    files: node.files.length,
+    parsed: node.parsed,
+    seasons: node.seasons,
+    kind: node.kind,
+    paths: node.files.map((file) => file.path),
+  };
+}
+
+/** 树节点 → 候选形状 (只这一个文件)。 */
+function fileCandidate(file: KuraUnrecognizedFile): KuraBindableDir {
+  return {
+    dir: file.path,
+    name: file.name,
+    files: 1,
+    parsed: file.episode === null ? 0 : 1,
+    seasons: file.season === null ? [] : [file.season],
+    kind: "movie",
+    paths: [file.path],
+  };
+}
+
+function episodeLabel(episode: number): string {
+  return `E${String(episode).padStart(2, "0")}`;
 }
 
 /** 打开详情时顺带读集列表 (只有影视条目有)。 */
@@ -1733,7 +1795,7 @@ async function testDmm(): Promise<void> {
           <button type="button" :class="{ on: tab === 'items' }" @click="tab = 'items'">条目</button>
           <button type="button" :class="{ on: tab === 'unparsed' }" @click="tab = 'unparsed'; goUnparsedPage(unparsedPage)">
             <!-- 影视库的"未识别"是目录级的, 标签上的数字也跟着换成目录数 -->
-            未识别 ({{ isVideoMode ? bindableDirs.length : unparsedCount }})
+            未识别 ({{ isVideoMode ? treeStats.dirs : unparsedCount }})
           </button>
           <button type="button" :class="{ on: tab === 'plan' }" @click="tab = 'plan'">整理预览</button>
           <button type="button" :class="{ on: tab === 'tasks' }" @click="tab = 'tasks'">任务</button>
@@ -2153,122 +2215,145 @@ async function testDmm(): Promise<void> {
           </div>
         </div>
 
-        <!-- 未识别: 影视库是"目录"级 (一个目录 = 一部剧的候选) -->
+        <!-- 未识别 (影视库): 树。目录一层给"整目录"的动作, 文件一层给"就这一个"的动作 -->
         <div v-else-if="tab === 'unparsed' && isVideoMode" class="pane">
           <div class="toolbar">
             <span class="muted">
-              待绑定 {{ bindKinds.tv }} 部剧 · {{ bindKinds.movie }} 部电影
-              <span class="hint">（影视没有番号，要先绑到 TMDB 才知道是哪一部）</span>
+              {{ treeStats.dirs }} 个目录 · {{ treeStats.files }} 个文件
+              <span class="hint">（整目录或单个文件都可以匹配 TMDB / 手动加入）</span>
             </span>
             <span class="spacer" />
+            <input
+              v-model="treeQuery"
+              type="search"
+              class="tree-search"
+              placeholder="筛目录或文件名"
+              aria-label="筛选未识别"
+            />
             <div class="kind-filter">
-              <button type="button" class="chip" :class="{ on: bindKind === 'tv' }" @click="bindKind = 'tv'; bindLimit = 100; refreshUnparsed()">
-                剧集 {{ bindKinds.tv }}
+              <button type="button" class="chip" :class="{ on: bindKind === 'tv' }" @click="bindKind = 'tv'">
+                剧集 {{ treeStats.tv }}
               </button>
-              <button type="button" class="chip" :class="{ on: bindKind === 'movie' }" @click="bindKind = 'movie'; bindLimit = 100; refreshUnparsed()">
-                电影 {{ bindKinds.movie }}
+              <button type="button" class="chip" :class="{ on: bindKind === 'movie' }" @click="bindKind = 'movie'">
+                散集/电影 {{ treeStats.movie }}
               </button>
-              <button type="button" class="chip" :class="{ on: bindKind === '' }" @click="bindKind = ''; bindLimit = 100; refreshUnparsed()">
-                全部
+              <button type="button" class="chip" :class="{ on: bindKind === '' }" @click="bindKind = ''">
+                全部 {{ treeStats.dirs }}
               </button>
             </div>
             <span v-if="suggestProgress" class="muted nowrap">
               搜索中 {{ suggestProgress.index }}/{{ suggestProgress.total || "?" }} · {{ suggestProgress.dir }}
             </span>
-            <button type="button" :disabled="busy || suggestBusy || bindableDirs.length === 0" @click="findSuggestions">
+            <button type="button" :disabled="busy || suggestBusy || treeStats.dirs === 0" @click="findSuggestions">
               {{ suggestBusy ? "搜索中…" : "批量找建议" }}
             </button>
           </div>
-          <table>
-            <thead>
-              <tr>
-                <th v-if="Object.keys(suggestions).length > 0" class="pick" />
-                <th>候选</th><th>建议</th><th />
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="dir in bindableDirs" :key="dir.dir">
-                <td v-if="Object.keys(suggestions).length > 0" class="pick" @click.stop>
-                  <input
-                    v-if="suggestions[dir.dir]?.hit"
-                    type="checkbox"
-                    :checked="suggestPicked.includes(dir.dir)"
-                    :aria-label="`绑定 ${dir.name}`"
-                    @change="toggleSuggest(dir.dir)"
-                  />
-                </td>
-                <!-- 名字 + 类型 + 元信息堆在一个单元格里: 单独开"情况"列会把动作按钮挤出屏幕 -->
-                <td class="path-cell" :title="dir.dir">
-                  <div class="cand-name mono">
-                    {{ dir.name }}
-                    <span class="badge accent" v-if="dir.kind === 'tv'">剧集</span>
-                    <span class="badge" v-else>电影</span>
-                    <!-- 名字像同一部剧的散集, 但集号没认出来: 绑成电影是错的, 提示补集号 -->
-                    <span
-                      v-if="dir.suspectSeries"
-                      class="badge warn"
-                      title="目录里多个文件名字相近, 像同一部剧的分集, 但文件名里认不出集号。补集号后重扫更合适。"
-                    >
-                      可能是一部剧
+
+          <ul class="tree">
+            <li v-for="node in treeNodes" :key="node.dir" class="tree-dir">
+              <div class="tree-row">
+                <button
+                  type="button"
+                  class="tree-caret"
+                  :aria-expanded="isExpanded(node)"
+                  :aria-label="`${isExpanded(node) ? '收起' : '展开'} ${node.name}`"
+                  @click="toggleDir(node)"
+                >
+                  {{ isExpanded(node) ? "▾" : "▸" }}
+                </button>
+                <input
+                  v-if="suggestions[node.dir]?.hit"
+                  type="checkbox"
+                  class="tree-pick"
+                  :checked="suggestPicked.includes(node.dir)"
+                  :aria-label="`绑定 ${node.name}`"
+                  @change="toggleSuggest(node.dir)"
+                />
+                <div class="tree-label">
+                  <div class="cand-name">
+                    <span class="mono tree-name" :title="node.dir">{{ node.name }}</span>
+                    <span class="badge" :class="{ accent: node.kind === 'tv' }">
+                      {{ node.kind === "tv" ? "剧集" : "散集/电影" }}
+                    </span>
+                    <span class="muted nowrap">
+                      {{ node.files.length }} 个文件
+                      <template v-if="node.files.length !== node.parsed"> · 认出 {{ node.parsed }} 集</template>
                     </span>
                   </div>
                   <div class="cand-meta muted">
-                    <template v-if="dir.kind === 'tv'">
-                      {{ dir.parsed }}/{{ dir.files }} 集识出
-                      <template v-if="dir.seasons.length > 0"> · S{{ dir.seasons.join(",") }}</template>
-                      <span v-if="dir.parsed < dir.files" class="warn"> · {{ dir.files - dir.parsed }} 待补集号</span>
+                    <template v-if="suggestions[node.dir]">
+                      <template v-if="suggestions[node.dir]!.hit">
+                        建议：<strong>{{ suggestions[node.dir]!.hit!.title }}</strong>
+                        <span class="muted">{{ suggestions[node.dir]!.hit!.year ?? "年份未知" }}</span>
+                        <span
+                          class="badge"
+                          :class="{ accent: suggestions[node.dir]!.confidence === 'high', warn: suggestions[node.dir]!.confidence !== 'high' }"
+                        >
+                          {{ suggestions[node.dir]!.confidence === "high" ? "很可能是" : "可能是" }}
+                        </span>
+                      </template>
+                      <span v-else-if="suggestions[node.dir]!.error" class="warn">搜索失败: {{ suggestions[node.dir]!.error }}</span>
+                      <span v-else class="muted">没搜到，手动搜一次</span>
                     </template>
-                    <template v-else>单个视频文件</template>
+                    <template v-else>{{ node.dir }}</template>
                   </div>
-                </td>
-                <td class="suggest-cell">
-                  <div class="suggest-line">
-                  <template v-if="suggestions[dir.dir]">
-                    <template v-if="suggestions[dir.dir]!.hit">
-                      <strong>{{ suggestions[dir.dir]!.hit!.title }}</strong>
-                      <span class="muted">{{ suggestions[dir.dir]!.hit!.year ?? "年份未知" }}</span>
-                      <span class="badge" :class="{ accent: suggestions[dir.dir]!.confidence === 'high', warn: suggestions[dir.dir]!.confidence !== 'high' }">
-                        {{ suggestions[dir.dir]!.confidence === "high" ? "很可能是" : "可能是" }}
-                      </span>
-                    </template>
-                    <span v-else-if="suggestions[dir.dir]!.error" class="warn">搜索失败: {{ suggestions[dir.dir]!.error }}</span>
-                    <span v-else class="muted">没搜到，手动搜一次</span>
-                  </template>
-                  <span v-else class="muted">—</span>
-                  </div>
-                </td>
-                <td class="row-actions">
-                  <button
-                    type="button"
-                    :disabled="busy || selectedId === null"
-                    @click="openBindDialog(dir)"
-                  >
-                    {{ suggestions[dir.dir]?.hit ? "换一个" : "绑定到 TMDB" }}
+                </div>
+                <div class="row-actions">
+                  <button type="button" :disabled="busy || selectedId === null" @click="openBindDialog(dirCandidate(node))">
+                    {{ node.kind === "tv" ? "整目录绑 TMDB" : "整个目录绑一部片" }}
                   </button>
                   <button
                     type="button"
                     :disabled="busy || selectedId === null"
                     title="谁都搜不到的（UP 主投稿、自录素材）可以手动命名加入库"
-                    @click="openLocalDialog(dir)"
+                    @click="openLocalDialog(dirCandidate(node))"
                   >
                     手动加入
                   </button>
-                  <button type="button" @click="reveal(dir.dir)">定位</button>
-                </td>
-              </tr>
-              <tr v-if="bindableDirs.length === 0">
-                <td colspan="4" class="muted">没有待绑定的候选。扫一遍库，或者它们都已经绑过了。</td>
-              </tr>
-            </tbody>
-          </table>
-          <!-- 真库里电影候选可能上百个: 分批显示, 别一次塞 400 行 -->
-          <div v-if="bindTotal > bindableDirs.length" class="bind-more">
-            <span class="muted">已显示 {{ bindableDirs.length }} / {{ bindTotal }} 个候选</span>
-            <button type="button" :disabled="busy" @click="bindLimit += 100; refreshUnparsed()">再显示 100 个</button>
-          </div>
+                  <button type="button" @click="reveal(node.dir)">定位</button>
+                </div>
+              </div>
+
+              <ul v-if="isExpanded(node)" class="tree-files">
+                <li v-for="file in node.files.slice(0, 120)" :key="file.path" class="tree-row is-file">
+                  <span class="tree-caret is-ghost" aria-hidden="true" />
+                  <div class="tree-label">
+                    <div class="cand-name">
+                      <span class="mono tree-name" :title="file.path">{{ file.name }}</span>
+                      <span v-if="file.episode !== null" class="badge accent nowrap">
+                        {{ file.season === null ? "" : `S${file.season}` }}{{ episodeLabel(file.episode) }}
+                      </span>
+                      <span v-else class="badge warn nowrap">无集号</span>
+                      <!-- 电影候选是按文件给建议的, 所以建议挂在文件行上 -->
+                      <span v-if="suggestions[file.path]?.hit" class="muted nowrap">
+                        建议：{{ suggestions[file.path]!.hit!.title }}
+                        <template v-if="suggestions[file.path]!.hit!.year">({{ suggestions[file.path]!.hit!.year }})</template>
+                      </span>
+                    </div>
+                  </div>
+                  <div class="row-actions">
+                    <button type="button" :disabled="busy || selectedId === null" @click="openBindDialog(fileCandidate(file))">
+                      绑这一集
+                    </button>
+                    <button type="button" :disabled="busy || selectedId === null" @click="openLocalDialog(fileCandidate(file))">
+                      手动加入
+                    </button>
+                    <button type="button" @click="reveal(file.path)">定位</button>
+                  </div>
+                </li>
+                <li v-if="node.files.length > 120" class="tree-more muted">
+                  只列前 120 个文件，共 {{ node.files.length }} 个
+                </li>
+              </ul>
+            </li>
+            <li v-if="treeNodes.length === 0" class="tree-empty muted">
+              没有待识别的目录。扫一遍库，或者它们都已经绑过了。
+            </li>
+          </ul>
+
           <!-- 勾选后才出现的动作条: 没勾选时不占位置, 也不制造"这里有东西等着点"的错觉 -->
           <div v-if="suggestPicked.length > 0" class="bind-bar">
-            <span>已勾选 {{ suggestPicked.length }} 个</span>
+            <span>已勾选 {{ suggestPicked.length }} 个目录</span>
             <span class="spacer" />
             <button type="button" :disabled="suggestBusy" @click="suggestPicked = []">取消勾选</button>
             <button type="button" class="primary" :disabled="suggestBusy" @click="bindPicked">
@@ -3932,6 +4017,104 @@ td.suggest-cell {
 
 .bind-hits button:hover {
   border-color: var(--accent);
+}
+
+/* 未识别树 (只有影视库用): 目录一行, 文件缩进一行。
+   两层都给动作, 所以行本身不整体可点 —— 免得点目录名误触"绑整个目录" */
+.tree {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 16px;
+  overflow: auto;
+}
+
+.tree-dir + .tree-dir {
+  border-top: 1px solid var(--line);
+}
+
+.tree-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 48px;
+  padding: 8px 16px;
+}
+
+.tree-row:hover {
+  background: var(--panel-2);
+}
+
+.tree-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--panel-3);
+}
+
+.tree-row.is-file {
+  min-height: 44px;
+  padding: 4px 16px 4px 48px;
+  font-size: var(--fs-label);
+}
+
+.tree-caret {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+  cursor: pointer;
+}
+
+.tree-caret:hover {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+/* 文件行没有折叠箭头, 但占同样的位置才算对齐 */
+.tree-caret.is-ghost {
+  visibility: hidden;
+}
+
+.tree-pick {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.tree-label {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-search {
+  width: 200px;
+  min-height: 44px;
+}
+
+.tree-more,
+.tree-empty {
+  padding: 8px 16px;
+  font-size: var(--fs-label);
+}
+
+.tree-empty {
+  padding: 24px 16px;
 }
 
 /* 行内可点的统计数字: 比 chip 轻, 不跟主按钮抢注意力 */

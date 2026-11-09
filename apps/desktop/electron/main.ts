@@ -73,6 +73,7 @@ import {
   exitCodeName,
   listBindableDirs,
   listItemDirs,
+  listUnrecognizedDirs,
   setDirectorySeason,
   countBindableDirs,
   countBindableKinds,
@@ -658,6 +659,17 @@ function registerIpc(): void {
     const tmdb = await tmdbClient(rt);
     if (!tmdb) throw new Error("未配置 TMDB API key（设置页填写，或环境变量 KURA_TMDB_API_KEY）");
     return tmdb.search(input.kind, input.query.trim());
+  });
+
+  // 影视库的未识别**树**: 目录一层 + 文件一层, 两种粒度都能绑/手动加入
+  ipcMain.handle("file:unrecognized", (_event, input: { libraryId?: number; limit?: number }) => {
+    const rt = mustRuntime();
+    return {
+      dirs: listUnrecognizedDirs(rt, {
+        ...(input?.libraryId !== undefined ? { libraryId: input.libraryId } : {}),
+        ...(input?.limit !== undefined ? { limit: input.limit } : {}),
+      }),
+    };
   });
 
   // 手动加入: 不连任何来源, 只建一个本地条目 (local: 身份, ugc 标记)

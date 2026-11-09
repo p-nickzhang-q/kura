@@ -164,6 +164,109 @@ export function listBindableDirs(
     .slice(options.offset ?? 0, (options.offset ?? 0) + (options.limit ?? 200));
 }
 
+/** 未识别树里的一个文件。 */
+export interface UnrecognizedFile {
+  path: string;
+  name: string;
+  /** 从文件名或目录规律认出来的集号; 认不出是 null。 */
+  season: number | null;
+  episode: number | null;
+  size: number;
+}
+
+/** 未识别树里的一个目录 (= 一部剧/一部电影/一个 UGC 合集)。 */
+export interface UnrecognizedDir {
+  dir: string;
+  name: string;
+  files: UnrecognizedFile[];
+  /** 有集号的文件数。 */
+  parsed: number;
+  seasons: number[];
+  /** 建议的类型 —— 只是建议, 界面上可以改成另一个。 */
+  kind: "tv" | "movie";
+  /** 目录名里能看出来的年份 (搜 TMDB 时预填, 可改)。 */
+  year: string | null;
+}
+
+/**
+ * 未识别页的**树**: 目录一层, 文件一层。
+ *
+ * 和 `listBindableDirs` 的区别: 那个给的是"能直接绑的候选"(剧=目录, 电影=单个文件),
+ * 平铺之后看不出文件属于哪个目录 —— 而人判断"这是剧还是散装视频"要看的恰恰是目录内容。
+ * 这里保留原始结构, 让界面既能整目录绑/手动加入, 也能只挑目录里的一个文件。
+ *
+ * 只用于影视域; 番号制的未识别仍然是平铺文件表 (那边一个文件就是一个番号, 没有目录语义)。
+ */
+export function listUnrecognizedDirs(
+  rt: Runtime,
+  options: { libraryId?: number; limit?: number } = {},
+): UnrecognizedDir[] {
+  const where: string[] = ["m.number is null"];
+  const params: (number | string)[] = [];
+  if (options.libraryId !== undefined) {
+    where.push("m.library_id = ?");
+    params.push(options.libraryId);
+  }
+
+  const rows = rt.db.all<{ path: string; season: number | null; episode: number | null; size: number; library_id: number }>(
+    `select m.path, m.season, m.episode, m.size, m.library_id from media_files m where ${where.join(" and ")} order by m.path`,
+    params,
+  );
+
+  const roots = new Map<number, string>();
+  for (const row of rt.db.all<{ id: number; root: string }>("select id, root from libraries")) {
+    roots.set(row.id, row.root);
+  }
+
+  const buckets = new Map<string, { dir: string; name: string; files: UnrecognizedFile[]; seasonSet: Set<number> }>();
+  for (const row of rows) {
+    const located = locateEpisode(row.path, roots.get(row.library_id) ?? "");
+    const dir = located?.showDir ?? showDirOf(row.path);
+    const bucket =
+      buckets.get(dir) ?? { dir, name: basename(dir) || dir || "（库根目录）", files: [], seasonSet: new Set<number>() };
+    bucket.files.push({
+      path: row.path,
+      name: basename(row.path),
+      season: row.season,
+      episode: row.episode,
+      size: row.size,
+    });
+    if (row.season !== null) bucket.seasonSet.add(row.season);
+    buckets.set(dir, bucket);
+  }
+
+  const out: UnrecognizedDir[] = [];
+  for (const bucket of buckets.values()) {
+    const files = bucket.files.sort((a, b) => a.name.localeCompare(b.name, "zh"));
+    const parsed = files.filter((file) => file.episode !== null).length;
+    // 与 listBindableDirs / scan 同一条判据: 看比例, 不看"有一个集号就算剧"
+    const isShow =
+      parsed >= 2 || parsed === files.length || (parsed >= 1 && files.length <= 3);
+    out.push({
+      dir: bucket.dir,
+      name: bucket.name,
+      files,
+      parsed,
+      seasons: [...bucket.seasonSet].sort((a, b) => a - b),
+      kind: isShow ? "tv" : "movie",
+      year: guessYear(bucket.name),
+    });
+  }
+
+  const rank = (node: UnrecognizedDir): number => (node.kind === "tv" ? 0 : 1);
+  return out
+    .sort((a, b) => rank(a) - rank(b) || b.files.length - a.files.length || a.name.localeCompare(b.name, "zh"))
+    .slice(0, options.limit ?? 500);
+}
+
+/** 目录名里的年份: `某剧 (2019)` / `某剧.2019.1080p`。 */
+function guessYear(name: string): string | null {
+  const paren = /\((19|20)\d{2}\)|\[(19|20)\d{2}\]/.exec(name);
+  if (paren) return paren[0].replace(/[()\[\]]/g, "");
+  const loose = /(?:^|[.\s_-])((?:19|20)\d{2})(?:[.\s_-]|$)/.exec(name);
+  return loose ? loose[1]! : null;
+}
+
 export function countBindableDirs(
   rt: Runtime,
   options: { libraryId?: number; kind?: "tv" | "movie" } = {},

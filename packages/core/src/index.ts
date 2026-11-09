@@ -97,12 +97,22 @@ export {
   countBindableKinds,
   listBindableDirs,
   listItemDirs,
+  listUnrecognizedDirs,
   rebindItem,
   setDirectorySeason,
   setFileEpisode,
   unbindDirectory,
 } from "./tasks/bind";
-export type { BindableDir, BindResult, BindingSuggestion, ItemDir, LocalBindResult, RebindResult } from "./tasks/bind";
+export type {
+  BindableDir,
+  BindResult,
+  BindingSuggestion,
+  ItemDir,
+  LocalBindResult,
+  RebindResult,
+  UnrecognizedDir,
+  UnrecognizedFile,
+} from "./tasks/bind";
 export { suggestBindings, suggestBindingsTask } from "./tasks/suggest";
 export type { SuggestOptions } from "./tasks/suggest";
 export { guessTitleFromDir, matchConfidence, normalizeTitle, searchableGuess } from "./domain/title-guess";

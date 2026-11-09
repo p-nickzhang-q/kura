@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld("kura", {
     return () => ipcRenderer.removeListener("suggest:progress", handler);
   },
   bindMany: (libraryId, items) => ipcRenderer.invoke("file:bind-many", { libraryId, items }),
+  unrecognizedDirs: (libraryId, limit) =>
+    ipcRenderer.invoke("file:unrecognized", { ...(libraryId === undefined ? {} : { libraryId }), ...(limit === undefined ? {} : { limit }) }),
   // 手动加入库: 本地条目 (local: 身份, ugc 标记), 不连任何来源
   bindLocalDir: (libraryId, dir, paths, title, type) =>
     ipcRenderer.invoke("file:bind-local", {
