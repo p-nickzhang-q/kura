@@ -62,7 +62,14 @@ const info = ref<KuraAppInfo | null>(null);
 const libraries = ref<KuraLibrary[]>([]);
 const selectedId = ref<number | null>(null);
 const items = ref<KuraItem[]>([]);
-const tab = ref<"items" | "unparsed" | "plan" | "tasks" | "settings">("items");
+/**
+ * 默认落在「待办」而不是「条目」。
+ *
+ * 边界很容易忘: 这软件的使用节奏是"扫一次 → 认一批 → 刮一屏 → 整理一次",
+ * 而条目列表只是结果。以前一进来是 3,883 行的列表, 却要自己去侧栏「更多操作」
+ * 里找下一步该点哪个。
+ */
+const tab = ref<"todo" | "items" | "unparsed" | "plan" | "tasks" | "settings">("todo");
 const busy = ref(false);
 /** 启动/刷新过程中的错误, 直接显示在界面顶部 —— 白屏最不该让人去猜。 */
 const errors = ref<string[]>([]);
@@ -291,6 +298,20 @@ const nfoDialog = ref<{
 /** 有多少个条目的 .nfo 还没和库对齐 (扫描/刮削后算出来, 点一下就去同步) */
 const nfoHint = ref(0);
 
+/* ---- 待办页 ---- */
+const todoCounts = ref<KuraTodoCounts | null>(null);
+const todoPlan = ref<KuraTodoPlans | null>(null);
+const todoLoading = ref(false);
+/** 快速切库时防止旧库的数字晚一步写回来。 */
+let todoSeq = 0;
+
+/* ---- 侧栏「⋯」与命令面板 ---- */
+const moreOpen = ref(false);
+const paletteOpen = ref(false);
+const paletteQuery = ref("");
+const paletteIndex = ref(0);
+const paletteInput = ref<HTMLInputElement | null>(null);
+
 const config = ref<KuraConfig | null>(null);
 const apiIdInput = ref("");
 const affiliateInput = ref("");
@@ -316,6 +337,7 @@ const selected = computed(() => libraries.value.find((library) => library.id ===
 
 onMounted(async () => {
   // 渲染进程里的未捕获异常也显示出来 (以前只在 DevTools 里能看到)
+  window.addEventListener("keydown", onKeydown);
   window.addEventListener("error", (event) => errors.value.push(`界面错误: ${event.message}`));
   window.addEventListener("unhandledrejection", (event) => {
     const reason = event.reason;
@@ -343,6 +365,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopTasksPolling();
+  window.removeEventListener("keydown", onKeydown);
   unsubscribeSuggest?.();
   unsubscribe?.();
   unsubscribeProgress?.();
@@ -375,6 +398,7 @@ async function refreshAll(): Promise<void> {
   if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
   await step("读取条目", () => refreshItems());
   await step("读取未识别文件", () => refreshUnparsed());
+  await step("读取待办", () => refreshTodo());
   tasks.value = (await step("读取任务", () => window.kura.tasks(20))) ?? tasks.value;
   // 把当前模板反查成维度, 让下拉框显示"现在是什么"
   const current = libraries.value.find((library) => library.id === selectedId.value);
@@ -383,6 +407,252 @@ async function refreshAll(): Promise<void> {
   // 选中项里可能有已经被删掉的条目
   picked.value = picked.value.filter((key) => items.value.some((item) => item.key === key));
   if (detail.value) detail.value = await window.kura.item(detail.value.key);
+}
+
+/**
+ * 待办页的数字, 分两批取。
+ *
+ * 便宜的一批(数行/数目录)先回来, 页面上立刻有"还有 258 个目录没认出来";
+ * 贵的一批(整理要搬多少、nfo 落后多少)要读磁盘, 回来了再填 —— 首页不能为了
+ * 一个可选数字在移动硬盘上卡半秒。
+ */
+async function refreshTodo(): Promise<void> {
+  const seq = ++todoSeq;
+  todoLoading.value = true;
+  todoPlan.value = null;
+  try {
+    const counts = await window.kura.todoCounts(selectedId.value ?? undefined);
+    if (seq === todoSeq) todoCounts.value = counts;
+  } catch {
+    if (seq === todoSeq) todoCounts.value = null;
+  }
+  try {
+    const plans = await window.kura.todoPlans(selectedId.value ?? undefined);
+    if (seq === todoSeq) todoPlan.value = plans;
+  } catch {
+    // 贵的数字算不出来就不显示, 待办页不能因为一个提示变红
+  }
+  if (seq === todoSeq) todoLoading.value = false;
+}
+
+interface TodoRow {
+  key: string;
+  step: string;
+  label: string;
+  desc: string;
+  /** 数字与单位; 还没算出来时给空串, 界面显示「…」 */
+  count: number | null;
+  unit: string;
+  tag: "只读" | "网络" | "写磁盘" | "";
+  action: string;
+  disabled: boolean;
+  /** 建议先做的那一行(第一行有数字的) */
+  next: boolean;
+  go: () => void | Promise<void>;
+}
+
+/**
+ * 待办清单 = 动作的天然顺序(认 → 刮 → 翻 → 整理 → NFO), 每行自带"还剩多少"。
+ *
+ * 以前这 8 个动作平铺在侧栏「更多操作」里, 没有顺序也没有数字 —— 人要自己想起
+ * "哦还有一批没认出来的"。数字本来就在库里, 让它来排序就行。
+ */
+const todoRows = computed<TodoRow[]>(() => {
+  const counts = todoCounts.value;
+  if (!counts) return [];
+  const plan = todoPlan.value;
+  const video = isVideoMode.value;
+  const rows: TodoRow[] = [];
+
+  rows.push({
+    key: "unparsed",
+    step: "01",
+    label: "未识别",
+    desc: video
+      ? "认不出片名就搜不了 TMDB; 可以整目录绑一部, 也可以手动加入"
+      : "文件名里没有番号就找不到来源; 改文件名后重扫即可",
+    count: video ? counts.unparsedDirs : counts.unparsedFiles,
+    unit: video ? "个目录" : "个文件",
+    tag: "只读",
+    action: video ? "去认片名" : "去看看",
+    disabled: false,
+    next: false,
+    go: () => {
+      tab.value = "unparsed";
+    },
+  });
+
+  rows.push({
+    key: "scrape",
+    step: "02",
+    label: "待刮削",
+    desc: "缺元数据或缺简介; 刮完顺手把海报存进缓存",
+    count: counts.pendingScrape,
+    unit: "条",
+    tag: "网络",
+    action: "刮削",
+    disabled: false,
+    next: false,
+    go: doScrape,
+  });
+
+  const translateReady = info.value?.translate === true;
+  rows.push({
+    key: "translate",
+    step: "03",
+    label: "待翻译",
+    desc: translateReady ? "只翻库里已有的日文, 不重新刮削" : "先在设置里填 LLM 与 key, 打开翻译开关",
+    count: translateReady ? counts.pendingTranslate : null,
+    unit: translateReady ? "条" : "未配置",
+    tag: translateReady ? "网络" : "",
+    action: translateReady ? "翻译" : "去设置",
+    disabled: false,
+    next: false,
+    go: translateReady ? translateAll : () => { tab.value = "settings"; },
+  });
+
+  if (counts.organizeLibraries > 0) {
+    const organize = plan?.organize ?? null;
+    rows.push({
+      key: "organize",
+      step: "04",
+      label: "可整理",
+      desc: "会移动文件、复制图片; 先看清单再确认",
+      count: organize ? organize.move : null,
+      unit: organize ? `文件 · ${organize.copyImage} 图` : "",
+      tag: "写磁盘",
+      action: "打开预览",
+      disabled: false,
+      next: false,
+      go: async () => {
+        await preview();
+        tab.value = "plan";
+      },
+    });
+
+    const nfo = plan?.nfo ?? null;
+    const nfoTotal = nfo ? nfo.created + nfo.written : null;
+    rows.push({
+      key: "nfo",
+      step: "05",
+      label: "NFO 待回写",
+      desc: "Emby / Jellyfin 读的是 .nfo, 库里的改动它还没看到",
+      count: nfoTotal,
+      unit: "条",
+      tag: "写磁盘",
+      action: "同步",
+      disabled: false,
+      next: false,
+      go: () => writeNfoFiles(),
+    });
+  }
+
+  rows.push({
+    key: "cleanup",
+    step: String(rows.length + 1).padStart(2, "0"),
+    label: "空目录",
+    desc: "把片子搬走之后剩下的旧目录; 只删空的, 列清单后确认",
+    // 要真去走一遍磁盘才知道有几个, 首页不算它
+    count: null,
+    unit: "",
+    tag: "写磁盘",
+    action: "清理",
+    disabled: false,
+    next: false,
+    go: cleanupDirs,
+  });
+
+  // 第一行"有数字且能做"的 = 建议先做
+  const first = rows.find((row) => !row.disabled && row.count !== null && row.count > 0);
+  if (first) first.next = true;
+  return rows;
+});
+
+/** 命令面板里的动作表: 原来收在「更多操作」里的 8 个, 加上跳转。 */
+interface PaletteAction {
+  id: string;
+  title: string;
+  hint: string;
+  disabled: boolean;
+  run: () => void | Promise<void>;
+}
+
+const paletteActions = computed<PaletteAction[]>(() => {
+  const hasLibrary = Boolean(selected.value);
+  const noOrganize = selected.value?.organizeEnabled === false;
+  return [
+    { id: "scan", title: "扫描", hint: hasLibrary ? `只扫「${selected.value?.name}」` : "按顺序扫全部库", disabled: !hasLibrary, run: doScan },
+    { id: "force-scan", title: "强制扫描", hint: "跳过「一次移除过多」的安全阀; 盘没挂全时别用", disabled: !hasLibrary, run: forceScan },
+    { id: "scrape", title: "刮削待处理", hint: `当前 ${todoCounts.value?.pendingScrape ?? 0} 条`, disabled: false, run: doScrape },
+    {
+      id: "translate",
+      title: "翻译待处理",
+      hint: info.value?.translate ? `当前 ${info.value.pendingTranslation} 条` : "先在设置里配置 LLM",
+      disabled: false,
+      run: translateAll,
+    },
+    { id: "retype", title: "修正内容类型", hint: "按当前解析器重新判定, 先列清单", disabled: false, run: retypeDetect },
+    { id: "nfo", title: "同步 NFO", hint: "先列清单, 确认后才写", disabled: !hasLibrary, run: () => writeNfoFiles() },
+    { id: "cleanup", title: "清理空目录", hint: "先列清单, 确认后才删", disabled: !hasLibrary, run: cleanupDirs },
+    { id: "plan", title: "整理预览", hint: noOrganize ? "该库设为只索引, 不会整理" : "先看清单再执行", disabled: !hasLibrary, run: async () => { await preview(); tab.value = "plan"; } },
+    { id: "todo", title: "去待办", hint: "还差多少、下一步做什么", disabled: false, run: () => { tab.value = "todo"; } },
+    { id: "unparsed", title: "去未识别", hint: "认不出的文件 / 目录", disabled: false, run: () => { tab.value = "unparsed"; } },
+    { id: "items", title: "去条目", hint: "整个库的列表", disabled: false, run: () => { tab.value = "items"; } },
+    { id: "tasks", title: "去任务", hint: "做过什么、哪条失败", disabled: false, run: () => { tab.value = "tasks"; } },
+    { id: "settings", title: "去设置", hint: "数据目录 / 来源 / LLM / 代理", disabled: false, run: () => { tab.value = "settings"; } },
+  ];
+});
+
+const paletteHits = computed<PaletteAction[]>(() => {
+  const query = paletteQuery.value.trim().toLowerCase();
+  if (!query) return paletteActions.value;
+  return paletteActions.value.filter(
+    (action) => action.title.toLowerCase().includes(query) || action.hint.toLowerCase().includes(query),
+  );
+});
+
+function openPalette(): void {
+  paletteOpen.value = true;
+  paletteQuery.value = "";
+  paletteIndex.value = 0;
+  void nextTick(() => paletteInput.value?.focus());
+}
+
+async function runPalette(action: PaletteAction | undefined): Promise<void> {
+  if (!action || action.disabled) return;
+  paletteOpen.value = false;
+  await action.run();
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape") {
+    moreOpen.value = false;
+    if (paletteOpen.value) {
+      paletteOpen.value = false;
+      return;
+    }
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+    event.preventDefault();
+    openPalette();
+    return;
+  }
+  if (!paletteOpen.value) return;
+  if (event.key === "Escape") {
+    paletteOpen.value = false;
+    return;
+  }
+  const hits = paletteHits.value.filter((action) => !action.disabled);
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    paletteIndex.value = (paletteIndex.value + 1) % Math.max(hits.length, 1);
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    paletteIndex.value = (paletteIndex.value - 1 + Math.max(hits.length, 1)) % Math.max(hits.length, 1);
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    void runPalette(hits[paletteIndex.value]);
+  }
 }
 
 /** 任务页随时反映库里的状态: 切过去就读一次, 别等刷新整页。 */
@@ -1148,6 +1418,7 @@ async function onScopeChange(): Promise<void> {
   detail.value = null;
   await refreshItems();
   await refreshUnparsed();
+  await refreshTodo();
 }
 
 /** 扫描。`force` 用于"确实删了很多文件"的场景 —— 平时走安全阀保护。 */
@@ -1810,61 +2081,48 @@ async function testDmm(): Promise<void> {
           >
             {{ primary.label }}
           </button>
-          <details class="more">
-            <summary>更多操作</summary>
-            <div class="more-list">
-              <button type="button" :disabled="busy || !selected" @click="doScan">扫描</button>
+          <!-- 只留和"这个库"有关的动作; 批处理与写磁盘的动作各归各的页面 -->
+          <div class="more">
+            <button
+              type="button"
+              :disabled="libraries.length === 0"
+              :aria-expanded="moreOpen"
+              title="库级动作 (Ctrl K 里能搜到全部动作)"
+              @click="moreOpen = !moreOpen"
+            >
+              ⋯ 更多<span class="spacer" /><kbd>Ctrl K</kbd>
+            </button>
+            <div v-if="moreOpen" class="more-menu">
+              <button type="button" :disabled="busy || !selected" @click="moreOpen = false; doScan()">扫描</button>
               <button
                 type="button"
                 :disabled="busy || !selected"
                 title="跳过「一次移除过多文件」的安全阀。盘没挂全时别用"
-                @click="forceScan"
+                @click="moreOpen = false; forceScan()"
               >
                 强制扫描
               </button>
               <button
                 type="button"
-                :disabled="busy"
+                :disabled="busy || !selected"
                 title="按当前解析器重新判定内容类型 (会先列出清单让你确认)"
-                @click="retypeDetect"
+                @click="moreOpen = false; retypeDetect()"
               >
                 修正内容类型
               </button>
+              <button type="button" :disabled="busy || !selected" @click="moreOpen = false; startRename(selected!)">
+                重命名这个库
+              </button>
               <button
                 type="button"
+                class="danger-action"
                 :disabled="busy || !selected"
-                title="双向同步: 库里没数据的读 nfo 补进来, 有网络数据的把库写回 .nfo (Emby/Jellyfin 读的是它)。先列清单, 确认后才动"
-                @click="writeNfoFiles()"
+                @click="moreOpen = false; removingId = selected!.id"
               >
-                同步 NFO
-              </button>
-              <button
-                type="button"
-                :disabled="busy || !selected"
-                title="删掉已经没有影片、只剩海报与 nfo 的旧目录 (先列清单, 确认后才删)"
-                @click="cleanupDirs"
-              >
-                清理空目录
-              </button>
-              <button type="button" :disabled="busy" @click="doScrape">刮削待处理</button>
-              <button
-                type="button"
-                :disabled="busy || !info?.translate"
-                :title="info?.translate ? '把已有条目里的日文标题/简介翻译成中文' : '先在设置里配置 LLM 并打开翻译开关'"
-                @click="translateAll"
-              >
-                翻译待处理{{ info?.translate && info.pendingTranslation ? ` (${info.pendingTranslation})` : "" }}
-              </button>
-              <button
-                type="button"
-                :disabled="busy || !selected || selected.organizeEnabled === false"
-                :title="selected?.organizeEnabled === false ? '该库已设为只索引, 不会整理' : ''"
-                @click="preview"
-              >
-                整理预览
+                删除这个库 (只删索引)
               </button>
             </div>
-          </details>
+          </div>
         </div>
 
         <p v-if="info" class="sources">
@@ -1877,14 +2135,9 @@ async function testDmm(): Promise<void> {
 
       <section class="main">
         <nav class="tabs">
+          <button type="button" :class="{ on: tab === 'todo' }" @click="tab = 'todo'">待办</button>
           <button type="button" :class="{ on: tab === 'items' }" @click="tab = 'items'">条目</button>
-          <button type="button" :class="{ on: tab === 'unparsed' }" @click="tab = 'unparsed'; goUnparsedPage(unparsedPage)">
-            <!-- 影视库的"未识别"是目录级的, 标签上的数字也跟着换成目录数 -->
-            未识别 ({{ isVideoMode ? treeStats.dirs : unparsedCount }})
-          </button>
-          <button type="button" :class="{ on: tab === 'plan' }" @click="tab = 'plan'">整理预览</button>
           <button type="button" :class="{ on: tab === 'tasks' }" @click="tab = 'tasks'">任务</button>
-          <button type="button" :class="{ on: tab === 'settings' }" @click="tab = 'settings'">设置</button>
           <span class="spacer" />
           <span v-if="progress" class="progress">
             {{ progress.index }}/{{ progress.total || "?" }} · {{ progress.key }}
@@ -1895,6 +2148,19 @@ async function testDmm(): Promise<void> {
             <template v-if="translateProgress.error"> ✗ {{ translateProgress.error }}</template>
           </span>
           <span v-else-if="busy" class="muted">进行中…</span>
+          <button type="button" class="search-trigger" title="搜索条目、执行动作 (Ctrl K)" @click="openPalette()">
+            搜索 / 动作 <kbd>Ctrl K</kbd>
+          </button>
+          <button
+            type="button"
+            class="tab-icon"
+            :class="{ on: tab === 'settings' }"
+            aria-label="设置"
+            title="设置"
+            @click="tab = 'settings'"
+          >
+            ⚙
+          </button>
         </nav>
 
         <p v-if="error" class="error">{{ error }}</p>
@@ -1914,7 +2180,47 @@ async function testDmm(): Promise<void> {
         </div>
 
         <!-- 条目 -->
-        <div v-if="tab === 'items'" class="pane items">
+        <!-- 待办: 动作按天然顺序排, 每行自带"还剩多少" -->
+        <div v-if="tab === 'todo'" class="pane todo-pane">
+          <h2 class="pane-title">待办</h2>
+          <p class="muted pane-sub">
+            从上往下点就行 —— 每行的数字是「现在还剩多少」, 不是历史累计。
+            <span v-if="selected" class="muted">当前范围: {{ selected.name }}</span>
+            <span v-else class="muted">当前范围: 全部库</span>
+          </p>
+
+          <div v-if="!todoCounts" class="muted">正在数…</div>
+          <ul v-else class="todo-list">
+            <li v-for="row in todoRows" :key="row.key" class="todo-row" :class="{ next: row.next }">
+              <span class="todo-step mono">{{ row.step }}</span>
+              <div class="todo-what">
+                <b>
+                  {{ row.label }}
+                  <span v-if="row.tag" class="todo-tag" :class="{ write: row.tag === '写磁盘' }">{{ row.tag }}</span>
+                  <span v-if="row.next" class="todo-next">建议先做</span>
+                </b>
+                <small>{{ row.desc }}</small>
+              </div>
+              <div class="todo-num mono">
+                <template v-if="row.count !== null">{{ row.count.toLocaleString("zh-CN") }}</template>
+                <template v-else-if="todoLoading || todoPlan === null">…</template>
+                <template v-else>—</template>
+                <small v-if="row.unit">{{ row.unit }}</small>
+              </div>
+              <div class="todo-act">
+                <button type="button" :disabled="busy || row.disabled" @click="row.go()">{{ row.action }}</button>
+              </div>
+            </li>
+          </ul>
+
+          <p class="muted pane-foot">
+            扫描是秒级动作, 不记任务; 其余都会出现在「任务」里, 跑到一半能停。<br />
+            其他动作 (强制扫描 / 修正内容类型 / 同步 NFO / 清理空目录) 在 <kbd>Ctrl K</kbd> 里,
+            或在「⋯ 更多」里。
+          </p>
+        </div>
+
+        <div v-else-if="tab === 'items'" class="pane items">
           <!-- 一条挤不下: 筛选一行, 翻页与批量动作一行, 免得文字被压成竖排 -->
           <div class="toolbar">
             <div class="toolbar-row">
@@ -2302,6 +2608,7 @@ async function testDmm(): Promise<void> {
 
         <!-- 未识别 (影视库): 树。目录一层给"整目录"的动作, 文件一层给"就这一个"的动作 -->
         <div v-else-if="tab === 'unparsed' && isVideoMode" class="pane">
+          <button type="button" class="crumb" @click="tab = 'todo'">← 待办</button>
           <div class="toolbar">
             <span class="muted">
               {{ treeStats.dirs }} 个目录 · {{ treeStats.files }} 个文件
@@ -2324,6 +2631,15 @@ async function testDmm(): Promise<void> {
               </button>
               <button type="button" class="chip" :class="{ on: bindKind === '' }" @click="bindKind = ''">
                 全部 {{ treeStats.dirs }}
+              </button>
+              <button
+                type="button"
+                class="chip"
+                :disabled="busy"
+                title="按当前解析器重新判定内容类型 (会先列出清单让你确认)"
+                @click="retypeDetect"
+              >
+                修正内容类型
               </button>
             </div>
             <span v-if="suggestProgress" class="muted nowrap">
@@ -2472,8 +2788,17 @@ async function testDmm(): Promise<void> {
 
         <!-- 未识别 -->
         <div v-else-if="tab === 'unparsed'" class="pane">
+          <button type="button" class="crumb" @click="tab = 'todo'">← 待办</button>
           <div class="toolbar">
             <span class="muted">扫到了但认不出番号的文件: {{ unparsedCount }} 个（不会进入刮削）</span>
+            <button
+              type="button"
+              :disabled="busy"
+              title="按当前解析器重新判定内容类型 (会先列出清单让你确认)"
+              @click="retypeDetect"
+            >
+              修正内容类型
+            </button>
             <span class="spacer" />
             <button type="button" aria-label="上一页" title="上一页" :disabled="unparsedPage === 0" @click="goUnparsedPage(unparsedPage - 1)">‹</button>
             <span class="muted">{{ unparsedPage + 1 }}/{{ Math.max(1, Math.ceil(unparsedCount / unparsedPageSize)) }}</span>
@@ -2509,6 +2834,8 @@ async function testDmm(): Promise<void> {
 
         <!-- 整理预览 -->
         <div v-else-if="tab === 'plan'" class="pane">
+          <button type="button" class="crumb" @click="tab = 'todo'">← 待办</button>
+
           <!-- 番号制: 维度决定第一层目录。影视库没有这一层 —— 形状由条目类型决定 -->
           <div v-if="!isVideoMode" class="lib-config">
             <span class="muted">整理维度</span>
@@ -2528,6 +2855,10 @@ async function testDmm(): Promise<void> {
               允许整理
             </label>
             <span class="muted">当前模板: <code>{{ selected?.template }}</code></span>
+            <span class="spacer" />
+            <!-- 这两个也是写磁盘的, 跟整理放在一起: 都要先列清单再确认 -->
+            <button type="button" :disabled="busy || !selected" @click="cleanupDirs">清理空目录</button>
+            <button type="button" :disabled="busy || !selected" @click="writeNfoFiles()">同步 NFO</button>
           </div>
           <div v-else class="lib-config">
             <label class="check">
@@ -2542,6 +2873,9 @@ async function testDmm(): Promise<void> {
             <span class="muted">
               影视库没有整理维度: 形状由条目类型决定, 剧多一层 Season
             </span>
+            <span class="spacer" />
+            <button type="button" :disabled="busy || !selected" @click="cleanupDirs">清理空目录</button>
+            <button type="button" :disabled="busy || !selected" @click="writeNfoFiles()">同步 NFO</button>
           </div>
           <p v-if="!isVideoMode" class="muted note-line">
             一个库只选一个维度。多演员时"按演员"取第一演员; 想全部列进目录名, 把模板改成 <code>{actors}/{number}</code>。
@@ -3043,6 +3377,41 @@ async function testDmm(): Promise<void> {
             </button>
           </template>
         </footer>
+      </div>
+    </div>
+
+    <!-- Ctrl K 命令面板: 原来收在「更多操作」里的动作全在这里, 可搜可键盘执行 -->
+    <div v-if="paletteOpen" class="palette-veil" @click.self="paletteOpen = false">
+      <div class="palette" role="dialog" aria-modal="true" aria-label="搜索条目、执行动作">
+        <div class="palette-input">
+          <span class="muted">›</span>
+          <input
+            ref="paletteInput"
+            v-model="paletteQuery"
+            type="text"
+            placeholder="扫、刮、翻、nfo、整理…"
+            aria-label="搜索动作"
+            @input="paletteIndex = 0"
+            @keydown.enter.prevent="runPalette(paletteHits.filter((a) => !a.disabled)[paletteIndex])"
+          />
+          <kbd>Esc</kbd>
+        </div>
+        <ul class="palette-list">
+          <li
+            v-for="(action, index) in paletteHits"
+            :key="action.id"
+            class="palette-hit"
+            :class="{ on: index === paletteIndex, off: action.disabled }"
+          >
+            <button type="button" :disabled="action.disabled" @click="runPalette(action)">
+              <span>{{ action.title }}</span>
+              <small>{{ action.hint }}</small>
+              <span class="spacer" />
+              <kbd>Enter</kbd>
+            </button>
+          </li>
+          <li v-if="paletteHits.length === 0" class="palette-empty muted">没有匹配的动作</li>
+        </ul>
       </div>
     </div>
 
@@ -5063,7 +5432,269 @@ td.pick {
 .events [data-type="file.removed"] {
   color: var(--danger);
 }
+
+/* ---------------------------------------------------------------- 待办 */
+.todo-pane {
+  max-width: 960px;
+}
+
+.pane-title {
+  margin: 0 0 8px;
+  font-size: var(--fs-display);
+  font-weight: 600;
+}
+
+.pane-sub {
+  margin: 0 0 24px;
+  line-height: 20px;
+}
+
+.pane-foot {
+  margin: 16px 0 0;
+  font-size: var(--fs-label);
+  line-height: 20px;
+}
+
+.todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.todo-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px 1fr 140px 140px;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.todo-row:last-child {
+  border-bottom: 0;
+}
+
+/* 建议先做的那一行: 左侧一条主色, 比加粗标题更安静 */
+.todo-row.next::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--accent);
+}
+
+.todo-step {
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+  letter-spacing: 1px;
+}
+
+.todo-what b {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-section);
+  font-weight: 600;
+}
+
+.todo-what small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: var(--fs-body);
+  line-height: 18px;
+}
+
+.todo-tag {
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--panel-3);
+  color: var(--muted);
+  font-size: var(--fs-label);
+  font-weight: 400;
+}
+
+.todo-tag.write {
+  background: transparent;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+}
+
+.todo-next {
+  color: var(--accent);
+  font-size: var(--fs-label);
+  font-weight: 500;
+}
+
+.todo-num {
+  color: var(--text);
+  font-size: var(--fs-section);
+  text-align: right;
+}
+
+.todo-num small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+}
+
+.todo-act {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ---------------------------------------------------------------- 返回 / 侧栏菜单 */
+.crumb {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  height: auto;
+}
+
+.more {
+  position: relative;
+  width: 100%;
+}
+
+/* 侧栏里那个「⋯ 更多」: 和主按钮同宽, 文字靠左、快捷键靠右 */
+.more > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.more-menu {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  box-shadow: 0 2px 0 rgba(255, 255, 255, 0.04) inset, 0 16px 32px rgba(0, 0, 0, 0.32);
+}
+
+.more-menu button {
+  justify-content: flex-start;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.more-menu button:hover {
+  background: var(--panel-3);
+}
+
+/* ---------------------------------------------------------------- 命令面板 */
+.search-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: var(--fs-label);
+}
+
+.tab-icon {
+  min-width: 44px;
+  font-size: var(--fs-section);
+}
+
+.palette-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 96px;
+  background: rgba(15, 17, 21, 0.72);
+}
+
+.palette {
+  width: 640px;
+  max-height: 60vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  box-shadow: 0 2px 0 rgba(255, 255, 255, 0.04) inset, 0 32px 64px rgba(0, 0, 0, 0.48);
+}
+
+.palette-input {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.palette-input input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-section);
+  outline: none;
+}
+
+.palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 0;
+  overflow: auto;
+}
+
+.palette-hit button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  justify-content: flex-start;
+  padding: 12px 20px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.palette-hit small {
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+}
+
+.palette-hit.on button {
+  background: var(--panel-2);
+}
+
+.palette-hit.off button {
+  opacity: 0.5;
+}
+
+.palette-empty {
+  padding: 16px 20px;
+  font-size: var(--fs-body);
+}
+
 </style>
+
 
 /* 「重新刮削」的结果紧跟按钮: 长页面里顶部那条提示没人看得到 */
 .scraped-note {

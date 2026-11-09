@@ -189,6 +189,20 @@ export interface UnrecognizedDir {
 }
 
 /**
+ * 未识别目录的计数 (待办页那行「未识别 258 个目录」)。
+ *
+ * 故意复用它下面那棵树而不是另写一条 SQL: "什么算一个未识别目录"的判据只该有一处,
+ * 否则首页说 258、点进去看到 254 的时候没人知道该信谁。
+ */
+export function countUnrecognized(
+  rt: Runtime,
+  options: { libraryId?: number } = {},
+): { dirs: number; files: number } {
+  const dirs = listUnrecognizedDirs(rt, options);
+  return { dirs: dirs.length, files: dirs.reduce((sum, dir) => sum + dir.files.length, 0) };
+}
+
+/**
  * 未识别页的**树**: 目录一层, 文件一层。
  *
  * 和 `listBindableDirs` 的区别: 那个给的是"能直接绑的候选"(剧=目录, 电影=单个文件),

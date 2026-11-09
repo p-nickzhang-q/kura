@@ -47,6 +47,8 @@ import {
   listItems,
   countItems,
   countPending,
+  todoCounts,
+  todoPlans,
   countExhausted,
   countPendingTranslation,
   translationStats,
@@ -675,6 +677,20 @@ function registerIpc(): void {
       }),
     };
   });
+
+  /**
+   * 待办页的数字, 分两次取: 便宜的立刻回, 贵的(要读磁盘)随后补。
+   *
+   * 合成一个 handler 会让首页在移动硬盘上卡住几百毫秒等一个"可整理 94"——
+   * 而人第一眼要的是"还有 258 个目录没认出来"。
+   */
+  ipcMain.handle("todo:counts", (_event, input: { libraryId?: number } = {}) =>
+    todoCounts(mustRuntime(), input?.libraryId === undefined ? {} : { libraryId: input.libraryId }),
+  );
+
+  ipcMain.handle("todo:plans", async (_event, input: { libraryId?: number } = {}) =>
+    todoPlans(mustRuntime(), input?.libraryId === undefined ? {} : { libraryId: input.libraryId }),
+  );
 
   // 手动加入: 不连任何来源, 只建一个本地条目 (local: 身份, ugc 标记)
   ipcMain.handle(

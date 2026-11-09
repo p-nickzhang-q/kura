@@ -76,6 +76,21 @@ interface KuraBindableDir {
   suspectSeries?: boolean;
 }
 
+/** 待办页: 便宜的那一批 (纯 SQL 计数)。 */
+interface KuraTodoCounts {
+  unparsedDirs: number;
+  unparsedFiles: number;
+  pendingScrape: number;
+  pendingTranslate: number;
+  organizeLibraries: number;
+}
+
+/** 待办页: 要读磁盘的那一批, 界面先画空再补。 */
+interface KuraTodoPlans {
+  organize: { move: number; writeNfo: number; copyImage: number; skip: number } | null;
+  nfo: { created: number; written: number } | null;
+}
+
 interface KuraUnrecognizedFile {
   path: string;
   name: string;
@@ -311,6 +326,10 @@ interface KuraBridge {
   onSuggestProgress(callback: (update: { index: number; total: number; dir: string }) => void): () => void;
   bindMany(libraryId: number, items: { dir: string; key: string; paths?: string[] }[]): Promise<{ results: KuraBindManyResult[] }>;
   unrecognizedDirs(libraryId?: number, limit?: number): Promise<{ dirs: KuraUnrecognizedDir[] }>;
+  /** 待办页的便宜数字 (SQL 计数)。 */
+  todoCounts(libraryId?: number): Promise<KuraTodoCounts>;
+  /** 待办页的贵数字 (要读磁盘: 整理计划 / nfo 差异)。 */
+  todoPlans(libraryId?: number): Promise<KuraTodoPlans>;
   bindLocalDir(
     libraryId: number,
     dir: string,
