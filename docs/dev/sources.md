@@ -58,6 +58,30 @@ grep -ciE "女優|素人|人妻" tests/fixtures/*.html
 | JavDB | 检索结果番号恒省略开头数字段 | 复用 javbus 的 `selectCandidateIndex` |
 | DMM | 网页版对非日本 IP 301 到地区封锁页 | 改走官方 API, 不做 HTML 解析 |
 | DMM | 凭据无效返回 HTTP 400 + `errors.api_id` | 翻译成 `NEEDS_INPUT`, 不伪装成 NOT_FOUND |
+| Jav321 | 地址用 DMM 的 content_id(小写厂牌 + 集号补零), 补几位各时期不一致 | `contentIdCandidates` 依次试 5 位 / 3 位 / 原样, 404 就试下一个 |
+| Jav321 | 字段是 `<b>标签</b>: <a>…</a>` 平铺在一个 div 里, **没有行容器** | `nextUntil("b")` 取到下一个标签之前的兄弟节点 |
+| Jav321 | 标题的 h3 里演员名是**裸文本**接在后面 | `stripTrailingActors` 去掉结尾的演员名 |
+| Jav321 | 简介、播放器、广告位都是 `div.col-md-12` | 只认**没有子元素**的那个(播放器带 script/video, 广告位带 script) |
+
+## 简介(plot)从哪来
+
+**JavBus 与 JavDB 的详情页没有简介栏** —— 这不是解析漏了, 是页面上真的没有
+(实体页确认: JavBus 的字段区只有 識別碼/發行日期/長度/導演/製作商/發行商/系列/類別/演員)。
+所以「AV 条目没有简介」是常态, 想有简介必须换来源:
+
+| 来源 | 有简介吗 | 能用吗 |
+|---|---|---|
+| Jav321 (一木道) | ✓ 整段日语 あらすじ | 直连可达、无 Cloudflare |
+| DMM 商品页 | ✓ あらすじ | 只在商品页(API v3 明确移除了商品説明), 且对非日本 IP 是 JS 空壳 |
+| r18.dev | ✓ `comment_ja` | **只在官方 PostgreSQL dump 里**, HTTP 接口返回的 comment 是空的 |
+| MGStage / Prestige / 片商官网 | ✓ | 只覆盖自家作品, 且大多 403 |
+| Airav / AVSOX / iqqtv(麻豆) | ✓ | 前两个 403/空结果, iqqtv 只覆盖麻豆系 |
+
+做法是 **按需补缺**: `scrape` 聚合完之后如果 `plot` 还是空, 才去 `PLOT_FALLBACK_SOURCES`
+(`jav321`) 补一次, 然后把它的记录排在路由末尾重新聚合 —— 前面来源已经给的字段不会被它覆盖。
+显式 `--source` 时不补(用户点名要哪几个源就只跑哪几个)。
+
+拿到的是日语, 交给翻译管线(`translateMetadata` 只翻 title/plot)转成中文。
 
 ## 字段取舍
 

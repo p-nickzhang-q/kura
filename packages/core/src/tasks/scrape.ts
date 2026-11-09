@@ -7,7 +7,7 @@ import { pruneActors, syncItemActors } from "../db/actors";
 import { normalizeActorName } from "../domain/actors";
 import type { Runtime } from "../runtime";
 import { createTask, runTask, type TaskRow } from "./queue";
-import { routeFor, type Registry } from "../sources";
+import { PLOT_FALLBACK_SOURCES, routeFor, type Registry, type Source } from "../sources";
 import type { Translator } from "../llm/translate";
 
 export interface ScrapeOptions {
@@ -64,6 +64,55 @@ export async function scrape(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRe
 
 /** 默认重试上限: 到顶后不再自动进待刮队列, 需显式 --retry-failed。 */
 export const MAX_SCRAPE_ATTEMPTS = 3;
+
+/** 聚合后 plot 是否已经有值 (有值就不用补)。 */
+function incomingHasPlot(records: SourceRecord[], routing: string[]): boolean {
+  return Boolean(aggregate(records, routing).fields.plot);
+}
+
+/**
+ * 只在缺简介时请求的补缺来源。返回实际拿到结果的来源 id (有结果才进路由顺序末尾)。
+ *
+ * 失败一律当"补不到", 不抛 —— 简介是锦上添花, 不能因为它让整次刮削失败。
+ * 预算比主路由短: 它是第二轮, 用户已经等过一次了。
+ */
+async function fetchPlotFallback(
+  opts: ScrapeOptions,
+  usable: Source[],
+  records: SourceRecord[],
+  failures: { site: string; error: string; code?: string }[],
+): Promise<string[]> {
+  const already = new Set(usable.map((source) => source.id));
+  const candidates = PLOT_FALLBACK_SOURCES.map((id) => opts.registry.get(id)).filter(
+    (source): source is Source =>
+      Boolean(source) &&
+      source!.status === "ready" &&
+      !already.has(source!.id) &&
+      // 类型不匹配就不问: 补缺源也只服务它声明支持的类型
+      (source!.contentTypes === "all" || source!.contentTypes.includes(opts.key.contentType)),
+  );
+  if (candidates.length === 0) return [];
+
+  const budget = AbortSignal.timeout(8_000);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, budget]) : budget;
+  const settled = await Promise.allSettled(
+    candidates.map((source) => source.fetch(opts.key, { fixturesDir: opts.fixturesDir ?? null, signal })),
+  );
+
+  const used: string[] = [];
+  settled.forEach((result, index) => {
+    const site = candidates[index]!.id;
+    if (result.status === "rejected") {
+      failures.push({ site, error: result.reason instanceof Error ? result.reason.message : String(result.reason) });
+      return;
+    }
+    if (result.value) {
+      records.push({ site, fields: result.value });
+      used.push(site);
+    }
+  });
+  return used;
+}
 
 function recordFailure(rt: Runtime, key: string, message: string): void {
   rt.db.run(
@@ -133,7 +182,15 @@ async function scrapeOnce(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRepor
     throw new AppError(`来源里没有这个番号: ${opts.key.value}`, EXIT.NOT_FOUND, { key: opts.key.value });
   }
 
-  const incoming = aggregate(records, usable.map((source) => source.id));
+  // 简介补缺: javbus / javdb 的详情页**没有简介栏**, 全站都是这个情况。
+  // 聚合完 plot 还是空, 才去 jav321 补一次 —— 有简介的条目不多打一个请求。
+  // 显式指定了 --source 时不补: 用户点名要哪几个源, 就只跑哪几个。
+  const fallbackIds =
+    opts.sources || incomingHasPlot(records, usable.map((source) => source.id))
+      ? []
+      : await fetchPlotFallback(opts, usable, records, failures);
+
+  const incoming = aggregate(records, [...usable.map((source) => source.id), ...fallbackIds]);
 
   const existingRow = rt.db.get<ItemRow>("select * from items where number = ?", [opts.key.value]);
   const existing = existingRow ? rowToMetadata(existingRow) : null;
@@ -172,7 +229,7 @@ async function scrapeOnce(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRepor
   return {
     key: opts.key.value,
     contentType: opts.key.contentType,
-    route: usable.map((source) => source.id),
+    route: [...usable.map((source) => source.id), ...fallbackIds],
     skipped,
     filled,
     empty: ["title", "plot", "release_date", "duration_min", "studio", "label", "series", "directors", "actors", "tags"].filter(

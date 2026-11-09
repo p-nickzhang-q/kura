@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLibrary, getItem, updateItem } from "../src/index";
 import { openRuntime } from "../src/runtime";
-import { createRegistry, defaultSources, fixtureSource } from "../src/sources";
+import { createRegistry, defaultSources, fixtureSource, type Source } from "../src/sources";
 import { listFiles } from "../src/tasks/scan";
 import { countItems, countExhausted, countPending, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys } from "../src/tasks/scrape";
 import { countPendingTranslation, translatePending } from "../src/tasks/translate";
@@ -159,6 +159,55 @@ describe("scan → scrape → organize", () => {
 
       // total 与列表用的是同一套 where
       expect(countItems(rt, { q: "离线样本" })).toBe(listItems(rt, { q: "离线样本" }).length);
+    } finally {
+      rt.close();
+    }
+  });
+
+  test("没有简介时才去补 (jav321), 有简介就不多打一次", async () => {
+    const rt = await openRuntime({ dataDir });
+    try {
+      let j321Calls = 0;
+      const source = (id: string, fields: Record<string, unknown>): Source => ({
+        id,
+        label: id,
+        status: "ready",
+        contentTypes: "all",
+        requirements: () => [],
+        fetch: async () => {
+          if (id === "jav321") j321Calls += 1;
+          return fields as never;
+        },
+      });
+      const key = { value: "ABC-123", number: "ABC-123", contentType: "censored" as const };
+
+      // 1. javbus 没有简介 → 补一次 jav321
+      const first = await scrape(rt, {
+        key,
+        registry: createRegistry([
+          source("javbus", { title: "标题甲" }),
+          source("javdb", { tags: ["单人作品"] }),
+          source("jav321", { title: "标题乙", plot: "日语简介", studio: "片商甲" }),
+        ]),
+        fixturesDir: null,
+        dryRun: true,
+      });
+      expect(j321Calls).toBe(1);
+      expect(first.route).toEqual(["javbus", "javdb", "jav321"]);
+
+      // 2. javbus 自己就有简介 → 不该再打 jav321
+      const second = await scrape(rt, {
+        key,
+        registry: createRegistry([
+          source("javbus", { title: "标题甲", plot: "已有简介" }),
+          source("javdb", {}),
+          source("jav321", { plot: "日语简介" }),
+        ]),
+        fixturesDir: null,
+        dryRun: true,
+      });
+      expect(j321Calls).toBe(1);
+      expect(second.route).toEqual(["javbus", "javdb"]);
     } finally {
       rt.close();
     }

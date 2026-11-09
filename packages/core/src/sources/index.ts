@@ -9,6 +9,7 @@ export { fixtureSource } from "./builtin";
 export type { SourceConfig } from "./builtin";
 export { buildUrl, matchDmmItem, normalizeCode, toRawFields, type DmmEnv, type DmmItem, type DmmResponse } from "./dmm";
 export { createJavdbSource, parseDetail as parseJavdbDetail, parseSearch as parseJavdbSearch, assertNotLoginPage, type JavdbCandidate } from "./javdb";
+export { contentIdCandidates, createJav321Source, parseDetail as parseJav321Detail, rowLinks as jav321RowLinks, stripTrailingActors } from "./jav321";
 export { createJavbusSource, numberMatch, numberVariants, parseDetail, parseSearch, selectCandidateIndex, type SearchCandidate } from "./javbus";
 
 /** 每个内容类型的站点名单。既是抓取名单, 也是逐字段择优的默认顺序。 */
@@ -21,6 +22,14 @@ export const DEFAULT_ROUTES: Record<ContentType, string[]> = {
   western: ["javdb"],
   anime: ["dmm", "javdb"],
 };
+
+/**
+ * 简介补缺来源: 只在聚合完 **plot 还是空** 时才请求。
+ *
+ * javbus / javdb 的详情页没有简介栏, 所以「没简介」是常态而不是解析失败;
+ * 每次刮削都无脑多打一次 jav321 只会让批量刮削白白慢一倍, 所以按需补。
+ */
+export const PLOT_FALLBACK_SOURCES = ["jav321"] as const;
 
 export interface DefaultSourcesOptions extends Partial<SourceConfig> {
   http?: HttpClient;

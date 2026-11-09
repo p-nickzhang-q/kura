@@ -71,6 +71,8 @@ export {
 } from "./sources/tmdb";
 export type { TmdbClient, TmdbEnv, TmdbEpisode, TmdbSearchHit, TmdbSeason, TmdbShow } from "./sources/tmdb";
 export { createJavbusSource, numberMatch, numberVariants, parseDetail, parseSearch, selectCandidateIndex } from "./sources/javbus";
+export { contentIdCandidates, createJav321Source, stripTrailingActors } from "./sources/jav321";
+export { PLOT_FALLBACK_SOURCES } from "./sources";
 export type { SearchCandidate } from "./sources/javbus";
 export type { DmmEnv, DmmItem, DmmResponse } from "./sources/dmm";
 export type { DefaultSourcesOptions, Registry, Source, SourceConfig, SourceContext } from "./sources";

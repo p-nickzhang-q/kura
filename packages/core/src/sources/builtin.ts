@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { HttpClient } from "../net/http";
 import type { RawFields } from "../domain/types";
 import { createDmmSource, type DmmEnv } from "./dmm";
+import { createJav321Source } from "./jav321";
 import { createJavdbSource } from "./javdb";
 import { createJavbusSource } from "./javbus";
 import type { Source } from "./types";
@@ -57,6 +58,7 @@ export function createSources(http: HttpClient, config: SourceConfig): Source[] 
     createDmmSource(http, config.dmm),
     createJavbusSource(http),
     createJavdbSource(http),
+    createJav321Source(http),
     fixtureSource,
   ];
 }
