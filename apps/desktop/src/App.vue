@@ -485,6 +485,49 @@ function toggleDir(node: KuraUnrecognizedDir): void {
   expandedDirs.value = { ...expandedDirs.value, [node.dir]: !isExpanded(node) };
 }
 
+/**
+ * 勾选的目录 → 真正能绑的建议。
+ *
+ * 剧的建议挂在目录上, 电影的建议挂在**文件**上 —— 勾一个装 12 部电影的目录,
+ * 意味着这 12 条文件级建议都算选中。
+ */
+const pickedSuggestions = computed(() => {
+  const out: KuraBindingSuggestion[] = [];
+  for (const dir of suggestPicked.value) {
+    const own = suggestions.value[dir];
+    if (own?.hit) {
+      out.push(own);
+      continue;
+    }
+    for (const [key, entry] of Object.entries(suggestions.value)) {
+      if (!entry.hit) continue;
+      if (key === dir || key.startsWith(`${dir}\\`) || key.startsWith(`${dir}/`)) out.push(entry);
+    }
+  }
+  return out;
+});
+
+/** 一个目录下有多少条文件级建议 (电影候选是按文件给建议的)。 */
+function fileHitCount(node: KuraUnrecognizedDir): number {
+  return node.files.filter((file) => suggestions.value[file.path]?.hit).length;
+}
+
+/** 建议的 key 是目录(tv) 或文件(movie); 勾选状态统一记在目录上。 */
+function dirOfKey(key: string): string {
+  if (unrecognizedDirs.value.some((node) => node.dir === key)) return key;
+  const parent = unrecognizedDirs.value.find((node) => node.files.some((file) => file.path === key));
+  return parent?.dir ?? key;
+}
+
+/** 全选/清空当前筛选出来的目录。 */
+function toggleSelectAll(): void {
+  const visible = treeNodes.value.map((node) => node.dir);
+  const allPicked = visible.every((dir) => suggestPicked.value.includes(dir));
+  suggestPicked.value = allPicked
+    ? suggestPicked.value.filter((dir) => !visible.includes(dir))
+    : [...new Set([...suggestPicked.value, ...visible])];
+}
+
 /** 树节点 → 绑定对话框认识的候选形状 (整目录)。 */
 function dirCandidate(node: KuraUnrecognizedDir): KuraBindableDir {
   return {
@@ -578,22 +621,31 @@ async function findSuggestions(): Promise<void> {
   suggestProgress.value = { index: 0, total: 0, dir: "准备中" };
   runningLabel.value = `找绑定建议 · ${selected.value?.name ?? ""}`;
   try {
-    // 只搜当前筛选的那一类: 电影候选几百个, 一起搜会卡很久且大多没结果
-    const result = await window.kura.tmdbSuggest(selectedId.value, bindKind.value || undefined);
+    // 勾了目录就只搜勾选的: 全库几十个目录一次搜要一两分钟, 而人往往只想处理刚整理完的那几个
+    const scope = suggestPicked.value.length > 0 ? plainArray(suggestPicked.value) : undefined;
+    // 没勾选时按当前筛选的那一类搜: 电影候选几百个, 一起搜会卡很久且大多没结果
+    const result = await window.kura.tmdbSuggest(selectedId.value, bindKind.value || undefined, scope);
     if (result.error) {
       errors.value.push(result.error);
       return;
     }
     suggestions.value = Object.fromEntries(result.suggestions.map((item) => [item.dir, item]));
-    // 默认只勾"片名与年份都对上"的: 中等把握也要人点, 免得一次误绑一整批
-    suggestPicked.value = result.suggestions
-      .filter((item) => item.confidence === "high" && item.hit)
-      .map((item) => item.dir);
+    // 没勾选的场景保持老习惯: 默认勾上"片名与年份都对上"的, 一次绑一批。
+    // 勾了目录的场景**不覆盖**人的选择 —— 那是搜索范围, 不是搜索结果。
+    if (!scope) {
+      suggestPicked.value = [
+        ...new Set(
+          result.suggestions
+            .filter((item) => item.confidence === "high" && item.hit)
+            .map((item) => dirOfKey(item.dir)),
+        ),
+      ];
+    }
     const total = result.suggestions.length;
     const hit = result.suggestions.filter((item) => item.hit).length;
     note.value = result.cancelled
-      ? `已停止 · 完成 ${total} 个目录 (${hit} 个有建议)`
-      : `找到 ${hit}/${total} 个建议 · 已勾选 ${suggestPicked.value.length} 个高把握的, 确认后一次绑完`;
+      ? `已停止 · 完成 ${total} 个候选 (${hit} 个有建议)`
+      : `找到 ${hit}/${total} 个建议${scope ? ` (范围: 勾选的 ${scope.length} 个目录)` : ""} · 确认后一次绑完`;
     // 任务记录了这次搜索, 任务页能看到进度与结果
     void refreshTasks();
   } catch (err) {
@@ -614,10 +666,11 @@ function toggleSuggest(dir: string): void {
 /** 把勾选的建议一次绑完(逐个绑 + 顺手刮)。 */
 async function bindPicked(): Promise<void> {
   if (selectedId.value === null || suggestPicked.value.length === 0) return;
-  const items = suggestPicked.value
-    .map((dir) => suggestions.value[dir])
-    .filter((item): item is KuraBindingSuggestion => Boolean(item?.hit))
-    .map((item) => ({ dir: item.dir, key: item.hit!.key, paths: plainArray(item.paths) }));
+  const items = pickedSuggestions.value.map((item) => ({
+    dir: item.dir,
+    key: item.hit!.key,
+    paths: plainArray(item.paths),
+  }));
   if (items.length === 0) return;
 
   suggestBusy.value = true;
@@ -1267,6 +1320,19 @@ function taskTypeLabel(type: string): string {
 
 function taskStatusLabel(status: string): string {
   return TASK_STATUS_LABEL[status] ?? status;
+}
+
+/**
+ * 停一个任务。
+ *
+ * 运行中的任务没有守护进程可杀, 只能 abort 界面这一侧的信号 —— 命令行发起的任务
+ * 停不了, 那时后端会明确说"不是本界面发起的", 不要在这里假装成功。
+ */
+async function stopTask(task: KuraTask): Promise<void> {
+  const result = await run("停止任务", () => window.kura.stopTask(task.id));
+  if (!result?.stopped) return;
+  note.value = `已请求停止 #${task.id} (${taskTypeLabel(task.type)}), 正在收尾`;
+  await refreshAll();
 }
 
 /** 重跑 = 立刻再跑一遍。onlyFailed 时只跑那条任务里失败的番号。 */
@@ -2251,8 +2317,17 @@ async function testDmm(): Promise<void> {
             <span v-if="suggestProgress" class="muted nowrap">
               搜索中 {{ suggestProgress.index }}/{{ suggestProgress.total || "?" }} · {{ suggestProgress.dir }}
             </span>
+            <button
+              type="button"
+              class="chip"
+              :disabled="suggestBusy || treeNodes.length === 0"
+              :title="`把当前列表的 ${treeNodes.length} 个目录全部勾上 / 全部取消`"
+              @click="toggleSelectAll"
+            >
+              {{ treeNodes.length > 0 && treeNodes.every((node) => suggestPicked.includes(node.dir)) ? "全不选" : `全选 ${treeNodes.length}` }}
+            </button>
             <button type="button" :disabled="busy || suggestBusy || treeStats.dirs === 0" @click="findSuggestions">
-              {{ suggestBusy ? "搜索中…" : "批量找建议" }}
+              {{ suggestBusy ? "搜索中…" : suggestPicked.length > 0 ? `找建议 (已勾选 ${suggestPicked.length})` : "批量找建议" }}
             </button>
           </div>
 
@@ -2269,11 +2344,10 @@ async function testDmm(): Promise<void> {
                   {{ isExpanded(node) ? "▾" : "▸" }}
                 </button>
                 <input
-                  v-if="suggestions[node.dir]?.hit"
                   type="checkbox"
                   class="tree-pick"
                   :checked="suggestPicked.includes(node.dir)"
-                  :aria-label="`绑定 ${node.name}`"
+                  :aria-label="`选择 ${node.name}`"
                   @change="toggleSuggest(node.dir)"
                 />
                 <div class="tree-label">
@@ -2301,6 +2375,10 @@ async function testDmm(): Promise<void> {
                       </template>
                       <span v-else-if="suggestions[node.dir]!.error" class="warn">搜索失败: {{ suggestions[node.dir]!.error }}</span>
                       <span v-else class="muted">没搜到，手动搜一次</span>
+                    </template>
+                    <template v-else-if="fileHitCount(node) > 0">
+                      文件级建议 {{ fileHitCount(node) }} 条
+                      <span class="muted">（勾上这个目录再点「绑定」，逐个文件绑）</span>
                     </template>
                     <template v-else>{{ node.dir }}</template>
                   </div>
@@ -2360,11 +2438,22 @@ async function testDmm(): Promise<void> {
 
           <!-- 勾选后才出现的动作条: 没勾选时不占位置, 也不制造"这里有东西等着点"的错觉 -->
           <div v-if="suggestPicked.length > 0" class="bind-bar">
-            <span>已勾选 {{ suggestPicked.length }} 个目录</span>
+            <span>
+              已勾选 {{ suggestPicked.length }} 个目录
+              <template v-if="pickedSuggestions.length > 0"> · 其中 {{ pickedSuggestions.length }} 条有建议</template>
+            </span>
             <span class="spacer" />
             <button type="button" :disabled="suggestBusy" @click="suggestPicked = []">取消勾选</button>
-            <button type="button" class="primary" :disabled="suggestBusy" @click="bindPicked">
-              {{ suggestBusy ? "绑定中…" : `绑定这 ${suggestPicked.length} 个并刮削` }}
+            <button type="button" :disabled="suggestBusy || busy" @click="findSuggestions">
+              只搜勾选的
+            </button>
+            <button
+              type="button"
+              class="primary"
+              :disabled="suggestBusy || busy || pickedSuggestions.length === 0"
+              @click="bindPicked"
+            >
+              {{ `绑定这 ${pickedSuggestions.length} 条并刮削` }}
             </button>
           </div>
         </div>
@@ -2501,6 +2590,16 @@ async function testDmm(): Promise<void> {
                   <td class="mono" :class="{ warn: task.failed > 0 }">{{ task.failed }}</td>
                   <td class="mono muted">{{ formatTime(task.finishedAt ?? task.startedAt) }}</td>
                   <td class="row-actions">
+                    <button
+                      v-if="task.status === 'running' || task.status === 'queued'"
+                      type="button"
+                      class="danger-ghost"
+                      :disabled="busy"
+                      title="停止这条任务 (正在进行的工作会收尾)"
+                      @click="stopTask(task)"
+                    >
+                      停止
+                    </button>
                     <button
                       v-if="task.failed > 0"
                       type="button"

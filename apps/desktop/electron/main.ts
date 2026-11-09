@@ -55,6 +55,7 @@ import {
   listFiles,
   countFiles,
   listTasks,
+  cancelTask,
   getTask,
   syncNfo,
   listLibraries,
@@ -585,7 +586,9 @@ function registerIpc(): void {
    * 走任务队列 + 进度事件: 一个目录一次 TMDB 往返, 40 个目录就是几十秒,
    * 没有进度的话界面看起来像卡死了。
    */
-  ipcMain.handle("tmdb:suggest", async (_event, input: { libraryId?: number; kind?: "tv" | "movie" } = {}) =>
+  ipcMain.handle(
+    "tmdb:suggest",
+    async (_event, input: { libraryId?: number; kind?: "tv" | "movie"; dirs?: string[] } = {}) =>
     exclusive("找绑定建议", async (signal) => {
       const rt = mustRuntime();
       const tmdb = await tmdbClient(rt);
@@ -596,6 +599,7 @@ function registerIpc(): void {
           tmdb,
           libraryId: input.libraryId ?? undefined,
           ...(input.kind ? { kind: input.kind } : {}),
+          ...(input.dirs && input.dirs.length > 0 ? { dirs: input.dirs } : {}),
           limit: 100,
           onProgress: (progress) => win?.webContents.send("suggest:progress", progress),
         },
@@ -1017,6 +1021,30 @@ function registerIpc(): void {
   ipcMain.handle("tasks:list", (_event, input: { limit?: number } = {}) =>
     listTasks(mustRuntime(), { limit: input.limit ?? 20 }),
   );
+
+  /**
+   * 停止一个任务。
+   *
+   * 有两段路: 还没开始的 `queued` 直接改状态; 正在跑的只能 abort 进程内的那个信号 ——
+   * 没有守护进程, 所以"停一个别的进程发起的任务"是做不到的, 这时要说清楚而不是假装成功。
+   */
+  ipcMain.handle("tasks:stop", (_event, input: { id: number }) => {
+    const rt = mustRuntime();
+    const task = getTask(rt, input.id);
+    if (!task) throw new AppError(`任务不存在: ${input.id}`, EXIT.NOT_FOUND, { id: input.id });
+    if (task.status === "queued") return { stopped: cancelTask(rt, input.id), reason: null };
+    if (task.status !== "running") {
+      throw new AppError(`任务已经结束 (${task.status})`, EXIT.USAGE, { id: input.id, status: task.status });
+    }
+    if (!currentAbort) {
+      throw new AppError("这个任务不是本界面发起的, 停不了", EXIT.USAGE, {
+        id: input.id,
+        hint: "命令行里跑的任务要在命令行按 Ctrl+C",
+      });
+    }
+    currentAbort.abort();
+    return { stopped: true, reason: null };
+  });
 
   ipcMain.handle("tasks:retry", (_event, input: { id: number; onlyFailed?: boolean }) => rerunTask(input.id, input.onlyFailed === true));
 

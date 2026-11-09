@@ -217,3 +217,78 @@ describe("声明集数不被文件污染", () => {
     ]);
   });
 });
+
+describe("勾选目录后再找建议", () => {
+  test("只搜勾选的目录, 未勾选的一条都不打", async () => {
+    await makeDir("甲剧 (2013)", ["第1集.mp4", "第2集.mp4"]);
+    await makeDir("乙剧 (2019)", ["第1集.mp4", "第2集.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const calls: string[] = [];
+    const tmdb = fakeTmdb({ 甲剧: [hit(1, "甲剧", "2013")], 乙剧: [hit(2, "乙剧", "2019")] }, calls);
+    const suggestions = await suggestBindings(rt, {
+      tmdb,
+      libraryId: library.id,
+      dirs: [join(media, "甲剧 (2013)")],
+    });
+
+    expect(suggestions).toHaveLength(1);
+    expect(suggestions[0]?.dir).toBe(join(media, "甲剧 (2013)"));
+    expect(calls).toEqual(["甲剧"]);
+  });
+
+  test("勾一个装多部电影的目录: 目录下的每个文件候选都算选中", async () => {
+    // 目录里 3 个文件、0 个集号 → 3 条电影候选 (key 是文件路径)
+    await makeDir("各种电影", ["甲片 (2019).mkv", "乙片 (2020).mkv", "丙片 (2021).mkv", "丁片 (2022).mkv"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const calls: string[] = [];
+    const tmdb = fakeTmdb({}, calls);
+    const suggestions = await suggestBindings(rt, {
+      tmdb,
+      libraryId: library.id,
+      dirs: [join(media, "各种电影")],
+    });
+
+    // 4 个文件都在这个目录下 → 4 条候选全被选中 (目录名"各种电影"不可搜, 所以 0 次请求)
+    expect(suggestions).toHaveLength(4);
+    expect(suggestions.every((item) => item.dir.startsWith(join(media, "各种电影")))).toBe(true);
+  });
+
+  test("勾选的目录已经绑完了: 一条都不搜, 也不报错", async () => {
+    await makeDir("甲剧 (2013)", ["第1集.mp4", "第2集.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const calls: string[] = [];
+    const suggestions = await suggestBindings(rt, {
+      tmdb: fakeTmdb({}, calls),
+      libraryId: library.id,
+      dirs: [join(media, "并不存在的目录")],
+    });
+    expect(suggestions).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  test("走任务时 total 与实际搜索数量一致 (进度条分母不能错)", async () => {
+    await makeDir("甲剧 (2013)", ["第1集.mp4", "第2集.mp4"]);
+    await makeDir("乙剧 (2019)", ["第1集.mp4", "第2集.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const controller = new AbortController();
+    const { task } = await suggestBindingsTask(
+      rt,
+      {
+        tmdb: fakeTmdb({ 甲剧: [hit(1, "甲剧", "2013")] }),
+        libraryId: library.id,
+        dirs: [join(media, "甲剧 (2013)")],
+      },
+      controller.signal,
+    );
+    expect(task.total).toBe(1);
+    expect(listTasks(rt)[0]?.total).toBe(1);
+  });
+});

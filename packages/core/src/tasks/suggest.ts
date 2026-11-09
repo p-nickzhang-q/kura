@@ -1,5 +1,6 @@
 import type { TmdbClient, TmdbSearchHit } from "../sources/tmdb";
 import { guessTitleFromDir, matchConfidence, searchableGuess, type MatchConfidence } from "../domain/title-guess";
+import { sep } from "node:path";
 import { listBindableDirs, type BindingSuggestion } from "./bind";
 import { createTask, getTask, runTask, type TaskRow } from "./queue";
 import type { Runtime } from "../runtime";
@@ -16,18 +17,45 @@ export interface SuggestOptions {
   libraryId?: number;
   /** 只对这类候选搜索 (默认全部): 真库里电影候选可能几百个, 不该一起搜。 */
   kind?: "tv" | "movie";
+  /**
+   * 只搜这些目录 (未识别页勾选的候选)。省略 = 按 kind/limit 全量。
+   *
+   * 勾选一个目录时, 它下面的**每个**候选都算选中 —— 电影候选的 key 是文件路径,
+   * tv 候选的 key 是目录, 两种粒度都得被"勾了这个目录"覆盖到。
+   */
+  dirs?: string[];
   tmdb: TmdbClient;
   limit?: number;
   signal?: AbortSignal;
   onProgress?: (progress: { index: number; total: number; dir: string }) => void;
 }
 
-export async function suggestBindings(rt: Runtime, options: SuggestOptions): Promise<BindingSuggestion[]> {
-  const dirs = listBindableDirs(rt, {
+/**
+ * 这次要搜哪些候选。
+ *
+ * `suggestBindings` 与 `suggestBindingsTask`(算 total) 必须用同一份清单,
+ * 否则进度条的分母会和实际跑的数量对不上。
+ */
+export function suggestTargets(rt: Runtime, options: SuggestOptions): ReturnType<typeof listBindableDirs> {
+  const limit = options.limit ?? 100;
+  const checked = (options.dirs ?? []).map((dir) => dir.replace(/[\\/]+$/, "")).filter(Boolean);
+  // 勾选时先取全量再过滤: 先截断再筛, 勾中的目录可能已经掉在 100 条之外了
+  const candidates = listBindableDirs(rt, {
     libraryId: options.libraryId,
     ...(options.kind ? { kind: options.kind } : {}),
-    limit: options.limit ?? 100,
+    limit: checked.length > 0 ? Number.MAX_SAFE_INTEGER : limit,
   });
+  if (checked.length === 0) return candidates;
+  return candidates.filter((candidate) => inChecked(candidate.dir, checked)).slice(0, limit);
+}
+
+/** 候选的 key 是目录(tv) 或文件路径(movie) —— 两种都要被"勾了这个目录"覆盖。 */
+function inChecked(candidateDir: string, checked: string[]): boolean {
+  return checked.some((dir) => candidateDir === dir || candidateDir.startsWith(`${dir}${sep}`));
+}
+
+export async function suggestBindings(rt: Runtime, options: SuggestOptions): Promise<BindingSuggestion[]> {
+  const dirs = suggestTargets(rt, options);
   const out: (BindingSuggestion | null)[] = new Array(dirs.length).fill(null);
   /** 同名目录(两季分开放)会撞同一个搜索词: 一轮里只查一次。 */
   const cache = new Map<string, TmdbSearchHit[]>();
@@ -130,14 +158,10 @@ export async function suggestBindingsTask(
   options: SuggestOptions,
   signal: AbortSignal,
 ): Promise<{ task: TaskRow; result: BindingSuggestion[] | null; cancelled: boolean }> {
-  const total = listBindableDirs(rt, {
-    libraryId: options.libraryId,
-    ...(options.kind ? { kind: options.kind } : {}),
-    limit: options.limit ?? 100,
-  }).length;
+  const total = suggestTargets(rt, options).length;
   const task = createTask(rt, {
     type: "bind.suggest",
-    payload: { libraryId: options.libraryId ?? null },
+    payload: { libraryId: options.libraryId ?? null, dirs: options.dirs ?? null },
     total,
   });
 

@@ -113,7 +113,7 @@ export type {
   UnrecognizedDir,
   UnrecognizedFile,
 } from "./tasks/bind";
-export { suggestBindings, suggestBindingsTask } from "./tasks/suggest";
+export { suggestBindings, suggestBindingsTask, suggestTargets } from "./tasks/suggest";
 export type { SuggestOptions } from "./tasks/suggest";
 export { guessTitleFromDir, matchConfidence, normalizeTitle, searchableGuess } from "./domain/title-guess";
 export type { MatchConfidence, TitleGuess } from "./domain/title-guess";

@@ -300,7 +300,7 @@ interface KuraBridge {
   ): Promise<{ dirs: KuraBindableDir[]; total: number; tv: number; movie: number }>;
   tmdbSearch(kind: "tv" | "movie", query: string): Promise<KuraTmdbHit[]>;
   tmdbTest(probeId?: number): Promise<KuraTmdbTest>;
-  tmdbSuggest(libraryId?: number, kind?: "tv" | "movie"): Promise<{
+  tmdbSuggest(libraryId?: number, kind?: "tv" | "movie", dirs?: string[]): Promise<{
     suggestions: KuraBindingSuggestion[];
     taskId: number | null;
     error: string | null;
@@ -398,6 +398,7 @@ interface KuraBridge {
   ): Promise<{ applied: boolean; changes: { number: string; from: string; to: string; hasTitle: boolean }[] }>;
   openDataDir(): Promise<{ dir: string }>;
   tasks(limit?: number): Promise<KuraTask[]>;
+  stopTask(id: number): Promise<{ stopped: boolean; reason: string | null }>;
   retryTask(id: number, onlyFailed?: boolean): Promise<{ taskId: number; type: string; count: number }>;
   taskFailures(id: number, limit?: number): Promise<{ key: string; error: string; index: number }[]>;
   syncNfo(input?: {

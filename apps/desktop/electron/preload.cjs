@@ -10,8 +10,12 @@ contextBridge.exposeInMainWorld("kura", {
     ipcRenderer.invoke("file:dirs", { ...(libraryId === undefined ? {} : { libraryId }), ...(paging ?? {}) }),
   tmdbSearch: (kind, query) => ipcRenderer.invoke("tmdb:search", { kind, query }),
   tmdbTest: (probeId) => ipcRenderer.invoke("tmdb:test", probeId),
-  tmdbSuggest: (libraryId, kind) =>
-    ipcRenderer.invoke("tmdb:suggest", { ...(libraryId === undefined ? {} : { libraryId }), ...(kind ? { kind } : {}) }),
+  tmdbSuggest: (libraryId, kind, dirs) =>
+    ipcRenderer.invoke("tmdb:suggest", {
+      ...(libraryId === undefined ? {} : { libraryId }),
+      ...(kind ? { kind } : {}),
+      ...(dirs && dirs.length > 0 ? { dirs } : {}),
+    }),
   onSuggestProgress: (callback) => {
     const handler = (_event, update) => callback(update);
     ipcRenderer.on("suggest:progress", handler);
@@ -73,6 +77,7 @@ contextBridge.exposeInMainWorld("kura", {
     return () => ipcRenderer.removeListener("nfo:progress", listener);
   },
   tasks: (limit) => ipcRenderer.invoke("tasks:list", { limit }),
+  stopTask: (id) => ipcRenderer.invoke("tasks:stop", { id }),
   retryTask: (id, onlyFailed) => ipcRenderer.invoke("tasks:retry", { id, onlyFailed: onlyFailed === true }),
   taskFailures: (id, limit) => ipcRenderer.invoke("tasks:failures", { id, limit }),
   updateItem: (input) => ipcRenderer.invoke("item:update", input),
