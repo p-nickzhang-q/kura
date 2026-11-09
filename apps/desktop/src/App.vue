@@ -224,7 +224,8 @@ const treeQuery = ref("");
 /** 候选总数(分页用): 真库里可能有上百个电影候选。 */
 /** 候选分类计数(剧 / 电影), 给工具栏说人话用。 */
 /** 候选筛选: 真库里电影候选可能几百个, 和剧混在一起看不过来。 */
-const bindKind = ref<"" | "tv" | "movie">("tv");
+/** 未识别树的筛选; 默认"全部" —— 一进来就被筛掉一半, 反而看不见该修的那类。 */
+const bindKind = ref<"" | "tv" | "movie">("");
 /** 正在等确认删除的库 id (就地两段式确认, 不弹 window.confirm)。 */
 const removingId = ref<number | null>(null);
 /** 建库菜单: 先选域, 再选目录 (域决定识别方式, 事后改不了)。 */
@@ -469,9 +470,15 @@ const treeStats = computed(() => {
   };
 });
 
-/** 小目录默认展开; 一百多个文件的那种默认折起来, 否则滚到天边。 */
+/**
+ * 小目录默认展开; 一百多个文件的那种默认折起来, 否则滚到天边。
+ *
+ * 先判 `hasOwn` 再取值: 直接 `map[dir] ?? 默认` 会被原型上的同名键
+ * (`constructor`、`toString` …) 骗成 true, 而且"有没有被点过"和"点成了什么"本来就该分开看。
+ */
 function isExpanded(node: KuraUnrecognizedDir): boolean {
-  return expandedDirs.value[node.dir] ?? node.files.length <= 10;
+  if (Object.hasOwn(expandedDirs.value, node.dir)) return expandedDirs.value[node.dir] === true;
+  return node.files.length <= 10;
 }
 
 function toggleDir(node: KuraUnrecognizedDir): void {
@@ -2277,7 +2284,7 @@ async function testDmm(): Promise<void> {
                     </span>
                     <span class="muted nowrap">
                       {{ node.files.length }} 个文件
-                      <template v-if="node.files.length !== node.parsed"> · 认出 {{ node.parsed }} 集</template>
+                      <template v-if="node.parsed > 0"> · 认出 {{ node.parsed }} 集</template>
                     </span>
                   </div>
                   <div class="cand-meta muted">
