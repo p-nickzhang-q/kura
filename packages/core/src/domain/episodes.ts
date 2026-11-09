@@ -211,3 +211,82 @@ function atOrInside(path: string, root: string): boolean {
   const normalizedRoot = root.endsWith(sep) ? root.slice(0, -1) : root;
   return path === normalizedRoot || path.startsWith(`${normalizedRoot}${sep}`);
 }
+
+/**
+ * 目录级补集号: 单看一个文件猜不出来, 看同目录的一批就能算出来。
+ *
+ * 国内资源站的三种常见写法, 逐个文件解析都认不出 (集号紧贴文字, 没有分隔符):
+ *  - `某剧4.HD1280高清01.rmvb` —— 集号在分辨率后面
+ *  - `某讲座001第一讲-268099096.mp4` —— 集号在开头, 后面还挂着站点 id
+ *  - `周易36政通民和-311634749.mp4` / `周易144…` —— 补零位数还不一致
+ *
+ * 做法: 每个文件名取前若干个「1–3 位数字」当候选, 逐个候选位次去试 —— 第 k 个候选必须
+ * 在每个文件里都存在、**互不重复**、最小 ≤ 2、最大不超过文件数太多。
+ * 不用排序、不用公共前缀: 真库里的目录名经常夹着 `新`、`修复`、站点 id 这类噪声,
+ * 求公共前缀会直接退化成空串。
+ *
+ * 宁可认不出也不认错: 认错的代价是整季集名全错, 比留在未识别页贵得多。
+ *
+ * 返回 path → {season, episode}; 认不出的目录不出现。
+ */
+export function inferEpisodesFromNames(
+  paths: string[],
+  root: string,
+): Map<string, { season: number; episode: number }> {
+  const byDir = new Map<string, string[]>();
+  for (const path of paths) {
+    if (parseEpisode(basename(path)) !== null) continue; // 单个文件已经认得, 不用整组去猜
+    const dir = showDirOf(path);
+    byDir.set(dir, [...(byDir.get(dir) ?? []), path]);
+  }
+
+  const out = new Map<string, { season: number; episode: number }>();
+  for (const [dir, group] of byDir) {
+    // 两个文件分不清是上下集还是两部片; 一个文件更不用说
+    if (group.length < 3) continue;
+
+    const candidates = group.map((path) => numberCandidates(basename(path)));
+    const slots = Math.min(...candidates.map((list) => list.length));
+    for (let slot = 0; slot < slots; slot += 1) {
+      const numbers = candidates.map((list) => list[slot]!);
+      const unique = new Set(numbers).size;
+      // 极少数重号可以留 (真库里 144 个文件出现两个 `026` 是上传者自己编错了),
+      // 重号一多就说明这列数字不是集号。重号的两个文件会同争一个 (季,集),
+      // 那是有形的提示 (绑定时报"抢同一目标"), 好过整目录退化成 144 个电影候选。
+      if (unique < numbers.length * 0.95) continue;
+      const min = Math.min(...numbers);
+      const max = Math.max(...numbers);
+      if (min > 2) continue; // 从 5 开始的更像编号/年份段
+      // 缺集是常事, 但不许离得太远: 3 个文件报出 001 和 900 显然不是集号
+      if (max > group.length * 1.5 + 2) continue;
+
+      const season = seasonFromDir(basename(dir)) ?? 1;
+      group.forEach((path, index) => out.set(path, { season, episode: numbers[index]! }));
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * 文件名里的候选集号, 按出现顺序。
+ *
+ * 只收 1–3 位、值 1–999 的数字段; 4 位数落 1900–2099 的当成年份直接丢掉 (整段排除)。
+ * 4 位以上一律不收 —— 那是 B站 aid / cid 那类站点 id。
+ */
+function numberCandidates(fileName: string): number[] {
+  const name = fileName.replace(/\.[^.]+$/, "");
+  const out: number[] = [];
+  for (const match of name.matchAll(/(?<![0-9])(\d{1,4})(?![0-9])/g)) {
+    const digits = match[1]!;
+    const value = Number(digits);
+    if (value === 0 || digits.length === 4) {
+      // 4 位要么是年份要么是分辨率/编号, 当候选只会制造误判
+      if (digits.length === 4 && !(value >= 1900 && value <= 2099)) continue;
+      continue;
+    }
+    out.push(value);
+    if (out.length >= 4) break;
+  }
+  return out;
+}

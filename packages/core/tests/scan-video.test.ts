@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLibrary } from "../src/db/rows";
+import { inferEpisodesFromNames } from "../src/domain/episodes";
 import { openRuntime, type Runtime } from "../src/runtime";
 import { countFiles, listFiles, scan } from "../src/tasks/scan";
 import { bindDirectory, listBindableDirs } from "../src/tasks/bind";
@@ -184,7 +185,7 @@ describe("多文件却认不出集号的目录", () => {
     expect(dirs.every((dir) => !dir.suspectSeries)).toBe(true);
   });
 
-  test("同目录文件名共享前缀时标出「可能是同剧散集」", async () => {
+  test("集号紧贴文字(`001绝版`): 整个目录补出集号, 变成一条剧候选", async () => {
     await makeShow(join(media, "某剧"), "某剧", [
       "【修复】某剧 001绝版.mp4",
       "【修复】某剧 002绝版.mp4",
@@ -194,7 +195,24 @@ describe("多文件却认不出集号的目录", () => {
     await scan(rt, { library });
 
     const dirs = listBindableDirs(rt, { libraryId: library.id });
-    expect(dirs).toHaveLength(3);
+    expect(dirs).toHaveLength(1);
+    expect(dirs[0]!.kind).toBe("tv");
+    expect(dirs[0]!.parsed).toBe(3);
+    // 盘子上的集号也要落库: 整理的目标名、NFO 的集号都从这里来
+    const episodes = rt.db.all<{ episode: number }>(
+      "select episode from media_files where path like ? order by episode",
+      [`${join(media, "某剧")}%`],
+    );
+    expect(episodes.map((row) => row.episode)).toEqual([1, 2, 3]);
+  });
+
+  test("只有两个文件时不猜: 分不清是上下集还是两部片, 仍标「可能是同剧散集」", async () => {
+    await makeShow(join(media, "某剧B"), "某剧B", ["【修复】某剧B 001绝版.mp4", "【修复】某剧B 002绝版.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const dirs = listBindableDirs(rt, { libraryId: library.id });
+    expect(dirs).toHaveLength(2);
     expect(dirs.every((dir) => dir.suspectSeries === true)).toBe(true);
   });
 
@@ -306,5 +324,80 @@ describe("重扫不覆盖人工定的季集", () => {
 
     const row = rt.db.get<{ season: number; episode: number }>("select season, episode from media_files");
     expect(row).toEqual({ season: 2, episode: 7 });
+  });
+});
+
+describe("目录级补集号 (inferEpisodesFromNames)", () => {
+  const fake = (dir: string, names: string[]): string[] => names.map((name) => join(dir, name));
+
+  test("公共前缀之后是集号: 国内资源站的高清分段", () => {
+    const dir = join(media, "某公寓4");
+    const paths = fake(
+      dir,
+      Array.from({ length: 24 }, (_, i) => `[发布组www.example.cc]某公寓4.HD1280高清${String(i + 1).padStart(2, "0")}.rmvb`),
+    );
+    const inferred = inferEpisodesFromNames(paths, media);
+    expect(inferred.size).toBe(24);
+    expect(inferred.get(paths[0]!)).toEqual({ season: 1, episode: 1 });
+    expect(inferred.get(paths[23]!)).toEqual({ season: 1, episode: 24 });
+  });
+
+  test("集号后面还挂着站点 id: 只取开头那段数字", () => {
+    const dir = join(media, "某讲座");
+    const paths = fake(
+      dir,
+      Array.from({ length: 8 }, (_, i) => `某讲座${String(i + 1).padStart(3, "0")}第${i + 1}讲-2680990${i}.mp4`),
+    );
+    const inferred = inferEpisodesFromNames(paths, media);
+    expect([...inferred.values()].map((value) => value.episode)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  test("互不相关的电影 / 两个文件 / 年份: 一律不猜", () => {
+    expect(inferEpisodesFromNames(fake(join(media, "电影"), ["甲.2019.mkv", "乙.2020.mkv", "丙.2021.mkv"]), media).size).toBe(0);
+    expect(inferEpisodesFromNames(fake(join(media, "上"), ["某剧 01.mp4", "某剧 02.mp4"]), media).size).toBe(0);
+    expect(
+      inferEpisodesFromNames(fake(join(media, "年"), ["某剧2019.mp4", "某剧2020.mp4", "某剧2021.mp4"]), media).size,
+    ).toBe(0);
+  });
+
+  test("数字不递增或重复时不猜 (那是编号不是集号)", () => {
+    expect(inferEpisodesFromNames(fake(join(media, "乱"), ["某剧 03.mp4", "某剧 01.mp4", "某剧 02.mp4"]), media).size).toBe(0);
+    expect(inferEpisodesFromNames(fake(join(media, "重"), ["某剧 01.mp4", "某剧 01.副本.mp4", "某剧 02.mp4"]), media).size).toBe(0);
+  });
+
+  test("文件自己写得清的目录不参与整组推断", () => {
+    const dir = join(media, "某剧S");
+    const paths = fake(dir, ["某剧.S01E01.mkv", "某剧.S01E02.mkv", "某剧.S01E03.mkv"]);
+    expect(inferEpisodesFromNames(paths, media).size).toBe(0);
+  });
+});
+
+describe("剧目录判定: 看比例, 不看\"有一个算一个\"", () => {
+  test("一堆电影里有一个碰巧带数字, 不该整目录变成剧", async () => {
+    await makeShow(join(media, "各种电影"), "各种电影", [
+      "镰刀梦魇_1.rmvb",
+      "[组www.example.cc]嫌疑犯X的献身BD1024高清中字.rmvb",
+      "[组www.example.cc]生化危机BD1024高清中英双字.rmvb",
+      "[组www.example.cc]1408幻影凶间BD1024高清.rmvb",
+    ]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const dirs = listBindableDirs(rt, { libraryId: library.id });
+    expect(dirs).toHaveLength(4);
+    expect(dirs.every((dir) => dir.kind === "movie" && dir.files === 1)).toBe(true);
+    // 猜出来的集号要清掉, 否则界面上说"认出 1 集"
+    expect(rt.db.get<{ n: number }>("select count(*) as n from media_files where episode is not null")?.n).toBe(0);
+  });
+
+  test("小目录里一集正片 + 一个特典: 仍然算剧目录", async () => {
+    await makeShow(join(media, "某剧"), "某剧", ["某剧 第1集.mp4", "特典映像.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const dirs = listBindableDirs(rt, { libraryId: library.id });
+    expect(dirs).toHaveLength(1);
+    expect(dirs[0]!.kind).toBe("tv");
+    expect(dirs[0]!.parsed).toBe(1);
   });
 });

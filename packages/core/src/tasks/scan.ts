@@ -3,7 +3,7 @@ import { AppError, EXIT } from "../exit";
 import { basename, extname, join } from "node:path";
 import { detectContentType, extractNumber, isAuxiliaryMedia, parseFileInfo } from "../domain/identify";
 import { existsSync } from "node:fs";
-import { locateEpisode, showDirOf } from "../domain/episodes";
+import { inferEpisodesFromNames, locateEpisode, showDirOf } from "../domain/episodes";
 import { nfoPathFor } from "../domain/nfo";
 import { hasNetworkSource } from "./nfo-sync";
 import type { Library } from "../domain/materialize";
@@ -289,13 +289,38 @@ async function scanVideo(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
   const seen = new Set<string>();
   const shows = new Set<string>();
 
-  // 第一遍: 只判定"每个目录是剧目录还是电影目录"
-  const dirKinds = new Map<string, "tv" | "movie">();
+  // 目录级补集号: 逐个文件认不出、看着同目录一批就能认出来的写法 (`…高清01`、`某讲座001…`)。
+  // 放在扫描里而不是绑定时, 是因为"盘上有哪些集"是 media_files 的属性 —— 未识别页的
+  // 候选数、详情页的集列表、整理的 SxxEyy 目标名全都从它来。
+  const inferred = inferEpisodesFromNames(
+    found.map((file) => file.path),
+    library.root,
+  );
+
+  // 第一遍: 判定"每个目录是剧目录还是电影目录"。
+  //
+  // 判据是**比例**, 不是"有一个算一个": 一堆互不相关的电影里只要有一个文件名碰巧带
+  // `_1`、`BD1024` 这类数字, 整目录就会被当成一部剧, 未识别页于是出现一条假剧候选
+  // (33 个 B站投稿的那个目录就是这么来的)。真正的剧目录绝大多数文件都有集号。
+  const dirStats = new Map<string, { files: number; parsed: number; explicit: number }>();
   for (const file of found) {
     const episodeInfo = locateEpisode(file.path, library.root);
     const dir = episodeInfo?.showDir ?? showDirOf(file.path);
-    if (episodeInfo) dirKinds.set(dir, "tv");
-    else if (!dirKinds.has(dir)) dirKinds.set(dir, "movie");
+    const stat = dirStats.get(dir) ?? { files: 0, parsed: 0, explicit: 0 };
+    stat.files += 1;
+    if (episodeInfo || inferred.has(file.path)) stat.parsed += 1;
+    // `SxxEyy` 是文件自己声明的身份: 一个文件这么写, 它所在的目录就是剧目录
+    if (episodeInfo?.seasonExplicit) stat.explicit += 1;
+    dirStats.set(dir, stat);
+  }
+  const dirKinds = new Map<string, "tv" | "movie">();
+  for (const [dir, stat] of dirStats) {
+    const isShow =
+      stat.explicit > 0 || // 文件自己写了 SxxEyy
+      (stat.parsed >= 2 && stat.parsed * 2 >= stat.files) || // 大部分文件都有集号
+      stat.parsed === stat.files || // 全都有集号 (单文件也算)
+      (stat.parsed >= 1 && stat.files <= 3); // 小目录: 一集正片 + 特典/花絮
+    dirKinds.set(dir, isShow ? "tv" : "movie");
   }
 
   rt.db.exec("begin");
@@ -309,19 +334,31 @@ async function scanVideo(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
       // 影视库同时装电影和剧: 类型**按目录推断**, 不看库(库只有 av/video 两种)。
       // 目录里有文件解析出了集号 → 这是剧目录, 同目录里没集号的文件算"认不出"(等人工补);
       // 目录里一个集号都没有 → 这是电影(或还没绑的剧), 文件本身就是候选。
-      const episodeInfo = locateEpisode(file.path, library.root);
+      const episodeInfo0 = locateEpisode(file.path, library.root);
+      // 单个文件认不出时, 用整个目录的命名规律补 (见 inferEpisodesFromNames)
+      const inferredInfo0 = episodeInfo0 ? null : (inferred.get(file.path) ?? null);
       // 认不出集号的文件也要归到"剧目录"(父目录是 Season 01 就再上一层), 否则它会自成
       // 一个目录、被判成电影 —— 结果就是剧目录里永远数不出"认不出"的文件。
-      const dir = episodeInfo?.showDir ?? showDirOf(file.path);
+      const dir = episodeInfo0?.showDir ?? showDirOf(file.path);
       shows.add(dir);
-      if (!episodeInfo && dirKinds.get(dir) === "tv") counts.unparsed++;
+      if (!episodeInfo0 && !inferredInfo0 && dirKinds.get(dir) === "tv") counts.unparsed++;
+      // 判成电影目录时, 那个"碰巧认出来的集号"不该留下 —— 它会让 12 部电影显示成
+      // "认出 1 集的剧"。显式 `SxxEyy` 与已绑定/人工定过的季集不动。
+      const isMovieDir = dirKinds.get(dir) !== "tv";
+      const episodeInfo = isMovieDir ? null : episodeInfo0;
+      const inferredInfo = isMovieDir ? null : inferredInfo0;
       // (季, 集) 是**绑定与人工**决定的元数据: 绑定目录时定季、「改季」改季、摊到各季定集、
       // set-episode 补集号。扫描只该给新文件一个初始猜测, 不该覆盖这些决定 ——
       // 否则重扫一次, 七季的剧又全被打回第 1 季(踩过)。
       // 唯一例外: 文件名显式写了 `SxxEyy`, 那是文件自己声明的身份, 以它为准。
-      const parsedSeason = episodeInfo?.seasonExplicit ? episodeInfo.season : null;
-      const parsedEpisode = episodeInfo?.episode ?? null;
-      const assigned = previous !== undefined && previous.season !== null && previous.episode !== null;
+      const explicit = episodeInfo0?.seasonExplicit === true;
+      // 电影目录里的旧集号 (上一次扫描猜的) 也要清: 只保留已绑定的 (绑定后季集归人管)
+      const staleEpisode = isMovieDir && !explicit && (previous?.number ?? null) === null;
+      const parsedSeason = explicit ? episodeInfo0!.season : null;
+      // 电影目录里丢掉的只是"猜出来的"集号; 文件自己写了 SxxEyy 就还是它的身份
+      const parsedEpisode = explicit ? episodeInfo0!.episode : (episodeInfo?.episode ?? inferredInfo?.episode ?? null);
+      const assigned =
+        !staleEpisode && previous !== undefined && previous.season !== null && previous.episode !== null;
       let season: number | null;
       let episode: number | null;
       if (parsedSeason !== null) {
@@ -332,7 +369,7 @@ async function scanVideo(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
         episode = previous.episode ?? null;
       } else {
         // 只补集号(比如刚补了解析规则): 季沿用已有的, 新文件就用解析出来的(季目录 / 兜底 1)
-        season = previous?.season ?? episodeInfo?.season ?? null;
+        season = previous?.season ?? episodeInfo?.season ?? inferredInfo?.season ?? null;
         episode = parsedEpisode;
       }
       const phase = parseFileInfo(file.path);

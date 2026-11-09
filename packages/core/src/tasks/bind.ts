@@ -103,7 +103,13 @@ export function listBindableDirs(
 
   const out: BindableDir[] = [];
   for (const bucket of buckets.values()) {
-    if (bucket.parsed > 0) {
+    // 两个以上集号才算剧: 一个文件碰巧带数字 (`镰刀梦魇_1.rmvb`) 就把整个目录变成
+    // 一条假剧候选, 剩下十来个文件被埋进"认不出集号"里。
+    const isShow =
+      bucket.parsed >= 2 || // 两个以上集号: 这显然是按集命名的目录
+      bucket.parsed === bucket.paths.length || // 全都有集号
+      (bucket.parsed >= 1 && bucket.paths.length <= 3); // 小目录: 一集正片 + 特典/花絮
+    if (isShow) {
       // 剧: 整个目录一起绑
       out.push({
         dir: bucket.dir,
