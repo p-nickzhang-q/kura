@@ -302,6 +302,8 @@ const tmdbKeyInput = ref("");
 const tmdbTest = ref<KuraTmdbTest | null>(null);
 const llmModelInput = ref("");
 const translateOn = ref(false);
+/** 刮削时顺手下图 (只进本地缓存; 整理时才复制到媒体目录)。 */
+const saveImagesOn = ref(true);
 const dmmTest = ref<KuraDmmTest | null>(null);
 
 let unsubscribe: (() => void) | null = null;
@@ -368,6 +370,7 @@ async function refreshAll(): Promise<void> {
   info.value = (await step("读取状态", () => window.kura.info())) ?? info.value;
   config.value = (await step("读取配置", () => window.kura.configGet())) ?? config.value;
   translateOn.value = config.value?.settings.translate ?? false;
+  saveImagesOn.value = config.value?.settings.saveImages !== false;
   libraries.value = (await step("读取媒体库", () => window.kura.libraries())) ?? libraries.value;
   if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
   await step("读取条目", () => refreshItems());
@@ -1606,6 +1609,7 @@ async function saveConfig(): Promise<void> {
     llmApiKey?: string;
     llmModel?: string;
     translate?: boolean;
+    saveImages?: boolean;
     tmdbApiKey?: string;
   } = {};
   if (apiIdInput.value.trim()) patch.apiId = apiIdInput.value.trim();
@@ -1616,10 +1620,13 @@ async function saveConfig(): Promise<void> {
   if (llmModelInput.value.trim()) patch.llmModel = llmModelInput.value.trim();
   if (tmdbKeyInput.value.trim()) patch.tmdbApiKey = tmdbKeyInput.value.trim();
   patch.translate = translateOn.value;
+  patch.saveImages = saveImagesOn.value;
 
   const changed =
     patch.apiId || patch.affiliateId || patch.proxy || patch.llmBaseUrl || patch.llmApiKey || patch.llmModel ||
-    patch.tmdbApiKey || patch.translate !== Boolean(config.value?.settings.translate);
+    patch.tmdbApiKey ||
+    patch.translate !== Boolean(config.value?.settings.translate) ||
+    patch.saveImages !== (config.value?.settings.saveImages !== false);
   if (!changed) {
     note.value = "没有改动";
     return;
@@ -2769,6 +2776,17 @@ async function testDmm(): Promise<void> {
             </label>
             <span class="muted">{{ info?.llmConfigured ? "LLM 已配置" : "LLM 未配置" }}</span>
           </div>
+
+          <h2>图片</h2>
+          <p class="muted">
+            刮削顺手把海报/剧照存进本地缓存(只读一次网络)。缓存里的图会被「整理」复制成
+            <code>poster.jpg</code> / <code>fanart.jpg</code>, 也是「下载图片」的来源 ——
+            关掉之后这两处都要临时再下一次。
+          </p>
+          <label class="check">
+            <input v-model="saveImagesOn" type="checkbox" />
+            刮削时下载图片
+          </label>
 
           <h2>代理</h2>
           <label class="field">

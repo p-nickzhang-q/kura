@@ -635,7 +635,7 @@ function registerIpc(): void {
             key: item.key,
             ...(item.paths ? { paths: item.paths } : {}),
           });
-          const scraped = tmdb ? await scrapeShow(rt, { key: bound.key, tmdb }) : null;
+          const scraped = tmdb ? await scrapeShow(rt, { key: bound.key, tmdb, saveImages: rt.settings.saveImages !== false }) : null;
           results.push({
             dir: item.dir,
             key: item.key,
@@ -706,7 +706,7 @@ function registerIpc(): void {
     // 绑完立刻刮一次: 绑定按钮的语义是"让这部剧有数据", 不该让人再点一次刮削
     const tmdb = await tmdbClient(rt);
     if (!tmdb) return { ...result, scraped: null };
-    const scraped = await scrapeShow(rt, { key: result.key, tmdb });
+    const scraped = await scrapeShow(rt, { key: result.key, tmdb, saveImages: rt.settings.saveImages !== false });
     return { ...result, scraped };
   });
 
@@ -717,7 +717,7 @@ function registerIpc(): void {
       const rt = mustRuntime();
       const result = rebindItem(rt, { key: input.key, newKey: input.newKey });
       const tmdb = await tmdbClient(rt);
-      const scraped = tmdb ? await scrapeShow(rt, { key: result.to, tmdb }) : null;
+      const scraped = tmdb ? await scrapeShow(rt, { key: result.to, tmdb, saveImages: rt.settings.saveImages !== false }) : null;
       return { ...result, scraped };
     },
   );
@@ -768,7 +768,7 @@ function registerIpc(): void {
     const rt = mustRuntime();
     const tmdb = await tmdbClient(rt);
     if (!tmdb) throw new Error("未配置 TMDB API key（设置页填写，或环境变量 KURA_TMDB_API_KEY）");
-    return scrapeShow(rt, { key: input.key, tmdb });
+    return scrapeShow(rt, { key: input.key, tmdb, saveImages: rt.settings.saveImages !== false });
   });
 
   // 「整理」只清它这次搬空的目录; 影片早就搬完、旧目录里只剩海报时, 得单独清一次
@@ -1077,7 +1077,7 @@ function registerIpc(): void {
         for (const key of shows) {
           if (signal.aborted) break;
           try {
-            const report = await scrapeShow(rt, { key, tmdb, signal });
+            const report = await scrapeShow(rt, { key, tmdb, saveImages: rt.settings.saveImages !== false, signal });
             reports.push({ key, ok: report.ok, fields: report.fields, ...(report.error ? { error: report.error } : {}), declined: report.declared, missing: report.missing });
           } catch (err) {
             reports.push({ key, ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -1155,6 +1155,7 @@ function registerIpc(): void {
         llmApiKey?: string;
         llmModel?: string;
         translate?: boolean;
+        saveImages?: boolean;
         tmdbApiKey?: string;
       },
     ) => {
@@ -1171,6 +1172,7 @@ function registerIpc(): void {
         proxy: patch.proxy,
         llm,
         translate: patch.translate,
+        ...(patch.saveImages !== undefined ? { saveImages: patch.saveImages } : {}),
         ...(patch.tmdbApiKey !== undefined ? { tmdbApiKey: patch.tmdbApiKey.trim() } : {}),
       });
     await applyProxy();

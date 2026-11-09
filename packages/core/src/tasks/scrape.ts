@@ -1,6 +1,7 @@
 import { AppError, EXIT, exitCodeName } from "../exit";
 import { needsTranslation } from "../llm/translate";
 import { aggregate, mergeWithPinned } from "../domain/aggregate";
+import { saveItemImages, type ImageSaveResult } from "./resources";
 import type { ItemKey, Metadata, SourceRecord } from "../domain/types";
 import { metadataColumns, parseJson, pinnedFields, rowToMetadata, stringify, type ItemRow } from "../db/rows";
 import { pruneActors, syncItemActors } from "../db/actors";
@@ -26,6 +27,11 @@ export interface ScrapeOptions {
    * 没有它时, 一个源卡住会走满 "15s 超时 × 3 次重试" ≈ 45s, 批量跑时就是灾难。
    */
   itemBudgetMs?: number;
+  /**
+   * 顺手把图存进本地缓存。默认**关** —— 由调度层(任务/CLI)按设置里的 `saveImages` 打开。
+   * 干跑永远不下载。
+   */
+  saveImages?: boolean;
 }
 
 export interface ScrapeReport {
@@ -40,6 +46,8 @@ export interface ScrapeReport {
   failures: { site: string; error: string; code?: string }[];
   metadata: Metadata | null;
   dryRun: boolean;
+  /** 顺手存的图 (缓存)。失败不影响刮削结果, 所以这里只是"附赠品做了没"。 */
+  images?: ImageSaveResult;
   /** 翻译失败的原因 (模型不通/配置错)。刮削照常成功, 但这里必须有话说。 */
   translateErrors?: string[];
 }
@@ -232,6 +240,9 @@ async function scrapeOnce(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRepor
   if (opts.translator) await translateMetadata(metadata, opts.translator);
   const translateErrors = opts.translator?.errors.slice(errorsBefore) ?? [];
   if (!dryRun) persist(rt, metadata, records);
+  // 默认**不**存图: 这是调度层的选择(看设置里的 saveImages), 核心刮削只管取字段。
+  // 让核心默认去下一张图, 单测就会真的打网络 —— 那是把副作用藏进纯函数里。
+  const images = dryRun || opts.saveImages !== true ? undefined : await saveItemImages(rt, metadata);
 
   const filled = Object.entries(merged.fields)
     .filter(([, value]) => value !== undefined && (!Array.isArray(value) || value.length > 0))
@@ -249,6 +260,7 @@ async function scrapeOnce(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRepor
     failures,
     metadata: dryRun ? null : metadata,
     dryRun,
+    ...(images ? { images } : {}),
     ...(translateErrors.length > 0 ? { translateErrors } : {}),
   };
 }
@@ -352,6 +364,7 @@ export async function scrapePendingTask(
     // 用外部 signal 时, run.signal 就是它
     const result = await scrapePending(rt, {
       ...options,
+      saveImages: options.saveImages ?? rt.settings.saveImages !== false,
       signal: run.signal,
       onProgress: (progress) => {
         run.progress(progress.index, progress.ok ? 0 : 1, progress.total);
@@ -402,7 +415,11 @@ export async function scrapeKeysTask(
       if (run.signal.aborted) break;
       let report: ScrapeKeysResult["reports"][number];
       try {
-        const result = await scrape(rt, { ...rest, key: keyFromValue(rt, key) });
+        const result = await scrape(rt, {
+          ...rest,
+          saveImages: rest.saveImages ?? rt.settings.saveImages !== false,
+          key: keyFromValue(rt, key),
+        });
         report = { key, ok: true, filled: result.filled.length };
       } catch (err) {
         report = { key, ok: false, filled: 0, error: err instanceof Error ? err.message : String(err) };
@@ -444,7 +461,11 @@ export async function scrapePending(
 
     let progress: ScrapeProgress;
     try {
-      const report = await scrape(rt, { ...options, key });
+      const report = await scrape(rt, {
+        ...options,
+        saveImages: options.saveImages ?? rt.settings.saveImages !== false,
+        key,
+      });
       progress = { index: index + 1, total: keys.length, key: key.value, ok: true, filled: report.filled.length };
     } catch (err) {
       progress = {

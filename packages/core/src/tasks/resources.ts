@@ -4,7 +4,8 @@ import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { locateEpisode } from "../domain/episodes";
 import type { Metadata } from "../domain/types";
-import type { HttpClient } from "../net/http";
+import { HttpClient } from "../net/http";
+import { resolveProxyUrl } from "../config";
 import type { Runtime } from "../runtime";
 
 /**
@@ -182,6 +183,56 @@ export function findSidecarImages(videoPath: string): { poster: string | null; t
 }
 
 /** 整理时用: 已缓存的横版缩略图, 没有网络请求。 */
+/** 刮削顺手存图的结果。失败一律不影响刮削本身 —— 图是附赠, 不是前提。 */
+export interface ImageSaveResult {
+  /** 已经落在本地缓存里 (= 之后整理/「下载图片」/NFO 都能直接用)。 */
+  poster: boolean;
+  thumb: boolean;
+  /** 没做的原因: 设置关掉了 / 条目本来就没有图片地址。 */
+  skipped?: "disabled" | "no-url";
+  /** 做了但失败了(网络/403)。 */
+  error?: string;
+}
+
+/**
+ * 刮完顺手把海报/剧照落到本地缓存。
+ *
+ * 为什么要有这一步: 图是**整理**与「下载图片」的输入 —— 缓存里没有图, 整理时就只能
+ * 干看着 `poster.jpg` 那个位置空着, 而那时候再补下载就得人一个个点。
+ *
+ * 刻意只写缓存, 不往媒体目录里塞: 目录归整理管, 让刮削也动磁盘会让"整理是唯一
+ * 改磁盘的动作"这条边界破掉, 而且批量刮削时每个视频旁边多出两张图也没人想要。
+ */
+export async function saveItemImages(
+  rt: Runtime,
+  metadata: Metadata,
+  options: { enabled?: boolean; http?: HttpClient } = {},
+): Promise<ImageSaveResult> {
+  const enabled = options.enabled ?? rt.settings.saveImages !== false;
+  if (!enabled) return { poster: false, thumb: false, skipped: "disabled" };
+
+  const urls = [...(metadata.poster_urls ?? []), ...(metadata.cover_urls ?? []), ...(metadata.thumb_urls ?? [])];
+  if (urls.length === 0) return { poster: false, thumb: false, skipped: "no-url" };
+
+  // 已经有了就不重复下载: 重复刮削是常态, 每次都重下一遍纯属浪费。
+  const cached = { poster: Boolean(cachedPoster(rt, metadata)), thumb: Boolean(cachedThumb(rt, metadata)) };
+  if (cached.poster && cached.thumb) return cached;
+
+  try {
+    const http = options.http ?? new HttpClient({ proxy: await resolveProxyUrl(rt.settings) });
+    const result = await downloadPoster(rt, http, metadata);
+    return {
+      poster: Boolean(result.poster) || cached.poster,
+      thumb: Boolean(result.thumb) || cached.thumb,
+      ...(result.poster || result.thumb
+        ? {}
+        : { error: result.failures[0]?.error ?? "所有图片地址都下载失败" }),
+    };
+  } catch (err) {
+    return { poster: cached.poster, thumb: cached.thumb, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export function cachedThumb(rt: Runtime, metadata: Metadata): LocalResource | null {
   for (const url of metadata.thumb_urls ?? []) {
     const found = findResource(rt, url);

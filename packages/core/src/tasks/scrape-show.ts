@@ -6,6 +6,8 @@ import type { Domain, FieldKey, RawFields } from "../domain/types";
 import { stringify } from "../db/rows";
 import { setItemActors } from "../db/actors";
 import { createTask, runTask, type TaskRow } from "./queue";
+import { rowToMetadata, type ItemRow } from "../db/rows";
+import { saveItemImages, type ImageSaveResult } from "./resources";
 
 /**
  * 影视域的刮削: 按 TMDB 身份取字段, 落剧级字段 + 集级行。
@@ -28,6 +30,8 @@ export interface ScrapeShowReport {
   bound: number;
   /** 声明有、盘上没有的集数;> 0 就是"缺集"。 */
   missing: number;
+  /** 顺手存的图 (本地缓存)。失败不影响刮削, 只是这里记一句。 */
+  images?: ImageSaveResult;
   error?: string;
 }
 
@@ -36,6 +40,8 @@ export interface ScrapeShowOptions {
   tmdb: TmdbClient;
   /** 只刮这些季;默认全季 (跳过 0 = 特别篇, ADR 0008 不做特典)。 */
   seasons?: number[];
+  /** 顺手把图存进本地缓存 (默认关; 由调度层按设置打开)。 */
+  saveImages?: boolean;
   signal?: AbortSignal;
 }
 
@@ -57,7 +63,11 @@ export async function scrapeShow(rt: Runtime, options: ScrapeShowOptions): Promi
     if (!movie) return { key, ok: false, fields: [], episodes: 0, declared: 0, bound: 0, missing: 0, error: "TMDB 没有这部片" };
     const fields = writeFields(rt, key, movie.fields, movie.originalTitle);
     const bound = boundEpisodes(rt, key);
-    return { key, ok: true, fields, episodes: 0, declared: 0, bound, missing: 0 };
+    const images =
+      options.saveImages === true
+        ? await saveItemImages(rt, rowToMetadata(rt.db.get<ItemRow>("select * from items where number = ?", [key])!))
+        : null;
+    return { key, ok: true, fields, episodes: 0, declared: 0, bound, missing: 0, ...(images ? { images } : {}) };
   }
 
   const show: TmdbShow | null = await options.tmdb.show(target.id, {
@@ -76,6 +86,7 @@ export async function scrapeShow(rt: Runtime, options: ScrapeShowOptions): Promi
   const realSeasons = show.seasons.filter((season) => season.season > 0);
   const declared = realSeasons.reduce((sum, season) => sum + season.declaredEpisodes, 0);
   const bound = boundEpisodes(rt, key);
+  const images = options.saveImages === true ? await saveItemImages(rt, rowToMetadata(rt.db.get<ItemRow>("select * from items where number = ?", [key])!)) : null;
   return {
     key,
     ok: true,
@@ -84,6 +95,7 @@ export async function scrapeShow(rt: Runtime, options: ScrapeShowOptions): Promi
     declared,
     bound,
     missing: Math.max(0, declared - bound),
+    ...(images ? { images } : {}),
   };
 }
 
@@ -280,6 +292,8 @@ export interface ScrapeShowsOptions {
   libraryId?: number;
   keys?: string[];
   limit?: number;
+  /** 顺手把图存进本地缓存; 省略 = 看设置里的 `saveImages`。 */
+  saveImages?: boolean;
   signal?: AbortSignal;
   onProgress?: (progress: { index: number; total: number; key: string; ok: boolean; missing: number }) => void;
 }
@@ -294,7 +308,12 @@ export async function scrapeShows(rt: Runtime, options: ScrapeShowsOptions): Pro
     const key = keys[index]!;
     let report: ScrapeShowReport;
     try {
-      report = await scrapeShow(rt, { key, tmdb: options.tmdb, signal: options.signal });
+      report = await scrapeShow(rt, {
+        key,
+        tmdb: options.tmdb,
+        saveImages: options.saveImages ?? rt.settings.saveImages !== false,
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
     } catch (err) {
       // 一条失败不中断整批 —— 与 av 域一致
       report = {

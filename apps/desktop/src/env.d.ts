@@ -221,6 +221,8 @@ interface KuraConfig {
     dmm: { apiId: string; affiliateId: string };
     llm: { baseUrl: string; apiKey: string; model: string };
     translate: boolean;
+    /** 刮削顺手把图存进本地缓存 (默认开)。 */
+    saveImages: boolean;
     proxy: string;
     tmdbApiKey: string;
   };
@@ -441,6 +443,7 @@ interface KuraBridge {
     llmApiKey?: string;
     llmModel?: string;
     translate?: boolean;
+    saveImages?: boolean;
     tmdbApiKey?: string;
   }): Promise<{ settings: KuraConfig["settings"]; dmmConfigured: boolean; tmdbConfigured: boolean }>;
   testDmm(probe?: string): Promise<KuraDmmTest>;

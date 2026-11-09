@@ -154,6 +154,7 @@ kura scrape tmdb:tv:1429                             # 单部: 按 TMDB 身份�
 kura scrape --library 剧库                            # 整库: 待刮的影视条目 (任务类型 scrape.tv)
 kura source test tmdb --probe 1429                   # 影视来源自检 (key + 语言 + 集列表)
 kura config set --tmdb-api-key <key>                 # key 存 config.json (0600), 不进日志
+kura config set --no-save-images                     # 关掉"刮削顺手存图" (默认开; 图只进 dataDir/resources)
 kura library list                                    # 每行带 domain 与模板
 ```
 

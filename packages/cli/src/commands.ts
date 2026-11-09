@@ -425,7 +425,16 @@ export const COMMANDS: Command[] = [
       const dryRun = Boolean(args.options["dry-run"]);
 
       const runOne = (key: ItemKey) =>
-        scrape(ctx.rt!, { key, registry, fixturesDir, sources, dryRun, translator });
+        // saveImages 跟着设置走: 图进本地缓存, 整理时才复制到媒体目录
+        scrape(ctx.rt!, {
+          key,
+          registry,
+          fixturesDir,
+          sources,
+          dryRun,
+          translator,
+          saveImages: ctx.rt!.settings.saveImages !== false,
+        });
 
       if (args.options.pending) {
         // Ctrl-C 不再静默杀进程: 先中断当前请求, 再把已完成的条数报出来。

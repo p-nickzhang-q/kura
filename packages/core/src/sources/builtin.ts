@@ -24,7 +24,9 @@ export const fixtureSource: Source = {
     if (!ctx.fixturesDir) return null;
     const file = join(ctx.fixturesDir, `${key.value.replace(/[:/\\]/g, "_")}.json`);
     try {
-      const raw = await readFile(file, "utf8");
+      // Windows 记事本/默认编码写出来的 JSON 带 BOM, 不剥掉就 parse 失败,
+      // 而症状是"来源里没有这个番号" —— 排查半天都不在想找的地方。
+      const raw = (await readFile(file, "utf8")).replace(/^\uFEFF/, "");
       return JSON.parse(raw) as RawFields;
     } catch {
       return null;
