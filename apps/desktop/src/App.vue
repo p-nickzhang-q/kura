@@ -2539,15 +2539,8 @@ async function testDmm(): Promise<void> {
               {{ plan.summary.skip }}
               <span class="muted">(库根 {{ plan.libraryRoot }})</span>
             </p>
-            <p v-for="warning in planWarnings" :key="warning" class="warn">{{ warning }}</p>
-            <ul class="plan">
-              <li v-for="(entry, index) in plan.entries.slice(0, 200)" :key="index" :data-action="entry.action">
-                <span class="tag">{{ entry.action }}</span>
-                <span v-if="entry.action === 'move'" class="mono">{{ entry.from }} → {{ entry.to }}</span>
-                <span v-else class="mono">{{ entry.to ?? entry.from }} {{ entry.reason ?? "" }}</span>
-              </li>
-            </ul>
 
+            <!-- 动作放在汇总下面并吸顶: 计划动辄几百行, 放尾巴等于每次都要滑到底 -->
             <div class="apply">
               <template v-if="!confirmApply">
                 <button
@@ -2558,6 +2551,9 @@ async function testDmm(): Promise<void> {
                 >
                   执行整理…
                 </button>
+                <span class="muted">
+                  默认只是预览; 点这里才会动磁盘 (移动 {{ plan.summary.move }} 个文件{{ plan.summary.copyImage > 0 ? `, 复制 ${plan.summary.copyImage} 张图` : "" }})
+                </span>
               </template>
               <template v-else>
                 <span class="warn">会移动 {{ plan.summary.move }} 个文件, 不可撤销。确认?</span>
@@ -2565,6 +2561,15 @@ async function testDmm(): Promise<void> {
                 <button type="button" :disabled="busy" @click="confirmApply = false">取消</button>
               </template>
             </div>
+            <p v-for="warning in planWarnings" :key="warning" class="warn">{{ warning }}</p>
+            <ul class="plan">
+              <li v-for="(entry, index) in plan.entries.slice(0, 200)" :key="index" :data-action="entry.action">
+                <span class="tag">{{ entry.action }}</span>
+                <span v-if="entry.action === 'move'" class="mono">{{ entry.from }} → {{ entry.to }}</span>
+                <span v-else class="mono">{{ entry.to ?? entry.from }} {{ entry.reason ?? "" }}</span>
+              </li>
+            </ul>
+
           </template>
         </div>
 
@@ -4937,11 +4942,17 @@ td.pick {
   color: var(--ok);
 }
 
+/* 整理动作条: 吸在预览页顶部, 计划列表再长也不用滚回去找按钮 */
 .apply {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 16px;
+  margin: 8px 0 12px;
+  padding: 8px 0;
+  background: var(--bg);
 }
 
 .warn {
