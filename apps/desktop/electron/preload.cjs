@@ -18,6 +18,15 @@ contextBridge.exposeInMainWorld("kura", {
     return () => ipcRenderer.removeListener("suggest:progress", handler);
   },
   bindMany: (libraryId, items) => ipcRenderer.invoke("file:bind-many", { libraryId, items }),
+  // 手动加入库: 本地条目 (local: 身份, ugc 标记), 不连任何来源
+  bindLocalDir: (libraryId, dir, paths, title, type) =>
+    ipcRenderer.invoke("file:bind-local", {
+      libraryId,
+      dir,
+      ...(paths ? { paths } : {}),
+      ...(title === undefined ? {} : { title }),
+      ...(type ? { type } : {}),
+    }),
   bindDir: (libraryId, dir, key, paths, season) =>
     ipcRenderer.invoke("file:bind", { libraryId, dir, key, ...(paths ? { paths } : {}), ...(season === undefined ? {} : { season }) }),
   itemDirs: (key) => ipcRenderer.invoke("item:dirs", { key }),

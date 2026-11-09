@@ -64,6 +64,7 @@ import {
   organizeVideo,
   pendingKeys,
   bindDirectory,
+  bindLocalDirectory,
   rebindItem,
   unbindDirectory,
   episodeStats,
@@ -658,6 +659,24 @@ function registerIpc(): void {
     if (!tmdb) throw new Error("未配置 TMDB API key（设置页填写，或环境变量 KURA_TMDB_API_KEY）");
     return tmdb.search(input.kind, input.query.trim());
   });
+
+  // 手动加入: 不连任何来源, 只建一个本地条目 (local: 身份, ugc 标记)
+  ipcMain.handle(
+    "file:bind-local",
+    (
+      _event,
+      input: { libraryId: number; dir: string; paths?: string[]; title?: string; type?: "movie" | "tv" },
+    ) => {
+      const rt = mustRuntime();
+      return bindLocalDirectory(rt, {
+        libraryId: input.libraryId,
+        dir: input.dir,
+        ...(input.paths ? { paths: input.paths } : {}),
+        ...(input.title !== undefined ? { title: input.title } : {}),
+        ...(input.type ? { type: input.type } : {}),
+      });
+    },
+  );
 
   ipcMain.handle("file:bind", async (_event, input: { libraryId: number; dir: string; key: string; paths?: string[]; season?: number }) => {
     const rt = mustRuntime();

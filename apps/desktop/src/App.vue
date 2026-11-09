@@ -9,7 +9,16 @@ const TYPE_LABEL: Record<string, string> = {
   amateur: "素人",
   western: "欧美",
   anime: "动漫",
+  ugc: "UGC（本地）",
 };
+
+/**
+ * 番号条目能改的内容类型。
+ *
+ * `ugc` 也在 TYPE_LABEL 里(列表要显示它), 但它是"本地条目"的标记, 只在手动加入时写入,
+ * 不给已有条目改过去 —— 所以这里剔掉, 避免下拉里出现一个点了就报错的选项。
+ */
+const AV_TYPE_LABEL = Object.fromEntries(Object.entries(TYPE_LABEL).filter(([value]) => value !== "ugc"));
 
 /** 任务类型/状态的中文名。库里的值是英文枚举, 不该直接印给人看。 */
 const TASK_TYPE_LABEL: Record<string, string> = {
@@ -230,6 +239,14 @@ const bindDialog = ref<{
   label?: string;
   /** 强制季号(同一部剧拆成多个目录时用): 空 = 按文件名/目录自动。 */
   season: string | number;
+} | null>(null);
+
+/** 手动加入库: 手边没人认得出的东西 (UPC 投稿、自录素材) 也能进库, 只是没有来源。 */
+const localDialog = ref<{
+  dir: KuraBindableDir;
+  title: string;
+  type: "movie" | "tv";
+  busy: boolean;
 } | null>(null);
 
 /** 已绑定条目的来源文件夹 (同一部剧可能来自多个目录)。 */
@@ -603,6 +620,45 @@ function openBindDialog(dir: KuraBindableDir): void {
     busy: false,
     season: "",
   };
+}
+
+/**
+ * 手动加入: 预填一个能看的标题。
+ *
+ * 下载器给的目录名常带一串数字前缀 (`115406106794717-黑熊精新歌…`), 那是它的内部 id,
+ * 不该当条目标题 —— 去掉之后填进输入框, 人还能自己改。
+ */
+function openLocalDialog(dir: KuraBindableDir): void {
+  localDialog.value = {
+    dir,
+    title: dir.name.replace(/^\d{5,}[-_ ]+/, "").trim() || dir.name,
+    type: dir.kind === "tv" ? "tv" : "movie",
+    busy: false,
+  };
+}
+
+async function bindLocalDir(): Promise<void> {
+  const dialog = localDialog.value;
+  if (!dialog || selectedId.value === null) return;
+  dialog.busy = true;
+  try {
+    const result = await window.kura.bindLocalDir(
+      selectedId.value,
+      dialog.dir.dir,
+      plainArray(dialog.dir.paths),
+      dialog.title.trim(),
+      dialog.type,
+    );
+    localDialog.value = null;
+    await refreshAll();
+    note.value = `已手动加入「${result.title}」: ${result.bound} 个文件 · ${
+      result.kind === "tv" ? "剧集" : "电影"
+    } · 标为 UGC（不参与刮削, 整理也不会动它）`;
+  } catch (err) {
+    errors.value.push(`手动加入: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    dialog.busy = false;
+  }
 }
 
 /** 绑定对话框: 先搜 TMDB, 再绑整个目录并顺手刮一次。 */
@@ -1932,6 +1988,11 @@ async function testDmm(): Promise<void> {
                 </div>
                 <button class="ghost" type="button" aria-label="关闭详情" title="关闭详情" @click="detail = null">×</button>
               </header>
+              <!-- 本地条目: 没有来源, 字段全靠人填。不说清楚的话"重新刮削"会像个 bug -->
+              <div v-if="detail.contentType === 'ugc'" class="detail-local">
+                <span class="badge accent">UGC（本地）</span>
+                <span class="muted">手动加入的条目：没有任何来源可刮，整理也不会动它。标题/简介请自己填。</span>
+              </div>
               <!-- 类型决定刮削路由与整理目录, 所以做成显式可改: 判错时人得能修。
                    影视条目没有内容类型(域决定一切), 所以这一行对它们不显示 -->
               <div v-if="!detail.domain || detail.domain === 'av'" class="detail-type">
@@ -1941,7 +2002,7 @@ async function testDmm(): Promise<void> {
                   aria-label="内容类型"
                   @change="retypeOne(detail!.key, ($event.target as HTMLSelectElement).value)"
                 >
-                  <option v-for="(label, value) in TYPE_LABEL" :key="value" :value="value">{{ label }}</option>
+                  <option v-for="(label, value) in AV_TYPE_LABEL" :key="value" :value="value">{{ label }}</option>
                 </select>
                 <span class="muted hint">改了会换刮削来源</span>
               </div>
@@ -2183,6 +2244,14 @@ async function testDmm(): Promise<void> {
                     @click="openBindDialog(dir)"
                   >
                     {{ suggestions[dir.dir]?.hit ? "换一个" : "绑定到 TMDB" }}
+                  </button>
+                  <button
+                    type="button"
+                    :disabled="busy || selectedId === null"
+                    title="谁都搜不到的（UP 主投稿、自录素材）可以手动命名加入库"
+                    @click="openLocalDialog(dir)"
+                  >
+                    手动加入
                   </button>
                   <button type="button" @click="reveal(dir.dir)">定位</button>
                 </td>
@@ -2608,6 +2677,46 @@ async function testDmm(): Promise<void> {
         </li>
         <li v-if="!bindDialog.busy && bindDialog.hits.length === 0" class="muted">还没搜。</li>
       </ul>
+    </div>
+  </div>
+
+  <!-- 手动加入: 谁都搜不到的 (UP 主投稿/自录素材) 也能进库。不连来源, 只建本地条目 -->
+  <div v-if="localDialog" class="lightbox" role="dialog" aria-modal="true" aria-label="手动加入库" @keydown.esc="localDialog = null">
+    <div class="bind-modal">
+      <header>
+        <strong>手动加入库</strong>
+        <span class="spacer" />
+        <button class="ghost" type="button" aria-label="关闭" title="关闭" @click="localDialog = null">×</button>
+      </header>
+      <p class="muted">
+        {{ localDialog.dir.name }} · {{ localDialog.dir.files }} 个文件
+        <br />
+        不会去任何网站找数据，也不参与刮削；标题、简介之后可以在条目页自己填。
+      </p>
+      <label class="local-title">
+        <span class="muted">标题</span>
+        <input v-model="localDialog.title" type="text" placeholder="条目名" aria-label="条目标题" @keyup.enter="bindLocalDir" />
+      </label>
+      <div class="bind-kind">
+        <span class="muted">类型</span>
+        <button type="button" :class="{ on: localDialog.type === 'tv' }" @click="localDialog.type = 'tv'">剧集</button>
+        <button type="button" :class="{ on: localDialog.type === 'movie' }" @click="localDialog.type = 'movie'">电影</button>
+      </div>
+      <p class="muted">
+        剧集 = 这一个目录算一部剧（多个文件）；电影 = 只算这一个视频。
+        加入后会标成 <strong>UGC（本地）</strong>，整理不会动它们。
+      </p>
+      <footer class="local-actions">
+        <button type="button" :disabled="localDialog.busy" @click="localDialog = null">取消</button>
+        <button
+          type="button"
+          class="primary"
+          :disabled="localDialog.busy || localDialog.title.trim().length === 0"
+          @click="bindLocalDir"
+        >
+          {{ localDialog.busy ? "加入中…" : "加入库" }}
+        </button>
+      </footer>
     </div>
   </div>
 
@@ -3710,6 +3819,15 @@ td.suggest-cell {
   font-size: var(--fs-label);
 }
 
+.detail-local {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: var(--fs-label);
+  padding: 8px 0;
+}
+
 .bind-season {
   display: flex;
   gap: 8px;
@@ -3721,6 +3839,24 @@ td.suggest-cell {
   width: 64px;
   height: 44px;
   padding: 0 8px;
+}
+
+/* 手动加入: 标题要占满整行, 动作按钮靠右 */
+.local-title {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: var(--fs-label);
+}
+
+.local-title input {
+  flex: 1;
+}
+
+.local-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 /* 绑定面板: 借 lightbox 的遮罩, 自己是一张宽卡片 */

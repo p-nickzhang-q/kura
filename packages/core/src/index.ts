@@ -45,7 +45,9 @@ export {
   detectContentType,
   extractNumber,
   identify,
+  isLocalKey,
   isSiteKey,
+  localItemKey,
   normalizeItemKey,
   normalizeText,
   parseFileInfo,
@@ -89,6 +91,7 @@ export type { EpisodeStats, EpisodeView } from "./tasks/scrape-show";
 export type { ScrapeShowOptions, ScrapeShowReport, ScrapeShowsOptions, ScrapeShowsResult } from "./tasks/scrape-show";
 export {
   bindDirectory,
+  bindLocalDirectory,
   clearFileEpisode,
   countBindableDirs,
   countBindableKinds,
@@ -99,7 +102,7 @@ export {
   setFileEpisode,
   unbindDirectory,
 } from "./tasks/bind";
-export type { BindableDir, BindResult, BindingSuggestion, ItemDir, RebindResult } from "./tasks/bind";
+export type { BindableDir, BindResult, BindingSuggestion, ItemDir, LocalBindResult, RebindResult } from "./tasks/bind";
 export { suggestBindings, suggestBindingsTask } from "./tasks/suggest";
 export type { SuggestOptions } from "./tasks/suggest";
 export { guessTitleFromDir, matchConfidence, normalizeTitle, searchableGuess } from "./domain/title-guess";

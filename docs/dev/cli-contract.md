@@ -147,6 +147,7 @@ kura library add 影视库 /media/video --domain video  # av | video, 默认 av
 kura library remove <库>                            # 删库: 只删索引, 磁盘文件一个都不动
 kura file dirs                                       # 影视: 待绑定目录 (文件数 / 已解析集数)
 kura file bind <目录> --tmdb tmdb:tv:1399            # 目录级绑定 (--dry-run 先看)
+kura file bind <目录> --local [--title 名] [--type movie|tv]  # 手动加入库: local: 身份, 标 ugc, 不连来源
 kura file set-episode <路径> --episode 5             # 给认不出集号的文件补集号
 kura nfo sync <影视库> [--apply]                     # 影视库: 只导出 tvshow.nfo + 集级 nfo, 不回读
 kura scrape tmdb:tv:1429                             # 单部: 按 TMDB 身份刮

@@ -11,6 +11,7 @@ import {
   TEMPLATE_PLACEHOLDERS,
   actorIndexDrift,
   bindDirectory,
+  bindLocalDirectory,
   cleanupEmptyDirs,
   clearFileEpisode,
   cachedPoster,
@@ -36,6 +37,7 @@ import {
   isDmmConfigured,
   isItemSortField,
   isLibraryDomain,
+  isLocalKey,
   isSiteKey,
   listBindableDirs,
   listFiles,
@@ -477,6 +479,14 @@ export const COMMANDS: Command[] = [
       const raw = args.positionals.number;
       if (!raw) throw new AppError("用法: scrape <番号> | scrape --pending", EXIT.USAGE);
 
+      // 本地条目(手动加入的 UGC)没有来源: 走不到路由那一步就该说清楚, 而不是报"必须给 --type"
+      if (isLocalKey(raw)) {
+        throw new AppError(`本地条目没有来源可刮: ${raw.toLowerCase()}`, EXIT.USAGE, {
+          key: raw.toLowerCase(),
+          hint: "手动加入的条目 (local:) 只能自己补字段: kura item title/plot/tag <身份>",
+        });
+      }
+
       const explicitType = parseContentType(args.options.type);
       const key: ItemKey = isSiteKey(raw)
         ? {
@@ -831,7 +841,7 @@ export const COMMANDS: Command[] = [
   {
     name: "file",
     summary:
-      "文件: list [--library 库] | reveal <番号> | dirs | bind <目录> --tmdb <身份> [--season N] | unbind <目录> | set-season <目录> --season N | set-episode <路径> --episode N | clear-episode <路径>",
+      "文件: list [--library 库] | reveal <番号> | dirs | bind <目录> --tmdb <身份> [--season N] | bind <目录> --local [--title 名] [--type movie|tv] | unbind <目录> | set-season <目录> --season N | set-episode <路径> --episode N | clear-episode <路径>",
     needsDb: true,
     args: [
       {
@@ -846,6 +856,9 @@ export const COMMANDS: Command[] = [
       { name: "unparsed", type: "boolean", description: "只看认不出番号的文件", default: false },
       { name: "limit", type: "number", description: "条数", default: 200 },
       { name: "tmdb", type: "string", description: "bind: TMDB 身份, 如 tmdb:tv:1399" },
+      { name: "local", type: "boolean", description: "bind: 手动加入库 (local: 身份, 标 ugc, 不连任何来源)", default: false },
+      { name: "title", type: "string", description: "bind --local: 条目标题 (默认取目录名)" },
+      { name: "type", type: "string", description: "bind --local: movie | tv (默认: 目录里多于一个文件 = tv)" },
       { name: "episode", type: "number", description: "set-episode: 集号" },
       { name: "season", type: "number", description: "bind/set-season: 强制季号 (同一部剧拆成多个目录时用)" },
       { name: "dry-run", type: "boolean", description: "bind: 只报告会绑多少文件", default: false },
@@ -862,6 +875,27 @@ export const COMMANDS: Command[] = [
           limit: Number(args.options.limit ?? 200),
         });
         return { count: dirs.length, dirs };
+      }
+
+      if (action === "bind" && args.options.local) {
+        const dir = args.positionals.number;
+        if (!dir) throw new AppError("用法: file bind <目录> --local [--title 名] [--type movie|tv]", EXIT.USAGE);
+        const library = args.options.library
+          ? requireLibrary(ctx, String(args.options.library))
+          : requireSingleLibrary(ctx);
+        const type = typeof args.options.type === "string" ? args.options.type : undefined;
+        if (type !== undefined && type !== "movie" && type !== "tv") {
+          throw new AppError(`--type 只能是 movie 或 tv: ${type}`, EXIT.USAGE);
+        }
+        return {
+          result: bindLocalDirectory(ctx.rt!, {
+            libraryId: library.id,
+            dir,
+            ...(typeof args.options.title === "string" ? { title: args.options.title } : {}),
+            ...(type ? { type } : {}),
+            dryRun: Boolean(args.options["dry-run"]),
+          }),
+        };
       }
 
       if (action === "bind") {

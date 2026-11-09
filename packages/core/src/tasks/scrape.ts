@@ -128,6 +128,17 @@ async function scrapeOnce(rt: Runtime, opts: ScrapeOptions): Promise<ScrapeRepor
   const skipped = declared.filter((source) => source.status !== "ready").map((source) => source.id);
 
   if (usable.length === 0) {
+    // 本地条目(手动加入的 UGC): 没有任何来源能刮到它, 这不是配置问题
+    if (opts.key.contentType === "ugc") {
+      throw new AppError(
+        `本地条目没有来源可刮: ${opts.key.value}`,
+        EXIT.USAGE,
+        {
+          key: opts.key.value,
+          hint: "手动加入的条目 (local:) 只能自己补字段: kura item title/plot/tag " + opts.key.value,
+        },
+      );
+    }
     // 影视条目(tmdb:tv:… / 空内容类型)没有番号来源, 走错路时要说清楚该去哪
     if (!opts.key.contentType || opts.key.value.startsWith("tmdb:")) {
       throw new AppError(
@@ -461,9 +472,10 @@ export async function scrapePending(
  * `field_sources` 里除了 `nfo` 再没有别的来源, 就算没刮过。
  */
 function pendingWhere(prefix = ""): string {
-  return `(${prefix}title is null or ${prefix}title = '' or not exists (
+  // 本地条目(ugc)永远不会有来源把它刮干净, 留在待刮清单里只会把批次卡在失败计数上
+  return `(${prefix}content_type <> 'ugc' and (${prefix}title is null or ${prefix}title = '' or not exists (
     select 1 from json_each(${prefix}field_sources) where json_each.value <> 'nfo'
-  ))`;
+  )))`;
 }
 
 export function pendingKeys(
@@ -610,7 +622,8 @@ function itemFilters(options: Omit<ListItemOptions, "limit" | "offset">): { wher
   if (options.state === "unscraped") {
     where.push(`(${pendingWhere("items.")} and items.scrape_attempts < ${MAX_SCRAPE_ATTEMPTS})`);
   } else if (options.state === "scraped") {
-    where.push(`not ${pendingWhere("items.")}`);
+    // 本地条目(ugc)既不是"未刮削"也不是"已刮削" —— 它没有来源, 单列在全部里
+    where.push(`items.content_type <> 'ugc' and not ${pendingWhere("items.")}`);
   } else if (options.state === "exhausted") {
     where.push(`(${pendingWhere("items.")} and items.scrape_attempts >= ${MAX_SCRAPE_ATTEMPTS})`);
   }

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createLibrary } from "../src/db/rows";
 import type { Library } from "../src/domain/materialize";
 import { openRuntime, type Runtime } from "../src/runtime";
-import { bindDirectory } from "../src/tasks/bind";
+import { bindDirectory, bindLocalDirectory } from "../src/tasks/bind";
 import { scan } from "../src/tasks/scan";
 import { episodeBaseName, folderName, organizeVideo } from "../src/tasks/organize-video";
 
@@ -317,5 +317,25 @@ describe("清理空壳目录", () => {
     expect(await readdir(join(media, "剧/有字幕的"))).toEqual(["某剧 - 第1集.zh.srt"]); // 海报删了
     expect(await readdir(join(media, "剧/还有影片"))).toContain("poster.jpg"); // 还有影片 → 一点不动
     expect(report.kept.some((item) => item.dir.endsWith("有字幕的"))).toBe(true);
+  });
+});
+
+describe("本地条目 (手动加入的 UGC)", () => {
+  test("整理不碰它们, 并在报告里说明跳过了几个", async () => {
+    await touch(join(media, "bilibili", "115406106794717-黑熊精新歌", "成片-33241500011.mp4"));
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    bindLocalDirectory(rt, {
+      libraryId: library.id,
+      dir: join(media, "bilibili", "115406106794717-黑熊精新歌"),
+    });
+
+    const report = await organizeVideo(rt, { library, apply: true });
+    expect(report.skippedLocal).toBe(1);
+    expect(report.plan.summary.move).toBe(0);
+    // 文件原地不动
+    expect(await readdir(join(media, "bilibili", "115406106794717-黑熊精新歌"))).toEqual(["成片-33241500011.mp4"]);
+    expect(report.warnings.some((line) => line.includes("本地条目"))).toBe(true);
   });
 });

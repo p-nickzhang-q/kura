@@ -289,6 +289,13 @@ interface KuraBridge {
   }>;
   onSuggestProgress(callback: (update: { index: number; total: number; dir: string }) => void): () => void;
   bindMany(libraryId: number, items: { dir: string; key: string; paths?: string[] }[]): Promise<{ results: KuraBindManyResult[] }>;
+  bindLocalDir(
+    libraryId: number,
+    dir: string,
+    paths?: string[],
+    title?: string,
+    type?: "movie" | "tv",
+  ): Promise<{ key: string; dir: string; kind: "movie" | "tv"; title: string; bound: number; deduped: boolean }>;
   bindDir(
     libraryId: number,
     dir: string,

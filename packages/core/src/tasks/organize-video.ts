@@ -55,6 +55,13 @@ export interface VideoOrganizeReport {
   leftoverDirs?: { dir: string; files: string[] }[];
   /** 删掉的 Kura 自己生成的残留 (旧目录里的 poster.jpg / fanart.jpg / 集 nfo)。 */
   removedFiles?: string[];
+  /**
+   * 跳过的本地条目数 (`local:` / `ugc`)。
+   *
+   * 它们的标题是人写的、文件名没有季集信息、也没有来源能补: 按模板改名只会把
+   * "我自己起的名" 换成 "我认不出的名"。要整理就先 `item title` 定好名自己搬。
+   */
+  skippedLocal?: number;
 }
 
 export interface VideoOrganizeOptions {
@@ -144,10 +151,19 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
             i.duration_min, i.tags, i.actors,
             m.path, m.season, m.episode
      from media_files m join items i on i.number = m.number
-     where m.library_id = ? and i.domain in ('tv', 'movie')
+     where m.library_id = ? and i.domain in ('tv', 'movie') and i.content_type <> 'ugc'
      order by i.number, m.season, m.episode, m.path`,
     [opts.library.id],
   );
+
+  // 本地条目(手动加入的 UGC)一律不动: 没有来源、没有季集、标题也是人写的
+  const skippedLocal =
+    rt.db.get<{ n: number }>(
+      `select count(distinct m.number) as n
+       from media_files m join items i on i.number = m.number
+       where m.library_id = ? and i.content_type = 'ugc'`,
+      [opts.library.id],
+    )?.n ?? 0;
 
   const byItem = new Map<string, ItemFilesRow[]>();
   for (const row of rows) {
@@ -326,11 +342,16 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
     }
   }
 
+  if (skippedLocal > 0) {
+    warnings.push(`本地条目 ${skippedLocal} 个没有整理: 手动加入的条目 (local:) 没有来源也没有季集, 要搬请自己来`);
+  }
+
   return {
     plan,
     applied,
     warnings,
     ...(prune ? { removedDirs: prune.removed, leftoverDirs: prune.leftover, removedFiles: prune.removedFiles } : {}),
+    ...(skippedLocal > 0 ? { skippedLocal } : {}),
   };
 }
 

@@ -60,6 +60,37 @@ export function isSiteKey(value: string): boolean {
 }
 
 /**
+ * 本地条目(手动加入的 UGC)的身份键前缀。
+ *
+ * 用一个独立的命名空间而不是复用番号或 `tmdb:`, 是因为它必须一眼看出
+ * "这条没有任何网络来源": 路由为空、整理跳过、`scrape` 直接说清楚。
+ */
+export const LOCAL_KEY_PREFIX = "local:";
+
+export function isLocalKey(value: string): boolean {
+  return value.toLowerCase().startsWith(LOCAL_KEY_PREFIX);
+}
+
+/**
+ * 人写的标题 → `local:` 身份键。
+ *
+ * 键要能读、要稳、要能塞进 URL 与文件名, 所以: 小写、空白与标点折成 `-`、
+ * 只留字母数字与中日韩字符。全被折掉时退回 `item`, 由调用方补序号去重。
+ */
+export function localItemKey(label: string): string {
+  const slug = label
+    .toLowerCase()
+    .replace(/[\s_/\\.,:;!?'"`()\[\]{}|<>+*&=#$%@~^]+/g, "-")
+    // 保留中日韩与字母数字; 其它符号(emoji 等)一律折掉
+    .replace(/[^\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}0-9a-z-]+/gu, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 60)
+    .replace(/-$/, "");
+  return `${LOCAL_KEY_PREFIX}${slug || "item"}`;
+}
+
+/**
  * 人写的身份 → 库里存的身份。
  *
  * 番号是大写 (`SSIS-001`), 带站点前缀的 (`javdb:2x9k1` / `tmdb:tv:1399`) 全小写。

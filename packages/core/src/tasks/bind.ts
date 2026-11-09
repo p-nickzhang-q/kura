@@ -2,6 +2,7 @@ import { sep } from "node:path";
 import { AppError, EXIT } from "../exit";
 import { basename } from "node:path";
 import { locateEpisode, showDirOf } from "../domain/episodes";
+import { localItemKey } from "../domain/identify";
 import { parseTmdbKey } from "../sources/tmdb";
 import type { Runtime } from "../runtime";
 
@@ -329,6 +330,191 @@ export function bindDirectory(
 
   const total = rt.db.get<{ n: number }>("select count(*) as n from episodes where number = ?", [key])?.n ?? 0;
   return { key, dir, bound: files.length, episodes: total, stillUnparsed };
+}
+
+export interface LocalBindResult {
+  /** 建出来的身份键, 形如 `local:xxx`。 */
+  key: string;
+  dir: string;
+  kind: "movie" | "tv";
+  /** 条目标题 (人给的, 或从目录名推的)。 */
+  title: string;
+  /** 这次认领的文件数。 */
+  bound: number;
+  /** 目录里还有认不出集号的文件时列出来 —— 不影响绑定, 只是提示。 */
+  stillUnparsed: string[];
+  /** 身份键重名时自动加了序号。 */
+  deduped: boolean;
+  dryRun: boolean;
+}
+
+/**
+ * 手动把手边"谁都认不出来"的东西加入库 —— 本地条目, `local:` 身份, 打 `ugc` 标记。
+ *
+ * 为什么需要这一条路: 影视库的条目只能由 TMDB 绑定产生, 而 UP 主投稿、自录素材、
+ * 无版权的国产剧在 TMDB 里根本不存在。以前这类文件永远停在「未识别」,
+ * 既不能写 NFO 挂给 Emby, 也没法记标题和简介。
+ *
+ * 刻意**不**做的事: 不问任何网络、不猜标题、不解析集号。人工加进来的就是人工的,
+ * 之后用 `kura item title/plot/tag` 补。整理(organize)也会跳过它们 —— 见 organize.ts。
+ */
+export function bindLocalDirectory(
+  rt: Runtime,
+  options: {
+    libraryId: number;
+    /** 目录; 单文件条目也传它所在的目录, 用 paths 限定到那一个文件。 */
+    dir: string;
+    /** 只认领这些文件 (电影候选 = 单个文件)。 */
+    paths?: string[];
+    /** 条目标题。省略时从目录名推 (去掉 B站 aid 前缀)。 */
+    title?: string;
+    /** 电影还是剧集。省略时: 目录里多于一个文件 = 剧集。 */
+    type?: "movie" | "tv";
+    dryRun?: boolean;
+  },
+): LocalBindResult {
+  const library = rt.db.get<{ id: number; domain: string; root: string }>(
+    "select id, domain, root from libraries where id = ?",
+    [options.libraryId],
+  );
+  if (!library) throw new AppError(`库不存在: ${options.libraryId}`, EXIT.NOT_FOUND, { libraryId: options.libraryId });
+  if (library.domain === "av") {
+    throw new AppError("番号制库的身份是番号, 不能手动建本地条目", EXIT.USAGE, {
+      libraryId: library.id,
+      hint: "本地条目属于影视域的库 (kura library add <名称> <目录> --domain video)",
+    });
+  }
+
+  const dir = options.dir.replace(/[\\/]+$/, "");
+  const prefix = `${dir}${sep}`;
+  const files = options.paths
+    ? rt.db.all<{ path: string }>(
+        `select path from media_files where library_id = ? and number is null and path in (${options.paths
+          .map(() => "?")
+          .join(", ")}) order by path`,
+        [library.id, ...options.paths],
+      )
+    : rt.db.all<{ path: string }>(
+        `select path from media_files
+         where library_id = ? and number is null and (path = ? or path like ? || '%')
+         order by path`,
+        [library.id, dir, prefix],
+      );
+
+  if (options.type !== undefined && options.type !== "movie" && options.type !== "tv") {
+    throw new AppError(`类型只能是 movie 或 tv: ${String(options.type)}`, EXIT.USAGE, { type: options.type });
+  }
+  // 多于一个文件默认当剧集: 一个目录里塞着好几个视频, 更像是"一季的散集"而不是电影
+  const kind: "movie" | "tv" = options.type ?? (files.length > 1 ? "tv" : "movie");
+
+  // 这个目录已经有一个本地条目了(重复点击/重复命令): 复用它, 只补文件与标题。
+  const existing = localItemAt(rt, library.id, dir);
+  if (files.length === 0 && !existing) {
+    throw new AppError(`没有待加入的文件: ${dir}`, EXIT.NOT_FOUND, {
+      dir,
+      hint: "先跑 scan, 或者这些文件已经属于某个条目",
+    });
+  }
+
+  const title = (options.title ?? "").trim() || existing?.title || titleFromDir(dir);
+  const claimed = existing ? { key: existing.key, deduped: false } : claimLocalKey(rt, localItemKey(title), dir);
+  const key = claimed.key;
+  const resolvedKind: "movie" | "tv" = existing?.domain === "tv" || existing?.domain === "movie" ? existing.domain : kind;
+
+  if (options.dryRun) {
+    return {
+      key,
+      dir,
+      kind: resolvedKind,
+      title,
+      bound: files.length,
+      stillUnparsed: [],
+      deduped: claimed.deduped,
+      dryRun: true,
+    };
+  }
+
+  rt.db.exec("begin");
+  try {
+    // content_type 存 ugc: 既让"没有来源可刮"变成可判定的状态, 也让界面能一眼分开
+    rt.db.run("insert or ignore into items (number, content_type, domain) values (?, 'ugc', ?)", [key, resolvedKind]);
+    // 标题一定要有: 没有标题的条目在列表里只剩一串 slug, 也就没法拿来写 NFO。
+    // 人显式给了就用人的, 否则用目录名 —— 之后再 `item title` 改。
+    rt.db.run(
+      "update items set title = ?, updated_at = unixepoch() where number = ? and (title is null or title = '' or ? <> '')",
+      [title, key, options.title?.trim() ? "explicit" : ""],
+    );
+    for (const file of files) {
+      rt.db.run("update media_files set number = ? where path = ?", [key, file.path]);
+    }
+    // 不写 episodes: 没解析出集号, 也不该编造声明集。盘上有哪些集看 media_files。
+    rt.db.run("update items set updated_at = unixepoch() where number = ?", [key]);
+    rt.db.exec("commit");
+  } catch (err) {
+    rt.db.exec("rollback");
+    throw err;
+  }
+
+  return {
+    key,
+    dir,
+    kind: resolvedKind,
+    title,
+    bound: files.length,
+    stillUnparsed: [],
+    deduped: claimed.deduped,
+    dryRun: false,
+  };
+}
+
+/** 这个目录下面已有的本地条目(如果有)。 */
+function localItemAt(
+  rt: Runtime,
+  libraryId: number,
+  dir: string,
+): { key: string; title: string | null; domain: string | null } | null {
+  return (
+    rt.db.get<{ key: string; title: string | null; domain: string | null }>(
+      `select i.number as key, i.title, i.domain
+       from media_files m join items i on i.number = m.number
+       where m.library_id = ? and i.content_type = 'ugc' and (m.path = ? or m.path like ? || '%')
+       limit 1`,
+      [libraryId, dir, dir + sep],
+    ) ?? null
+  );
+}
+
+/**
+ * 目录名 → 显示标题。
+ *
+ * B站下载器的目录名是 `<aid>-<视频标题>` (见 docs/dev/tv-domain.md 的实测样例),
+ * 前面那串数字是下载器留下的, 不该进条目名。
+ */
+function titleFromDir(dir: string): string {
+  // 电影候选传进来的是文件路径本身, 不是目录 —— 别把 ".mkv" 当标题
+  const base = basename(dir).replace(/\.(?:mp4|mkv|avi|ts|m2ts|mov|wmv|flv|webm|rmvb|iso)$/i, "");
+  const name = base.replace(/^\d{5,}[-_ ]+/, "").trim();
+  return name || base || basename(dir);
+}
+
+/**
+ * 挑一个还没被占的 `local:` 身份键。
+ *
+ * 同一个目录重复绑定必须复用旧键 (否则每点一次就多一条空条目), 不同目录撞名字则加序号。
+ */
+function claimLocalKey(rt: Runtime, base: string, dir: string): { key: string; deduped: boolean } {
+  for (let n = 1; n <= 99; n += 1) {
+    const candidate = n === 1 ? base : `${base}-${n}`;
+    const holder = rt.db.get<{ number: string; dirs: number }>(
+      `select number, (select count(*) from media_files m where m.number = items.number and m.path like ? || '%') as dirs
+       from items where number = ?`,
+      [dir + sep, candidate],
+    );
+    if (!holder) return { key: candidate, deduped: n > 1 };
+    // 已经是同一个目录的条目: 复用, 不新建
+    if (holder.dirs > 0) return { key: candidate, deduped: n > 1 };
+  }
+  throw new AppError(`同名本地条目太多: ${base}`, EXIT.USAGE, { base, dir });
 }
 
 export interface RebindResult {

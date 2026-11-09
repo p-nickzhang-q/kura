@@ -34,7 +34,12 @@ export function isDomain(value: unknown): value is Domain {
   return typeof value === "string" && (DOMAINS as readonly string[]).includes(value);
 }
 
-export const CONTENT_TYPES = ["censored", "uncensored", "fc2", "chinese", "amateur", "western", "anime"] as const;
+/**
+ * `ugc` 不是番号制的分类, 是**影视域本地条目**的标记: 手动加入、没有任何网络来源。
+ * 放进同一列是因为 `content_type` 是 NOT NULL 且改造它要重建表, 不值得 ——
+ * 但它的含义明确: 看到 `ugc` 就当"没有来源可刮、整理也不动它"。
+ */
+export const CONTENT_TYPES = ["censored", "uncensored", "fc2", "chinese", "amateur", "western", "anime", "ugc"] as const;
 export type ContentType = (typeof CONTENT_TYPES)[number];
 
 export const CONTENT_TYPE_LABEL: Record<ContentType, string> = {
@@ -45,6 +50,7 @@ export const CONTENT_TYPE_LABEL: Record<ContentType, string> = {
   amateur: "素人",
   western: "欧美",
   anime: "动漫",
+  ugc: "UGC（本地）",
 };
 
 /** 单源字段: 逐字段取路由里第一个非空值。 */

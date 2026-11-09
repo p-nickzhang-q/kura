@@ -98,6 +98,12 @@ export function retypeItem(rt: Runtime, number: string, contentType: string): { 
   if (!CONTENT_TYPES.includes(contentType as (typeof CONTENT_TYPES)[number])) {
     throw new AppError(`未知内容类型: ${contentType}`, EXIT.USAGE, { contentType, allowed: CONTENT_TYPES });
   }
+  if (contentType === "ugc") {
+    throw new AppError("ugc 是本地条目的标记, 不能手动给已有条目改过去", EXIT.USAGE, {
+      number,
+      hint: "要把未识别的文件手动加入库: kura file bind <目录> --local",
+    });
+  }
   const row = rt.db.get<{ content_type: string }>("select content_type from items where number = ?", [number]);
   if (!row) throw new AppError(`没有这个条目: ${number}`, EXIT.NOT_FOUND, { number });
   if (row.content_type !== contentType) {

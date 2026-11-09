@@ -21,6 +21,8 @@ export const DEFAULT_ROUTES: Record<ContentType, string[]> = {
   amateur: ["javbus", "javdb"],
   western: ["javdb"],
   anime: ["dmm", "javdb"],
+  // 本地条目(手动加入的 UGC): 没有任何来源能刮到它, 路由为空是**结论**不是遗漏。
+  ugc: [],
 };
 
 /**
