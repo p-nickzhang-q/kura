@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { guessTitleFromDir, matchConfidence, normalizeTitle, searchableGuess } from "../src/domain/title-guess";
+import {
+  guessTitleFromDir,
+  guessTitleFromFile,
+  matchConfidence,
+  normalizeTitle,
+  searchableGuess,
+} from "../src/domain/title-guess";
 
 describe("从目录名猜片名", () => {
   const cases: [string, { title: string; year: string | null }][] = [
@@ -65,5 +71,36 @@ describe("建议的把握", () => {
   test("归一化忽略空格/标点/大小写", () => {
     expect(normalizeTitle("The Wandering Earth")).toBe(normalizeTitle("the.wandering-earth"));
     expect(normalizeTitle("进击的巨人：最终季")).toBe("进击的巨人最终季");
+  });
+});
+
+describe("文件名猜片名 (电影候选是文件, 不是目录)", () => {
+  const cases: [string, string][] = [
+    ["[迅雷下载www.2tu.cc]卑劣的街头BD1024高清中字.rmvb", "卑劣的街头"],
+    ["[迅播影院XunBo.Cc]老千1024高清BD无水印中字.rmvb", "老千"],
+    ["[迅雷下载www.2tu.cc]101次求婚.HD1280高清国语中字.mkv", "101次求婚"],
+    ["[迅雷下载www.2tu.cc]7号房的礼物.HD1024超清韩语中字.mkv", "7号房的礼物"],
+    ["勇敢的心.BD中英双字1024高清.rmvb", "勇敢的心"],
+    ["Chernobyl.S01.1080p.BluRay.x264.mkv", "Chernobyl"],
+  ];
+
+  for (const [input, expected] of cases) {
+    test(`${input} → ${expected}`, () => {
+      expect(guessTitleFromFile(input).title).toBe(expected);
+    });
+  }
+
+  test("粘在片名后的画质/语言标记全部砍掉, 一个都不留在搜索词里", () => {
+    const guess = guessTitleFromFile("[组]某片.BD1024高清中英双字.rmvb");
+    expect(guess.title).toBe("某片");
+    expect(guess.title).not.toMatch(/\d{3,4}|BD|中字|高清/);
+  });
+
+  test("片名本身带数字时不被截断 (1408/101次求婚)", () => {
+    expect(guessTitleFromFile("[组]1408幻影凶间.BD1024高清中英双字.rmvb").title).toBe("1408幻影凶间");
+  });
+
+  test("整个文件名都是标记时退回原名, 不至于一个词都不发", () => {
+    expect(guessTitleFromFile("BD1024高清.mkv").title.length).toBeGreaterThan(0);
   });
 });

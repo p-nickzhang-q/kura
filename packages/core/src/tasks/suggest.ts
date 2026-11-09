@@ -1,5 +1,5 @@
 import type { TmdbClient, TmdbSearchHit } from "../sources/tmdb";
-import { guessTitleFromDir, matchConfidence, searchableGuess, type MatchConfidence } from "../domain/title-guess";
+import { guessTitleFromDir, guessTitleFromFile, matchConfidence, searchableGuess, type MatchConfidence } from "../domain/title-guess";
 import { sep } from "node:path";
 import { listBindableDirs, type BindingSuggestion } from "./bind";
 import { createTask, getTask, runTask, type TaskRow } from "./queue";
@@ -46,7 +46,9 @@ export function suggestTargets(rt: Runtime, options: SuggestOptions): ReturnType
     limit: checked.length > 0 ? Number.MAX_SAFE_INTEGER : limit,
   });
   if (checked.length === 0) return candidates;
-  return candidates.filter((candidate) => inChecked(candidate.dir, checked)).slice(0, limit);
+  // 勾选是**人明确指定的范围**, 不再拿 100 截断: 勾了 13 个目录却只搜前 100 个候选,
+  // 剩下的会静默消失 (实测 158 个候选只搜了 100 个)。
+  return candidates.filter((candidate) => inChecked(candidate.dir, checked));
 }
 
 /** 候选的 key 是目录(tv) 或文件路径(movie) —— 两种都要被"勾了这个目录"覆盖。 */
@@ -82,7 +84,9 @@ export async function suggestBindings(rt: Runtime, options: SuggestOptions): Pro
 
   /** 一个目录 → 一条建议。抽出来是为了能并发跑。 */
   const suggestOne = async (dir: (typeof dirs)[number]): Promise<BindingSuggestion> => {
-    const guess = guessTitleFromDir(dir.name);
+    // 电影候选的 name 是**文件名**, 比目录名脏得多(发布站前缀 + 画质/语言标记粘在片名后面);
+    // 拿整串去搜 TMDB 是 0 命中, 而 0 命中看起来像"库里没这片"。
+    const guess = dir.kind === "tv" ? guessTitleFromDir(dir.name) : guessTitleFromFile(dir.name);
 
     const base: BindingSuggestion = {
       dir: dir.dir,

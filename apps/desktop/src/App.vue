@@ -1299,12 +1299,12 @@ async function toggleTaskFailures(task: KuraTask): Promise<void> {
   taskFailureList.value = (await window.kura.taskFailures(task.id)) ?? [];
 }
 
+/** 任务时间带日期: 只给 `15:20` 的话, 昨天的任务和刚才的任务看起来一模一样。 */
 function formatTime(seconds: number | null): string {
   if (!seconds) return "—";
   const date = new Date(seconds * 1000);
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mm = String(date.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${date.getMonth() + 1}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 /** 「停止」按钮按当前在跑的东西分派 —— 三者共用一个 AbortController。 */
@@ -2578,7 +2578,7 @@ async function testDmm(): Promise<void> {
 
           <table>
             <thead>
-              <tr><th>#</th><th>类型</th><th>状态</th><th>进度</th><th>失败</th><th>结束时间</th><th /></tr>
+              <tr><th>#</th><th>类型</th><th>状态</th><th>进度</th><th>失败</th><th>开始</th><th>结束</th><th /></tr>
             </thead>
             <tbody>
               <template v-for="task in tasks" :key="task.id">
@@ -2588,7 +2588,10 @@ async function testDmm(): Promise<void> {
                   <td :class="`st-${task.status}`">{{ taskStatusLabel(task.status) }}</td>
                   <td class="mono">{{ task.processed }}/{{ task.total }}</td>
                   <td class="mono" :class="{ warn: task.failed > 0 }">{{ task.failed }}</td>
-                  <td class="mono muted">{{ formatTime(task.finishedAt ?? task.startedAt) }}</td>
+                  <td class="mono muted">{{ formatTime(task.startedAt ?? task.createdAt) }}</td>
+                  <td class="mono muted">
+                    {{ task.status === "running" || task.status === "queued" ? "进行中" : formatTime(task.finishedAt) }}
+                  </td>
                   <td class="row-actions">
                     <button
                       v-if="task.status === 'running' || task.status === 'queued'"
@@ -2630,7 +2633,7 @@ async function testDmm(): Promise<void> {
                   </td>
                 </tr>
                 <tr v-if="openTaskId === task.id" class="task-detail">
-                  <td colspan="7">
+                  <td colspan="8">
                     <p v-if="taskFailureList.length === 0" class="muted">这条任务的日志里没有失败记录。</p>
                     <ul v-else class="failure-list">
                       <li v-for="failure in taskFailureList" :key="`${failure.key}-${failure.index}`">

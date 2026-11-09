@@ -19,6 +19,8 @@ export interface TitleGuess {
 const NOISE = [
   /^(?:1080p|2160p|720p|480p|4k|uhd)$/i,
   /^(?:web[-_.]?dl|webrip|bluray|blu[-_.]?ray|bdrip|dvdrip|hdtv|remux)$/i,
+  // 裸的介质标记: 截断后常剩下一个 `BD` / `DVD` 这样的尾巴
+  /^(?:bd|hd|dvd|br|web|hdtc|tc|ts)$/i,
   /^(?:x264|x265|h\.?264|h\.?265|hevc|avc|10bit|8bit)$/i,
   /^(?:aac|ac3|ddp?5\.?1|dd5\.?1|flac|truehd|atmos|dts)$/i,
   /^(?:hdr|hdr10|dovi|sdr)$/i,
@@ -82,6 +84,45 @@ export function guessTitleFromDir(dirName: string): TitleGuess {
 
   const title = tokens.join(" ").trim();
   return { title, year };
+}
+
+/**
+ * 文件名里的发布标记 —— 中文资源站常把它们**直接粘在片名后面**, 没有分隔符:
+ * `卑劣的街头BD1024高清中字.rmvb`、`101次求婚.HD1280高清国语中字.mkv`。
+ *
+ * token 级的 NOISE 表对这种情况无能为力(整段是一个 token), 只能按位置截断。
+ */
+const GLUED_MARKERS = [
+  /(?:BD|HD|DVD|WEB|BR|BluRay|Blu-?ray|HDRip|BDRip|DVDRip)\s*\d{3,4}/i,
+  /\d{3,4}\s*(?:高清|超清|标清|高码)/,
+  /\d{3,4}[pPiI](?![a-z])/,
+  /(?:x264|x265|h\.?264|h\.?265|hevc|10bit|8bit|aac|ac3|ddp)/i,
+  /(?:中字|中英|双字|双语|国粤|国语|粤语|韩语|日语|英语|简中|繁中|简体|繁体|中文字幕|无字|生肉)/,
+  /(?:高清|超清|标清|蓝光|未删减|未删|无删|完整版|修复版|国配|中配|加长版|导演剪辑)/,
+  /(?:CD|Disc|Part)\s?\d{1,2}(?![0-9])/i,
+];
+
+/**
+ * 文件名 → {片名, 年份}。
+ *
+ * 电影候选是按**文件**给的, 文件名比目录名脏得多: 前面挂发布站(`[迅雷下载www.2tu.cc]`)、
+ * 后面粘画质与语言标记。直接拿整串去搜 TMDB 是 0 命中 —— 而 0 命中看起来像"库里没这片"。
+ */
+export function guessTitleFromFile(fileName: string): TitleGuess {
+  const base = fileName.replace(/\.[^.]+$/, "");
+  // 发布组/站点前缀先剥, 它里面常带数字, 会干扰年份判定
+  let text = base.replace(/^\s*(?:[[【][^\]】]{1,60}[\]】]\s*)+/, " ");
+
+  let cut = text.length;
+  for (const pattern of GLUED_MARKERS) {
+    const match = pattern.exec(text);
+    // 位置 0 说明整段就是标记(比如文件名就叫 `BD1024高清`), 那种不该截
+    if (match && match.index > 0 && match.index < cut) cut = match.index;
+  }
+  text = text.slice(0, cut).replace(/[\s._\-–—]+$/, "");
+  const guess = guessTitleFromDir(text);
+  // 截断后如果连两个字符都不剩, 退回原名再猜一次(宁可搜不准, 也别一个词都不发)
+  return normalizeTitle(guess.title).length >= 2 ? guess : guessTitleFromDir(base);
 }
 
 export type MatchConfidence = "high" | "medium" | "low";
