@@ -180,6 +180,10 @@ export function listEpisodes(rt: Runtime, key: string): EpisodeView[] {
 
   // 盘上有、但声明里没有的 (季,集): 不显示的话这些文件在详情页里"消失"了,
   // 而这正是"集号对不上"最需要被看见的地方。
+  //
+  // 但**声明为空时不报**: 本地条目 (local:/ugc) 与还没刮过的剧本来就没有集列表,
+  // 把它们全标成"未声明"等于指着一个设计如此的东西说"这里有问题"。
+  if (declared.length === 0) return declared;
   const seen = new Set(declared.map((row) => `${row.season}-${row.episode}`));
   const extra = rt.db
     .all<{ season: number; episode: number; n: number }>(

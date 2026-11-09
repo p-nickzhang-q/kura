@@ -8,6 +8,7 @@ import type { Library } from "../src/domain/materialize";
 import { openRuntime, type Runtime } from "../src/runtime";
 import { bindLocalDirectory } from "../src/tasks/bind";
 import { countPending, listItems } from "../src/tasks/scrape";
+import { listEpisodes } from "../src/tasks/scrape-show";
 import { scan } from "../src/tasks/scan";
 
 let root: string;
@@ -150,5 +151,19 @@ describe("电影候选: 传进来的是文件路径", () => {
     expect(result.kind).toBe("movie");
     expect(result.bound).toBe(1);
     expect(result.title).toBe("成片-33241500011");
+  });
+});
+
+describe("本地条目的集显示", () => {
+  test("没有声明集时不把盘上的集全标成'未声明'", async () => {
+    const library = await setupVideo();
+    const dir = join(media, "bilibili", "115145472743415-辽艺配音153集全");
+    const { key } = bindLocalDirectory(rt, { libraryId: library.id, dir });
+    // 给一个文件补集号, 让它出现在"盘上集"里
+    const path = join(dir, "七龙珠 001 布玛与孙悟空-32144753356_25min.mp4");
+    rt.db.run("update media_files set season = 1, episode = 1 where path = ?", [path]);
+
+    const episodes = listEpisodes(rt, key);
+    expect(episodes).toHaveLength(0);
   });
 });
