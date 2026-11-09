@@ -2509,7 +2509,8 @@ async function testDmm(): Promise<void> {
 
         <!-- 整理预览 -->
         <div v-else-if="tab === 'plan'" class="pane">
-          <div class="lib-config">
+          <!-- 番号制: 维度决定第一层目录。影视库没有这一层 —— 形状由条目类型决定 -->
+          <div v-if="!isVideoMode" class="lib-config">
             <span class="muted">整理维度</span>
             <select v-model="dimension" :disabled="!selected || busy">
               <option v-for="item in info?.dimensions ?? []" :key="item.id" :value="item.id">
@@ -2528,8 +2529,26 @@ async function testDmm(): Promise<void> {
             </label>
             <span class="muted">当前模板: <code>{{ selected?.template }}</code></span>
           </div>
-          <p class="muted note-line">
+          <div v-else class="lib-config">
+            <label class="check">
+              <input
+                type="checkbox"
+                :checked="selected?.organizeEnabled !== false"
+                :disabled="!selected || busy"
+                @change="toggleOrganize"
+              />
+              允许整理
+            </label>
+            <span class="muted">
+              影视库没有整理维度: 形状由条目类型决定, 剧多一层 Season
+            </span>
+          </div>
+          <p v-if="!isVideoMode" class="muted note-line">
             一个库只选一个维度。多演员时"按演员"取第一演员; 想全部列进目录名, 把模板改成 <code>{actors}/{number}</code>。
+          </p>
+          <p v-else class="muted note-line">
+            剧 <code>剧名 (年份) / Season 01 / 剧名 - S01E01.mkv</code> · 电影
+            <code>片名 (年份) / 片名 (年份).mkv</code> · 认不出集号的文件不搬。
           </p>
 
           <div v-if="!plan" class="muted">点左侧「整理预览」生成计划。</div>

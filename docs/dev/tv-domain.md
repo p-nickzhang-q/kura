@@ -113,18 +113,27 @@ scan(library)
 判成电影目录时,那些"碰巧猜出来的"集号会被清掉(已绑定的不动),否则 12 部电影会显示成
 "认出 1 集的剧"。`listBindableDirs` 用同一条判据,两边口径必须一致。
 
-## 三之二、每个域的默认整理模板
+## 三之二、整理模板: 只有番号制有"维度"
 
-`{content_type}/{studio}/{number}` 对影视毫无意义(影视没有 `content_type`),照抄会生成一堆叫
-`censored` 的目录。所以建库时按域给默认值:
+`{content_type}/{studio}/{number}` 对影视毫无意义(影视没有 `content_type`), 照抄会生成一堆叫
+`censored` 的目录。所以两个域的整理是**两条独立代码路径**:
 
-| 域 | 默认模板 |
-|---|---|
-| `av` | `{content_type}/{studio}/{number}` |
-| `tv` | `{series}/Season {season}` |
-| `movie` | `{series}` |
+| 域 | 谁在整理 | 形状 | 维度可选? |
+|---|---|---|---|
+| `av` | `tasks/organize.ts` → `materialize.buildPlan` | `renderTemplate(library.template, …)` | **有**: 按番号/演员/片商/厂牌/系列/类型/年份 |
+| `video` | `tasks/organize-video.ts` | 硬编码, 由条目类型决定 | **没有** |
 
-(v1 不出手 organize,模板先存着,给 v2 用。)
+影视的形状(改不了):
+
+```
+剧    剧名 (年份)/Season 01/剧名 - S01E01.mkv  +  tvshow.nfo / S01E01.nfo
+电影  片名 (年份)/片名 (年份).mkv              +  片名 (年份).nfo
+```
+
+- 影视库的 `libraries.template` 存的是 `{series}` 这个**占位值**, 没有任何代码读它。
+- `updateLibraryTemplate` 对影视库**直接报错**(USAGE): 让人改一个不生效的列, 只会让人以为
+  自己的选择没生效、或者生效了但其实没有。
+- 界面上影视库的「整理预览」页只有「允许整理」一个开关 + 两行形状说明, 不出维度下拉。
 
 ## 四、来源:TMDB(已实现)
 

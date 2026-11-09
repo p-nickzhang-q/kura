@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLibrary, deleteLibrary, renameLibrary } from "../src/db/rows";
+import { createLibrary, deleteLibrary, findLibrary, renameLibrary, updateLibraryTemplate } from "../src/db/rows";
 import { openRuntime, type Runtime } from "../src/runtime";
 import { scan } from "../src/tasks/scan";
 import { countExhausted, countItems, countPending } from "../src/tasks/scrape";
@@ -229,5 +229,18 @@ describe("域 (ADR 0008 / 0009)", () => {
 
   test("删不存在的库报 NOT_FOUND", () => {
     expect(() => deleteLibrary(rt.db, 9999)).toThrow(AppError);
+  });
+});
+
+describe("影视库没有整理维度", () => {
+  test("给影视库写模板直接拒: 模板对它不生效, 写了只会让人以为生效了", async () => {
+    const library = createLibrary(rt.db, { name: "影视库", root: join(root, "video"), domain: "video" });
+    expect(() => updateLibraryTemplate(rt.db, library.id, "{actor}/{number}")).toThrow("固定形状");
+    expect(findLibrary(rt.db, String(library.id))?.template).toBe("{series}");
+
+    // 番号制照常能改
+    const av = createLibrary(rt.db, { name: "番号库", root: join(root, "av"), domain: "av" });
+    updateLibraryTemplate(rt.db, av.id, "{studio}/{number}");
+    expect(findLibrary(rt.db, String(av.id))?.template).toBe("{studio}/{number}");
   });
 });

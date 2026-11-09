@@ -312,6 +312,15 @@ export function updateLibraryOrganize(db: Db, libraryId: number, enabled: boolea
 }
 
 export function updateLibraryTemplate(db: Db, libraryId: number, template: string): void {
+  // 影视库**不看模板**: 整理按条目类型走固定形状(剧两层 + Season、电影一层)。
+  // 允许写进去只会让人以为"这个维度生效了", 而实际什么都没变。
+  const row = db.get<{ domain: string }>("select domain from libraries where id = ?", [libraryId]);
+  if (row?.domain === "video") {
+    throw new AppError("影视库按条目类型固定形状整理, 没有维度可选", EXIT.USAGE, {
+      libraryId,
+      hint: "剧: 剧名 (年份)/Season 01/SxxEyy; 电影: 片名 (年份)/片名.ext",
+    });
+  }
   db.run("update libraries set template = ? where id = ?", [template, libraryId]);
 }
 
