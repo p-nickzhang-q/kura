@@ -9,13 +9,24 @@ const fixtures = join(import.meta.dir, "fixtures");
 const detailHtml = readFileSync(join(fixtures, "jav321-detail.html"), "utf8");
 
 describe("Jav321 详情页", () => {
-  test("字段解析: 简介来自纯文本容器, 不是播放器或广告位", () => {
+  test("简介取容器开头的文本, 广告与免责声明留在外面", () => {
     const fields = parseDetail(detailHtml);
     expect(fields).not.toBeNull();
-    expect(fields!.plot).toContain("示例简介正文");
-    // 播放器/广告位那两个 col-md-12 都带子元素, 不该被当成简介
+    expect(fields!.plot).toContain("示例简介正文第一段");
+    // 简介容器后面挂着 DMM 直播广告与「※ 配信方法…」, 不能一起拼进来
+    expect(fields!.plot).not.toContain("配信方法");
+    expect(fields!.plot).not.toContain("banner.jpg");
+    expect(fields!.plot).not.toContain("ライブチャット");
+    // 播放器与广告位容器同样不是简介
     expect(fields!.plot).not.toContain("adsbyjuicy");
     expect(fields!.plot).not.toContain("video");
+  });
+
+  test("玩家/广告块整块跳过: 以元素开头的容器不算简介", () => {
+    const html = readFileSync(join(fixtures, "jav321-detail.html"), "utf8");
+    const fields = parseDetail(html)!;
+    // 只有一个简介段落, 不该把演员推荐位(以 div.col-xs-6 开头)也当成简介
+    expect(fields.plot!.split("示例").length - 1).toBe(1);
   });
 
   test("出演者 / 厂牌 / 标签按 nextUntil 分组, 不把别的标签的链接一起捞进来", () => {

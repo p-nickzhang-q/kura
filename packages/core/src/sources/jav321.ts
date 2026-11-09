@@ -1,4 +1,5 @@
 import { load, type CheerioAPI } from "cheerio";
+import { AppError, EXIT } from "../exit";
 import type { RawFields } from "../domain/types";
 import type { HttpClient } from "../net/http";
 import type { Source } from "./types";
@@ -37,8 +38,12 @@ export function createJav321Source(http: HttpClient): Source {
         let html: string;
         try {
           html = await http.getText(url, { headers: SITE_HEADERS, signal: ctx.signal });
-        } catch {
-          // 补零位数不对时 404 是预期结果, 不是错误 —— 继续试下一个候选。
+        } catch (err) {
+          // 只有"这个地址没这条"(404)才是预期结果, 继续试下一个补零位数。
+          // 网络错误必须抛上去 —— 吞掉的话「连不上」会显示成「站里没有这条」,
+          // 用户就会以为这个站不收录他的片子, 而实际上只是没代理/超时。
+          const notFound = err instanceof AppError && err.exitCode === EXIT.NOT_FOUND;
+          if (!notFound) throw err;
           continue;
         }
         const fields = parseDetail(html);
@@ -148,20 +153,46 @@ export function rowLinks($: CheerioAPI, label: string): string[] {
 }
 
 /**
- * 简介是唯一一个"没有子元素"的 `col-md-12`。
+ * 简介: `col-md-12` 里**以长文本开头**的那个容器, 取开头那几段文本。
  *
- * 同名的容器还有: 播放器(里面全是 script 与 video)与广告位(夹着 `adsbyjuicy` 脚本),
- * 以及演员面板里的简介片段 —— 那些都带子元素, 所以"纯文本节点"这条判据最稳,
- * 比"取最长的一段"可靠: 演员面板里也能出现比简介更长的段落。
+ * 不能按"没有子元素"筛 —— 简介容器后面还挂着 DMM 直播广告(`<a><img></a>`)与
+ * `※ 配信方法により…` 免责声明(`<p class="mg-t6 tx10">`), 有子元素是常态。
+ * 也不能整块 `.text()` —— 会把广告文案和"※ 配信方法"一起拼进简介。
+ *
+ * 判据: 第一个节点是长度 ≥20 的文本节点; 取值: 从头收文本节点, 遇到 `<br>` 换行,
+ * 遇到别的元素就停(广告/免责声明都在那之后)。
+ * 演员面板里的推荐位以 `<div class="col-xs-6">` 开头, 天然被这条判据排除。
  */
 function pickPlot($: CheerioAPI): string | undefined {
   let found: string | undefined;
   $("div.panel-body div.col-md-12").each((_index, element) => {
     if (found) return;
-    const node = $(element);
-    if (node.children().length > 0) return;
-    const value = node.text().replace(/\s+/g, " ").trim();
+
+    const nodes = $(element).contents().toArray();
+    if (nodes.length === 0) return;
+
+    const first = nodes[0]!;
+    if (!isText(first)) return;
+    if ($(first).text().replace(/\s+/g, " ").trim().length < 20) return;
+
+    const parts: string[] = [];
+    for (const node of nodes) {
+      if (isText(node)) {
+        const value = $(node).text().replace(/\s+/g, " ").trim();
+        if (value) parts.push(value);
+        continue;
+      }
+      // <br> 是段落分隔, 继续; 别的元素是广告/免责声明, 到这儿就结束
+      if ("tagName" in node && String(node.tagName).toLowerCase() === "br") continue;
+      break;
+    }
+
+    const value = parts.join(" ").replace(/\s+/g, " ").trim();
     if (value.length >= 20) found = value;
   });
   return found;
+}
+
+function isText(node: { type?: string }): boolean {
+  return node.type === "text";
 }
