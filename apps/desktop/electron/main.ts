@@ -47,6 +47,7 @@ import {
   getItem,
   listItems,
   countItems,
+  bindManyTask,
   countPending,
   openAliasEngine,
   repairIndexPaths,
@@ -627,52 +628,29 @@ function registerIpc(): void {
   );
 
   // 一次绑多个目录: 逐个绑 + 顺手刮, 一个失败不中断整批
+  /**
+   * 一次绑多个目录 + 顺手刮: 走任务队列, 所以「任务」页能看到跑到第几个、哪几个失败、能停。
+   * 绑定不可逆(文件从此归属某个 TMDB 条目), 更该留痕。
+   */
   ipcMain.handle(
     "file:bind-many",
-    async (_event, input: { libraryId: number; items: { dir: string; key: string; paths?: string[] }[] }) => {
-      const rt = mustRuntime();
-      const tmdb = await tmdbClient(rt);
-      const results: {
-        dir: string;
-        key: string;
-        ok: boolean;
-        bound?: number;
-        episodes?: number;
-        stillUnparsed?: number;
-        declared?: number;
-        missing?: number;
-        error?: string;
-      }[] = [];
-
-      for (const item of input.items) {
-        try {
-          const bound = bindDirectory(rt, {
+    async (_event, input: { libraryId: number; items: { dir: string; key: string; paths?: string[] }[] }) =>
+      exclusive("绑定并刮削", async (signal) => {
+        const rt = mustRuntime();
+        const tmdb = await tmdbClient(rt);
+        const { task, results } = await bindManyTask(
+          rt,
+          {
             libraryId: input.libraryId,
-            dir: item.dir,
-            key: item.key,
-            ...(item.paths ? { paths: item.paths } : {}),
-          });
-          const scraped = tmdb ? await scrapeShow(rt, { key: bound.key, tmdb, saveImages: rt.settings.saveImages !== false }) : null;
-          results.push({
-            dir: item.dir,
-            key: item.key,
-            ok: true,
-            bound: bound.bound,
-            episodes: bound.episodes,
-            stillUnparsed: bound.stillUnparsed.length,
-            ...(scraped ? { declared: scraped.declared, missing: scraped.missing } : {}),
-          });
-        } catch (err) {
-          results.push({
-            dir: item.dir,
-            key: item.key,
-            ok: false,
-            error: err instanceof AppError ? err.message : err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-      return { results };
-    },
+            items: input.items,
+            tmdb,
+            saveImages: rt.settings.saveImages !== false,
+          },
+          signal,
+          (progress) => win?.webContents.send("bind:progress", progress),
+        );
+        return { results, taskId: task.id, cancelled: signal.aborted };
+      }),
   );
 
   ipcMain.handle("tmdb:search", async (_event, input: { kind: "tv" | "movie"; query: string }) => {

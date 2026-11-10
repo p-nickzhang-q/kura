@@ -130,6 +130,7 @@ export type { MediaFileView } from "./tasks/scan";
 export type { ScanEvent, ScanOptions, ScanReport } from "./tasks/scan";
 
 export { countExhausted, countItems, countPending, getItem, isItemSortField, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys, scrape, scrapeKeysTask, scrapePending, scrapePendingTask } from "./tasks/scrape";
+export { bindManyTask, type BindManyItem, type BindManyOptions, type BindManyResultItem } from "./tasks/bind-many";
 export { openAliasEngine, createAliasEngine, parseAliasResponse, type AliasEngine, type AliasGuess } from "./llm/ai-title";
 export { todoCounts, todoPlans, type TodoCounts, type TodoPlans } from "./tasks/todo";
 export { repairIndexPaths, type PathRepair, type PathRepairReport } from "./tasks/repair";

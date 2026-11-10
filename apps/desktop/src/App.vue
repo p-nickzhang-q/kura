@@ -27,6 +27,9 @@ const TASK_TYPE_LABEL: Record<string, string> = {
   "translate.pending": "翻译 (待处理)",
   "translate.items": "翻译 (选中)",
   "nfo.sync": "同步 NFO",
+  "nfo.tv": "同步 NFO (影视)",
+  "bind.suggest": "找绑定建议",
+  "bind.many": "绑定并刮削",
 };
 
 const TASK_STATUS_LABEL: Record<string, string> = {
@@ -278,6 +281,8 @@ const suggestPicked = ref<string[]>([]);
 const suggestBusy = ref(false);
 /** 批量找建议的进度: 一个目录一次 TMDB 往返, 没有进度就像卡死。 */
 const suggestProgress = ref<{ index: number; total: number; dir: string } | null>(null);
+/** 绑定并刮削的进度(同一个动作可能要几分钟)。 */
+const bindProgress = ref<{ index: number; total: number; dir: string } | null>(null);
 /** 打开中的剧的集列表 (影视条目才有)。 */
 const episodeView = ref<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats } | null>(null);
 const unparsedCount = ref(0);
@@ -347,6 +352,7 @@ const dmmTest = ref<KuraDmmTest | null>(null);
 let unsubscribe: (() => void) | null = null;
 let unsubscribeProgress: (() => void) | null = null;
 let unsubscribeSuggest: (() => void) | null = null;
+let unsubscribeBind: (() => void) | null = null;
 let unsubscribeTranslate: (() => void) | null = null;
 let unsubscribeNfo: (() => void) | null = null;
 
@@ -369,6 +375,9 @@ onMounted(async () => {
   unsubscribeNfo = window.kura.onNfoProgress((update) => {
     nfoProgress.value = { index: update.index, total: update.total, key: update.key };
   });
+  unsubscribeBind = window.kura.onBindProgress((update) => {
+    bindProgress.value = update;
+  });
   unsubscribeSuggest = window.kura.onSuggestProgress((update) => {
     suggestProgress.value = update;
   });
@@ -388,6 +397,7 @@ watch(tab, (value) => {
 onUnmounted(() => {
   stopTasksPolling();
   window.removeEventListener("keydown", onKeydown);
+  unsubscribeBind?.();
   unsubscribeSuggest?.();
   unsubscribe?.();
   unsubscribeProgress?.();
@@ -825,6 +835,27 @@ const pickedSuggestions = computed(() => {
   return out;
 });
 
+/**
+ * 勾选的目录**实际会搜索多少个候选**。
+ *
+ * 勾父目录等于勾它下面的一切(`E:\视频\movie` 一勾, 83 个候选全进来了), 而这一点在
+ * 点之前是看不见的 —— 用户只看到"勾了 3 个目录"。所以这里按同一套子树规则先算出来,
+ * 显示在动作条上。
+ */
+const checkedCandidateCount = computed(() => {
+  const checked = suggestPicked.value;
+  if (checked.length === 0) return 0;
+  const covered = (dir: string): boolean =>
+    checked.some((pick) => dir === pick || dir.startsWith(`${pick}\\`) || dir.startsWith(`${pick}/`));
+  let total = 0;
+  for (const node of unrecognizedDirs.value) {
+    if (!covered(node.dir)) continue;
+    // 剧: 整个目录一条候选; 其余: 每个文件一条
+    total += node.kind === "tv" ? 1 : node.files.length;
+  }
+  return total;
+});
+
 /** 一个目录下有多少条文件级建议 (电影候选是按文件给建议的)。 */
 function fileHitCount(node: KuraUnrecognizedDir): number {
   return node.files.filter((file) => suggestions.value[file.path]?.hit).length;
@@ -996,6 +1027,8 @@ async function bindPicked(): Promise<void> {
   if (items.length === 0) return;
 
   suggestBusy.value = true;
+  runningLabel.value = `绑定并刮削 · ${items.length} 条`;
+  bindProgress.value = { index: 0, total: items.length, dir: "准备中" };
   try {
     const { results } = await window.kura.bindMany(selectedId.value, items);
     const ok = results.filter((item) => item.ok);
@@ -1008,11 +1041,15 @@ async function bindPicked(): Promise<void> {
     }
     suggestions.value = {};
     suggestPicked.value = [];
+    // 任务页要能看到这一批(绑了哪些、哪几个失败)
+    void refreshTasks();
     await refreshAll();
   } catch (err) {
     errors.value.push(`绑定: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     suggestBusy.value = false;
+    bindProgress.value = null;
+    runningLabel.value = "";
   }
 }
 
@@ -2745,6 +2782,9 @@ async function testDmm(): Promise<void> {
             <span v-if="suggestProgress" class="muted nowrap">
               搜索中 {{ suggestProgress.index }}/{{ suggestProgress.total || "?" }} · {{ suggestProgress.dir }}
             </span>
+            <span v-if="bindProgress" class="muted nowrap">
+              绑定中 {{ bindProgress.index }}/{{ bindProgress.total || "?" }}
+            </span>
             <button
               type="button"
               class="chip"
@@ -2871,7 +2911,8 @@ async function testDmm(): Promise<void> {
           <!-- 勾选后才出现的动作条: 没勾选时不占位置, 也不制造"这里有东西等着点"的错觉 -->
           <div v-if="suggestPicked.length > 0" class="bind-bar">
             <span>
-              已勾选 {{ suggestPicked.length }} 个目录
+              已勾选 {{ suggestPicked.length }} 个目录 · 将搜索 {{ checkedCandidateCount }} 个候选
+              <span v-if="checkedCandidateCount > suggestPicked.length" class="muted">（父目录包含子目录）</span>
               <template v-if="pickedSuggestions.length > 0"> · 其中 {{ pickedSuggestions.length }} 条有建议</template>
             </span>
             <span class="spacer" />

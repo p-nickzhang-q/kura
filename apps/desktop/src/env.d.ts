@@ -329,7 +329,12 @@ interface KuraBridge {
     cancelled?: boolean;
   }>;
   onSuggestProgress(callback: (update: { index: number; total: number; dir: string }) => void): () => void;
-  bindMany(libraryId: number, items: { dir: string; key: string; paths?: string[] }[]): Promise<{ results: KuraBindManyResult[] }>;
+  /** 绑定并刮削的进度 (一条任务行, 任务页能看到历史)。 */
+  onBindProgress(callback: (update: { index: number; total: number; dir: string }) => void): () => void;
+  bindMany(
+    libraryId: number,
+    items: { dir: string; key: string; paths?: string[] }[],
+  ): Promise<{ results: KuraBindManyResult[]; taskId: number; cancelled?: boolean }>;
   unrecognizedDirs(libraryId?: number, limit?: number): Promise<{ dirs: KuraUnrecognizedDir[] }>;
   /** 修「文件搬走了、索引没跟上」: 干跑后弹确认, 确认才改索引; 不动视频文件。 */
   repairPaths(libraryId?: number): Promise<{
