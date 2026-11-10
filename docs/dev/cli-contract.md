@@ -150,6 +150,7 @@ kura file bind <目录> --tmdb tmdb:tv:1399            # 目录级绑定 (--dry-
 kura file bind <目录> --local [--title 名] [--type movie|tv]  # 手动加入库: local: 身份, 标 ugc, 不连来源
 kura file set-episode <路径> --episode 5             # 给认不出集号的文件补集号
 kura nfo sync <影视库> [--apply]                     # 影视库: 只导出 tvshow.nfo + 集级 nfo, 不回读
+kura library repair-paths [库] [--apply]               # 修"文件被整理走了、索引还是旧路径"的行; 默认干跑
 kura scrape tmdb:tv:1429                             # 单部: 按 TMDB 身份刮
 kura scrape --library 剧库                            # 整库: 待刮的影视条目 (任务类型 scrape.tv)
 kura source test tmdb --probe 1429                   # 影视来源自检 (key + 语言 + 集列表)
