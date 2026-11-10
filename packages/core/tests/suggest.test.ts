@@ -393,3 +393,44 @@ describe("别名只和原文名对得上时也算命中", () => {
     expect(calls).toEqual(["60号高地之下", "前哨", "Beneath Hill 60"]);
   });
 });
+
+describe("勾选就是勾那一行, 不往下钻", () => {
+  test("勾父目录: 只搜它自己直接装着的文件, 子目录的候选不算", async () => {
+    // 父目录自己有 2 个散装视频; 子目录里还有各自的东西
+    // 名字故意不共享前缀: 共享会被判成"同一部剧的散集"而跳过搜索(另一条规则)
+    await makeDir("movie", ["甲片.rmvb", "乙片.rmvb"]);
+    await makeDir(join("movie", "子目录甲"), ["里面01.mp4", "里面02.mp4"]);
+    await makeDir(join("movie", "子目录乙"), ["另一部.mkv"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const calls: string[] = [];
+    const suggestions = await suggestBindings(rt, {
+      libraryId: library.id,
+      dirs: [join(media, "movie")],
+      tmdb: fakeTmdb({}, calls),
+    });
+
+    // 父目录自己那 2 个文件 → 2 条候选; 子目录的 3 个文件不该进来
+    expect(suggestions).toHaveLength(2);
+    // posix 与 windows 分隔符都要认(测试跑在 Linux 上, posix 路径)
+    expect(
+      suggestions.every((item) => /[甲乙]片\.rmvb$/.test(item.paths[0] ?? "")),
+    ).toBe(true);
+    expect(calls).toHaveLength(2);
+  });
+
+  test("子目录自己勾上时照常搜", async () => {
+    await makeDir("movie", ["别处.rmvb"]);
+    await makeDir(join("movie", "子目录甲"), ["里面01.mp4", "里面02.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const suggestions = await suggestBindings(rt, {
+      libraryId: library.id,
+      dirs: [join(media, "movie", "子目录甲")],
+      tmdb: fakeTmdb({}),
+    });
+    expect(suggestions).toHaveLength(2);
+  });
+});

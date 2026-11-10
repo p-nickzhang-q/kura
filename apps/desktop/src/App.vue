@@ -838,18 +838,15 @@ const pickedSuggestions = computed(() => {
 /**
  * 勾选的目录**实际会搜索多少个候选**。
  *
- * 勾父目录等于勾它下面的一切(`E:\视频\movie` 一勾, 83 个候选全进来了), 而这一点在
- * 点之前是看不见的 —— 用户只看到"勾了 3 个目录"。所以这里按同一套子树规则先算出来,
- * 显示在动作条上。
+ * 勾谁搜谁, 不往下钻: 子目录是独立的一行, 没勾就不该被带进来(用户实测反馈:
+ * 勾了 `E:\视频\movie` 结果子目录的候选也被搜了)。数与后端 `inChecked` 同一套规则。
  */
 const checkedCandidateCount = computed(() => {
   const checked = suggestPicked.value;
   if (checked.length === 0) return 0;
-  const covered = (dir: string): boolean =>
-    checked.some((pick) => dir === pick || dir.startsWith(`${pick}\\`) || dir.startsWith(`${pick}/`));
   let total = 0;
   for (const node of unrecognizedDirs.value) {
-    if (!covered(node.dir)) continue;
+    if (!checked.includes(node.dir)) continue;
     // 剧: 整个目录一条候选; 其余: 每个文件一条
     total += node.kind === "tv" ? 1 : node.files.length;
   }
@@ -2912,7 +2909,7 @@ async function testDmm(): Promise<void> {
           <div v-if="suggestPicked.length > 0" class="bind-bar">
             <span>
               已勾选 {{ suggestPicked.length }} 个目录 · 将搜索 {{ checkedCandidateCount }} 个候选
-              <span v-if="checkedCandidateCount > suggestPicked.length" class="muted">（父目录包含子目录）</span>
+              <span class="muted">（只搜勾中的这一行，子目录要单独勾）</span>
               <template v-if="pickedSuggestions.length > 0"> · 其中 {{ pickedSuggestions.length }} 条有建议</template>
             </span>
             <span class="spacer" />

@@ -2,7 +2,7 @@ import type { AliasEngine } from "../llm/ai-title";
 import type { TmdbClient, TmdbSearchHit } from "../sources/tmdb";
 import { guessTitleFromDir, guessTitleFromFile, matchConfidence, searchableGuess, type MatchConfidence } from "../domain/title-guess";
 import { sep } from "node:path";
-import { listBindableDirs, type BindingSuggestion } from "./bind";
+import { listBindableDirs, type BindableDir, type BindingSuggestion } from "./bind";
 import { createTask, getTask, runTask, type TaskRow } from "./queue";
 import type { Runtime } from "../runtime";
 
@@ -55,12 +55,30 @@ export function suggestTargets(rt: Runtime, options: SuggestOptions): ReturnType
   if (checked.length === 0) return candidates;
   // 勾选是**人明确指定的范围**, 不再拿 100 截断: 勾了 13 个目录却只搜前 100 个候选,
   // 剩下的会静默消失 (实测 158 个候选只搜了 100 个)。
-  return candidates.filter((candidate) => inChecked(candidate.dir, checked));
+  return candidates.filter((candidate) => inChecked(candidate, checked));
 }
 
 /** 候选的 key 是目录(tv) 或文件路径(movie) —— 两种都要被"勾了这个目录"覆盖。 */
-function inChecked(candidateDir: string, checked: string[]): boolean {
-  return checked.some((dir) => candidateDir === dir || candidateDir.startsWith(`${dir}${sep}`));
+/**
+ * 勾中的那一行**自己**的候选才算, 不含它下面没勾的子目录。
+ *
+ * 以前是子树匹配(勾父目录 → 子目录全进来)。实测用户勾了 `E:\视频\movie` 结果 83 个候选
+ * 全被搜索, 他的预期是"我只勾了这一个目录, 子目录没勾就不该搜"。树里每个子目录本来就是
+ * 独立一行、可以单独勾, 所以"勾谁搜谁"才是能预测的行为。
+ *
+ * 电影候选的 `dir` 是**文件路径**(一行 = 一个文件), 它属于"直接装它的那个目录",
+ * 所以父目录匹配一层就够, 不再往下钻。
+ */
+function inChecked(candidate: Pick<BindableDir, "dir" | "kind">, checked: string[]): boolean {
+  if (checked.includes(candidate.dir)) return true;
+  if (candidate.kind === "tv") return false;
+  return checked.includes(parentOf(candidate.dir));
+}
+
+/** 目录部分; 用两种分隔符兜底(库里存的是 Windows 路径, 测试里可能是 posix)。 */
+function parentOf(path: string): string {
+  const index = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+  return index > 0 ? path.slice(0, index) : path;
 }
 
 export async function suggestBindings(rt: Runtime, options: SuggestOptions): Promise<BindingSuggestion[]> {
