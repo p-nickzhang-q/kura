@@ -466,7 +466,11 @@ async function createWindow(): Promise<void> {
     minHeight: 600,
     backgroundColor: "#0f1115",
     show: false,
-    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
+    // 自绘标题栏(见 App.vue 的 .titlebar): Windows/Linux 用 frame:false,
+    // macOS 保留红绿灯, 只把标题栏藏起来
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset" as const }
+      : { frame: false, titleBarStyle: "hidden" as const }),
     webPreferences: {
       preload: join(app.getAppPath(), "electron", "preload.cjs"),
       contextIsolation: true,
@@ -475,8 +479,18 @@ async function createWindow(): Promise<void> {
     },
   });
 
+  // 最大化/还原要让标题栏的按钮换图标(□ / ❐)
+  const pushWindowState = (): void => win?.webContents.send("window:state", { maximized: win.isMaximized() });
+  win.on("maximize", pushWindowState);
+  win.on("unmaximize", pushWindowState);
+
   win.once("ready-to-show", () => win?.show());
-  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  // 外链用系统浏览器打开。以前这里一律 deny, 于是设置页「去申请 / 查看 key」点了没反应
+  // (target=_blank 触发 window-open, 被 deny 掉且没有任何提示)。
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    return { action: "deny" };
+  });
   win.webContents.on("will-navigate", (event, url) => {
     const devUrl = process.env.VITE_DEV_SERVER_URL;
     if (!devUrl || !url.startsWith(devUrl)) event.preventDefault();
@@ -1024,6 +1038,27 @@ function registerIpc(): void {
    * 索引比磁盘旧是常态(用户用别的程序删了片、换了硬盘), 所以这里先看一眼在不在,
    * 不在就把话说清楚, 让人知道是"文件没了"而不是"按钮坏了"。
    */
+  /**
+   * 自绘标题栏的窗口控制。
+   *
+   * `frame: false` 之后系统的最小化/最大化/关闭都没了, 只能由渲染进程点、主进程做 ——
+   * 所以这三个必须走 IPC, 而不是 window.close() 之类的网页 API(那会退化成"隐藏")。
+   */
+  ipcMain.handle("window:minimize", () => win?.minimize());
+  ipcMain.handle("window:toggle-maximize", () => {
+    if (!win) return false;
+    if (win.isMaximized()) win.unmaximize();
+    else win.maximize();
+    return win.isMaximized();
+  });
+  ipcMain.handle("window:close", () => win?.close());
+  ipcMain.handle("window:is-maximized", () => win?.isMaximized() ?? false);
+  ipcMain.handle("window:toggle-devtools", () => {
+    if (!win) return false;
+    win.webContents.isDevToolsOpened() ? win.webContents.closeDevTools() : win.webContents.openDevTools({ mode: "detach" });
+    return win.webContents.isDevToolsOpened();
+  });
+
   ipcMain.handle("files:reveal", (_event, path: string) => {
     if (!existsSync(path)) return { ok: false as const, reason: "missing" as const, path };
     shell.showItemInFolder(path);

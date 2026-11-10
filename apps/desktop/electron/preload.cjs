@@ -79,6 +79,17 @@ contextBridge.exposeInMainWorld("kura", {
   items: (params) => ipcRenderer.invoke("item:list", params ?? {}),
   item: (number) => ipcRenderer.invoke("item:get", number),
   unparsedFiles: (params) => ipcRenderer.invoke("files:unparsed", params ?? {}),
+  // 自绘标题栏: 系统按钮没了, 这三个走 IPC
+  minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
+  toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggle-maximize"),
+  closeWindow: () => ipcRenderer.invoke("window:close"),
+  isWindowMaximized: () => ipcRenderer.invoke("window:is-maximized"),
+  toggleDevTools: () => ipcRenderer.invoke("window:toggle-devtools"),
+  onWindowState: (callback) => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on("window:state", listener);
+    return () => ipcRenderer.removeListener("window:state", listener);
+  },
   revealFile: (path) => ipcRenderer.invoke("files:reveal", path),
   proxyTest: () => ipcRenderer.invoke("proxy:test"),
   itemFiles: (key) => ipcRenderer.invoke("item:files", key),

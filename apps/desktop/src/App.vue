@@ -311,6 +311,24 @@ const suggestBusy = ref(false);
 const suggestProgress = ref<{ index: number; total: number; dir: string } | null>(null);
 /** 绑定并刮削的进度(同一个动作可能要几分钟)。 */
 const bindProgress = ref<{ index: number; total: number; dir: string } | null>(null);
+/** 自绘标题栏: 窗口是否最大化(按钮图标要跟着变)。 */
+const windowMaximized = ref(false);
+
+/** 模板里不能直接写 window.*, 包一层。 */
+function minimizeWindow(): void {
+  void window.kura.minimizeWindow();
+}
+function toggleMaximizeWindow(): void {
+  void window.kura.toggleMaximizeWindow();
+}
+function closeWindow(): void {
+  void window.kura.closeWindow();
+}
+function openDevTools(): void {
+  void window.kura.toggleDevTools();
+}
+let unsubscribeWindowState: (() => void) | null = null;
+
 /** 整理的进度: 搬文件 + 写 nfo + 复制图片, 三项加起来动辄上千。 */
 const organizeProgress = ref<{ index: number; total: number; key: string } | null>(null);
 /** 打开中的剧的集列表 (影视条目才有)。 */
@@ -406,6 +424,12 @@ onMounted(async () => {
   unsubscribeNfo = window.kura.onNfoProgress((update) => {
     nfoProgress.value = { index: update.index, total: update.total, key: update.key };
   });
+  unsubscribeWindowState = window.kura.onWindowState((state) => {
+    windowMaximized.value = state.maximized;
+  });
+  void window.kura.isWindowMaximized().then((maximized) => {
+    windowMaximized.value = maximized;
+  });
   unsubscribeOrganize = window.kura.onOrganizeProgress((update) => {
     organizeProgress.value = update;
   });
@@ -433,6 +457,7 @@ onUnmounted(() => {
   window.removeEventListener("keydown", onKeydown);
   unsubscribeBind?.();
   unsubscribeOrganize?.();
+  unsubscribeWindowState?.();
   unsubscribeSuggest?.();
   unsubscribe?.();
   unsubscribeProgress?.();
@@ -715,6 +740,11 @@ async function runPalette(action: PaletteAction | undefined): Promise<void> {
 }
 
 function onKeydown(event: KeyboardEvent): void {
+  if (event.key === "F12") {
+    event.preventDefault();
+    void window.kura.toggleDevTools();
+    return;
+  }
   if (event.key === "Escape") {
     moreOpen.value = false;
     if (paletteOpen.value) {
@@ -2133,10 +2163,39 @@ async function testDmm(): Promise<void> {
 </script>
 
 <template>
+  <!-- 自绘标题栏: 系统边框去掉了(frame:false), 三件事都在这里 —— 拖拽移动、窗口按钮、开发者工具 -->
+  <div class="titlebar">
+    <span class="titlebar-brand">Kura</span>
+    <div class="titlebar-drag" />
+    <span v-if="busy" class="titlebar-status muted">{{ busy }}</span>
+    <button
+      type="button"
+      class="titlebar-btn"
+      title="开发者工具 (F12)"
+      aria-label="开发者工具"
+      @click="openDevTools()"
+    >
+      &lt;/&gt;
+    </button>
+    <button type="button" class="titlebar-btn" title="最小化" aria-label="最小化" @click="minimizeWindow()">
+      ─
+    </button>
+    <button
+      type="button"
+      class="titlebar-btn"
+      :title="windowMaximized ? '还原' : '最大化'"
+      :aria-label="windowMaximized ? '还原窗口' : '最大化'"
+      @click="toggleMaximizeWindow()"
+    >
+      {{ windowMaximized ? "❐" : "□" }}
+    </button>
+    <button type="button" class="titlebar-btn close" title="关闭" aria-label="关闭窗口" @click="closeWindow()">
+      ✕
+    </button>
+  </div>
   <main class="shell">
     <header class="top">
-      <h1>Kura</h1>
-      <!-- 版本/引擎/schema 是排障信息, 不是用户每天要看的东西 —— 它们挪到设置页 -->
+      <!-- 品牌名在标题栏上, 这里只留规模; 版本/引擎/schema 是排障信息, 挪到了设置页 -->
       <span v-if="info" class="meta">条目 {{ info.items.toLocaleString() }} · 文件 {{ info.mediaFiles.toLocaleString() }}</span>
     </header>
 
@@ -3657,17 +3716,83 @@ async function testDmm(): Promise<void> {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif;
 }
 
+html,
 body {
   margin: 0;
+  height: 100%;
+  /* 整页不滚动: 滚动都发生在各自的面板里。以前这里是可滚的, 而标题栏的 1px 边框
+     正好把总高撑出 100vh, 于是右边常年挂一条没用的滚动条。 */
+  overflow: hidden;
   background: var(--bg);
   color: var(--text);
+}
+
+#app {
+  height: 100%;
 }
 
 .shell {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* 标题栏占掉 36px(它自己 box-sizing: border-box, 边框算在内) */
+  height: calc(100% - 36px);
   box-sizing: border-box;
+}
+
+/* ---------------------------------------------------------------- 自绘标题栏 */
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  height: 36px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  /* 整条可拖动窗口; 里面的按钮必须 no-drag, 否则点不动 */
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.titlebar-brand {
+  padding: 0 8px;
+  color: var(--text);
+  font-size: var(--fs-label);
+  letter-spacing: 1px;
+}
+
+.titlebar-drag {
+  flex: 1;
+  height: 100%;
+}
+
+.titlebar-status {
+  padding-right: 8px;
+  font-size: var(--fs-label);
+}
+
+.titlebar-btn {
+  -webkit-app-region: no-drag;
+  display: grid;
+  place-items: center;
+  min-width: 36px;
+  padding: 8px 12px;
+  line-height: 1;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--fs-label);
+}
+
+.titlebar-btn:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.titlebar-btn.close:hover {
+  background: var(--danger-line);
+  color: var(--text);
 }
 
 .top {

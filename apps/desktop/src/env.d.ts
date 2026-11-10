@@ -427,6 +427,13 @@ interface KuraBridge {
     files: { path: string; number: string | null; libraryId: number; size: number }[];
     total: number;
   }>;
+  /** 自绘标题栏的窗口控制 (frame:false 之后系统按钮不存在了)。 */
+  minimizeWindow(): Promise<void>;
+  toggleMaximizeWindow(): Promise<boolean>;
+  closeWindow(): Promise<void>;
+  isWindowMaximized(): Promise<boolean>;
+  toggleDevTools(): Promise<boolean>;
+  onWindowState(callback: (state: { maximized: boolean }) => void): () => void;
   /** 打开位置: 文件不在盘上时 ok=false (索引比磁盘旧), 界面要说话而不是静默。 */
   revealFile(path: string): Promise<{ ok: boolean; path: string; reason?: "missing" }>;
   proxyTest(): Promise<{ configured: string; effective: string; reachable: string[] }>;
