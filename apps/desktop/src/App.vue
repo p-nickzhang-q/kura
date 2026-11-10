@@ -629,6 +629,13 @@ const paletteActions = computed<PaletteAction[]>(() => {
     { id: "retype", title: "修正内容类型", hint: "按当前解析器重新判定, 先列清单", disabled: false, run: retypeDetect },
     { id: "nfo", title: "同步 NFO", hint: "先列清单, 确认后才写", disabled: !hasLibrary, run: () => writeNfoFiles() },
     { id: "cleanup", title: "清理空目录", hint: "先列清单, 确认后才删", disabled: !hasLibrary, run: cleanupDirs },
+    {
+      id: "repair-paths",
+      title: "修复索引路径",
+      hint: "文件被整理走了但索引还是旧路径; 改索引不动视频",
+      disabled: libraries.value.length === 0,
+      run: repairPaths,
+    },
     { id: "plan", title: "整理预览", hint: noOrganize ? "该库设为只索引, 不会整理" : "先看清单再执行", disabled: !hasLibrary, run: async () => { await preview(); tab.value = "plan"; } },
     { id: "todo", title: "去待办", hint: "还差多少、下一步做什么", disabled: false, run: () => { tab.value = "todo"; } },
     { id: "unparsed", title: "去未识别", hint: "认不出的文件 / 目录", disabled: false, run: () => { tab.value = "unparsed"; } },
@@ -1017,6 +1024,28 @@ function openRebindDialog(): void {
     label: `${detail.value.title ?? detail.value.key}`,
     season: "",
   };
+}
+
+/**
+ * 修索引里那些"文件已经整理走了、path 还是旧的"行。
+ *
+ * 主进程会先干跑再弹确认, 确认才改索引; 视频文件一个都不动。
+ */
+async function repairPaths(): Promise<void> {
+  moreOpen.value = false;
+  try {
+    const result = await window.kura.repairPaths(selectedId.value ?? undefined);
+    if (result.repaired.length === 0 && result.missing.length === 0) {
+      note.value = "索引和磁盘一致，没有要修的路径";
+      return;
+    }
+    note.value = result.applied
+      ? `已修 ${result.repaired.length} 条旧路径${result.missing.length ? ` · ${result.missing.length} 条文件真的不在了` : ""}`
+      : `有 ${result.repaired.length} 条旧路径没修（已取消）`;
+    await refreshAll();
+  } catch (err) {
+    errors.value.push(`修复路径: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 /**
@@ -2159,6 +2188,9 @@ async function testDmm(): Promise<void> {
                 @click="moreOpen = false; retypeDetect()"
               >
                 修正内容类型
+              </button>
+              <button type="button" :disabled="busy || !selected" @click="repairPaths">
+                修复索引路径
               </button>
               <button type="button" :disabled="busy || !selected" @click="moreOpen = false; startRename(selected!)">
                 重命名这个库

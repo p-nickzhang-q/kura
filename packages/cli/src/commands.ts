@@ -30,6 +30,7 @@ import {
   downloadPoster,
   exitCodeName,
   exportTvNfo,
+  repairIndexPaths,
   findLibrary,
   findResource,
   getItem,
@@ -222,7 +223,7 @@ function parseContentType(value: unknown): ContentType | null {
 export const COMMANDS: Command[] = [
   {
     name: "library",
-    summary: "媒体库: list | add <名称> <根目录> [--domain av|video] [--no-organize] | rename <库> --to <新名> | set-template | set-organize | remove <库>",
+    summary: "媒体库: list | add <名称> <根目录> [--domain av|video] [--no-organize] | rename <库> --to <新名> | set-template | set-organize | repair-paths [库] [--apply] | remove <库>",
     needsDb: true,
     args: [
       { name: "action", type: "string", description: "list | add | rename | set-template | set-organize | remove", positional: true, required: true },
@@ -232,6 +233,7 @@ export const COMMANDS: Command[] = [
       { name: "dimension", type: "string", description: `整理维度: ${DIMENSIONS.map((d) => d.id).join(" | ")}` },
       { name: "organize", type: "boolean", description: "允许整理 (--no-organize 表示只索引的旧成品库)", default: true },
       { name: "to", type: "string", description: "rename: 新库名" },
+      { name: "apply", type: "boolean", description: "repair-paths: 真的改索引 (默认只列清单)" },
       {
         name: "domain",
         type: "string",
@@ -309,6 +311,17 @@ export const COMMANDS: Command[] = [
         return { library: { ...library, organizeEnabled: enabled } };
       }
 
+      // 文件搬走了、索引没跟上(旧版整理 / 中途崩): 按整理计划把 path 找回来
+      if (action === "repair-paths") {
+        const ref = args.positionals.name;
+        const library = ref ? requireLibrary(ctx, ref) : null;
+        const report = await repairIndexPaths(ctx.rt!, {
+          ...(library ? { libraryId: library.id } : {}),
+          apply: Boolean(args.options.apply),
+        });
+        return { repair: report };
+      }
+
       if (action === "set-template") {
         const ref = args.positionals.name;
         if (!ref) throw new AppError("用法: library set-template <库> --dimension actor", EXIT.USAGE);
@@ -324,6 +337,12 @@ export const COMMANDS: Command[] = [
       libraries?: { name: string; root: string; template: string; organizeEnabled?: boolean }[];
       library?: { name: string; root: string; template: string; organizeEnabled?: boolean };
       removed?: { library: { name: string; root: string }; removedFiles: number; orphanItems: number };
+      repair?: {
+        dryRun: boolean;
+        repaired: { from: string; to: string; key: string | null; orphanNfo: string | null }[];
+        missing: { path: string }[];
+        ambiguous: { from: string; to: string }[];
+      };
     }) {
       // remove 动作返回的是 {removed, note}, 不是 library —— 以前会走到底部那句
       // "还没有媒体库", 看着像整库都没了一样。
@@ -334,6 +353,23 @@ export const COMMANDS: Command[] = [
           `  磁盘上的文件一个都没动`,
           `  清掉索引 ${removedFiles} 个文件${orphanItems ? ` · 保留 ${orphanItems} 个条目 (条目跨库, 元数据没删)` : ""}`,
         ].join("\n");
+      }
+      if (data.repair) {
+        const { dryRun, repaired, missing, ambiguous } = data.repair;
+        if (repaired.length === 0 && missing.length === 0 && ambiguous.length === 0) {
+          return "索引和磁盘一致, 没有需要修的路径。";
+        }
+        const lines = [
+          dryRun
+            ? `要修 ${repaired.length} 条 (文件已经搬到整理后的位置, 索引还指着旧路径)`
+            : `已修 ${repaired.length} 条`,
+        ];
+        for (const item of repaired.slice(0, 20)) lines.push(`  ${item.from}\n    → ${item.to}`);
+        if (repaired.length > 20) lines.push(`  …还有 ${repaired.length - 20} 条`);
+        if (missing.length > 0) lines.push(`${missing.length} 条的文件真的不在了, 扫一遍库会清掉`);
+        if (ambiguous.length > 0) lines.push(`${ambiguous.length} 条两个位置都有文件, 当成重复不动, 需要人决定`);
+        if (dryRun) lines.push("(这是干跑; 加 --apply 才改索引)");
+        return lines.join("\n");
       }
       if (data.library) {
         const mode = data.library.organizeEnabled === false ? "只索引 (不整理)" : "允许整理";

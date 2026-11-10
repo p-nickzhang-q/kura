@@ -48,6 +48,7 @@ import {
   listItems,
   countItems,
   countPending,
+  repairIndexPaths,
   exportTvNfo,
   exportTvNfoTask,
   todoCounts,
@@ -694,6 +695,32 @@ function registerIpc(): void {
   ipcMain.handle("todo:plans", async (_event, input: { libraryId?: number } = {}) =>
     todoPlans(mustRuntime(), input?.libraryId === undefined ? {} : { libraryId: input.libraryId }),
   );
+
+  /**
+   * 修「文件搬走了、索引没跟上」的陈旧路径。
+   *
+   * 干跑先算, 有得修就弹一次确认再改索引 —— 这类状态多半来自旧版整理或中途崩溃,
+   * 用户看到的是"打开位置没反应", 而他并不知道索引是旧的。
+   */
+  ipcMain.handle("library:repair-paths", async (_event, input: { libraryId?: number } = {}) => {
+    const rt = mustRuntime();
+    const scope = input?.libraryId === undefined ? {} : { libraryId: input.libraryId };
+    const dry = await repairIndexPaths(rt, scope);
+    if (dry.repaired.length === 0) return { ...dry, applied: false };
+    const answer = await dialog.showMessageBox({
+      type: "question",
+      buttons: ["修好路径", "取消"],
+      defaultId: 0,
+      cancelId: 1,
+      message: `有 ${dry.repaired.length} 条索引路径是旧的`,
+      detail:
+        "文件已经整理到新位置, 但索引还指着旧路径 —— 所以「打开位置」没反应、" +
+        "NFO 同步会往空目录里写。改索引不动任何视频文件" +
+        (dry.repaired.some((item) => item.orphanNfo) ? "；旧位置那些没人读的 .nfo 会一并删掉。" : "。"),
+    });
+    if (answer.response !== 0) return { ...dry, applied: false };
+    return { ...(await repairIndexPaths(rt, { ...scope, apply: true })), applied: true };
+  });
 
   // 手动加入: 不连任何来源, 只建一个本地条目 (local: 身份, ugc 标记)
   ipcMain.handle(

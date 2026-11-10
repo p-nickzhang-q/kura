@@ -131,6 +131,7 @@ export type { ScanEvent, ScanOptions, ScanReport } from "./tasks/scan";
 
 export { countExhausted, countItems, countPending, getItem, isItemSortField, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys, scrape, scrapeKeysTask, scrapePending, scrapePendingTask } from "./tasks/scrape";
 export { todoCounts, todoPlans, type TodoCounts, type TodoPlans } from "./tasks/todo";
+export { repairIndexPaths, type PathRepair, type PathRepairReport } from "./tasks/repair";
 export { countPendingTranslation, pendingTranslationKeys, translationStats, translateItem, repairTranslations, translateItemsTask, translatePending, translatePendingTask, type RepairReport, type TranslateBatchResult, type TranslateProgress } from "./tasks/translate";
 export type { TranslateReport } from "./tasks/translate";
 export { buildSystemPrompt, chatEndpoint, createTranslator, hasKana, needsTranslation, openTranslator, probeTranslator, TranslationCache } from "./llm/translate";

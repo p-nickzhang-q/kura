@@ -326,6 +326,14 @@ interface KuraBridge {
   onSuggestProgress(callback: (update: { index: number; total: number; dir: string }) => void): () => void;
   bindMany(libraryId: number, items: { dir: string; key: string; paths?: string[] }[]): Promise<{ results: KuraBindManyResult[] }>;
   unrecognizedDirs(libraryId?: number, limit?: number): Promise<{ dirs: KuraUnrecognizedDir[] }>;
+  /** 修「文件搬走了、索引没跟上」: 干跑后弹确认, 确认才改索引; 不动视频文件。 */
+  repairPaths(libraryId?: number): Promise<{
+    dryRun: boolean;
+    applied: boolean;
+    repaired: { from: string; to: string; key: string | null; orphanNfo: string | null }[];
+    missing: { path: string }[];
+    ambiguous: { from: string; to: string }[];
+  }>;
   /** 待办页的便宜数字 (SQL 计数)。 */
   todoCounts(libraryId?: number): Promise<KuraTodoCounts>;
   /** 待办页的贵数字 (要读磁盘: 整理计划 / nfo 差异)。 */
