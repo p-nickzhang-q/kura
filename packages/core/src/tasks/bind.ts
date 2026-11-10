@@ -780,31 +780,56 @@ export function setDirectorySeason(
   return { files: files.length, season: options.season };
 }
 
-/** 解绑: 把这个目录下的文件退回未识别。集行跟着条目走, 条目没人指向时一并删掉。 */
+/**
+ * 解绑: 把文件退回未识别。
+ *
+ * 两种含义, 靠有没有给 `key` 区分, 而且**必须**分开:
+ *
+ * - 给了 `key` = 「解绑这个条目」: 只清这个番号名下的文件, 它在几个目录里都算。
+ * - 没给 `key` = 「解绑这个目录」: CLI `file unbind <目录>` 用, 清目录下所有文件。
+ *
+ * 以前两种都按目录 `update`。影视目录里常有"一个目录绑出好几条"(绑这一集是逐文件选的),
+ * 于是解绑一部片会把整个目录的 4 部一起退回未识别; 反过来, 一部剧拆成两个目录
+ * (第一季 / 第二季)时, 按条目解绑又只退得掉第一个目录 —— 两头都不对。
+ */
 export function unbindDirectory(rt: Runtime, options: { libraryId: number; dir: string; key?: string }): number {
   const dir = options.dir.replace(/[\\/]+$/, "");
   const prefix = `${dir}${sep}`;
-  const rows = rt.db.all<{ path: string; number: string | null }>(
-    `select path, number from media_files where library_id = ? and (path = ? or path like ? || '%')`,
-    [options.libraryId, dir, prefix],
-  );
-  const keys = new Set(rows.map((row) => row.number).filter((value): value is string => Boolean(value)));
-  if (options.key) {
-    const wanted = options.key.toLowerCase();
-    for (const key of [...keys]) if (key !== wanted) keys.delete(key);
-  }
-  if (keys.size === 0) return 0;
+
+  const rows = options.key
+    ? rt.db.all<{ path: string; number: string | null }>(
+        "select path, number from media_files where library_id = ? and lower(number) = lower(?)",
+        [options.libraryId, options.key],
+      )
+    : rt.db.all<{ path: string; number: string | null }>(
+        `select path, number from media_files where library_id = ? and (path = ? or path like ? || '%')`,
+        [options.libraryId, dir, prefix],
+      );
+  if (rows.length === 0) return 0;
+
+  const keys = new Set<string>();
+  if (options.key) keys.add(options.key.toLowerCase());
+  else for (const row of rows) if (row.number) keys.add(row.number);
 
   rt.db.exec("begin");
   try {
-    rt.db.run(
-      `update media_files set number = null where library_id = ? and (path = ? or path like ? || '%')`,
-      [options.libraryId, dir, prefix],
-    );
+    if (options.key) {
+      rt.db.run("update media_files set number = null where library_id = ? and lower(number) = lower(?)", [
+        options.libraryId,
+        options.key,
+      ]);
+    } else {
+      rt.db.run(`update media_files set number = null where library_id = ? and (path = ? or path like ? || '%')`, [
+        options.libraryId,
+        dir,
+        prefix,
+      ]);
+    }
     // 条目没有文件指向了就删: 留着会让列表里出现"0 个文件的剧"
     for (const key of keys) {
-      const left = rt.db.get<{ n: number }>("select count(*) as n from media_files where number = ?", [key])?.n ?? 0;
-      if (left === 0) rt.db.run("delete from items where number = ?", [key]);
+      const left =
+        rt.db.get<{ n: number }>("select count(*) as n from media_files where lower(number) = lower(?)", [key])?.n ?? 0;
+      if (left === 0) rt.db.run("delete from items where lower(number) = lower(?)", [key]);
     }
     rt.db.exec("commit");
   } catch (err) {

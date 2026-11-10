@@ -80,6 +80,8 @@ const plan = ref<KuraPlan | null>(null);
 const planWarnings = ref<string[]>([]);
 /** 「重新刮削」进行中 / 结果 —— 就显示在按钮那一行, 别指望人滚到页面顶部看。 */
 const rescraping = ref(false);
+/** 解绑要二次确认: 条目没文件指向时会被删掉, 刮削结果跟着没了, 没有撤销。 */
+const unbindConfirm = ref(false);
 const scrapedNote = ref("");
 const events = ref<KuraScanEvent[]>([]);
 const confirmApply = ref(false);
@@ -984,7 +986,12 @@ function openRebindDialog(): void {
   };
 }
 
-/** 解绑: 退回未识别, 之后可以在未识别页重新选。 */
+/**
+ * 解绑: 退回未识别, 之后可以在未识别页重新选。
+ *
+ * 只清**这个条目**名下的文件 —— 同目录里别的条目不动。以前按目录清, 一个目录里绑了
+ * 四部片时解绑一部会把四部一起退回未识别 (见 tasks/bind.ts 的注释)。
+ */
 async function unbindCurrent(): Promise<void> {
   if (!detail.value || detail.value.domain === "av") return;
   const key = detail.value.key;
@@ -992,6 +999,7 @@ async function unbindCurrent(): Promise<void> {
     const result = await window.kura.unbindItem(key);
     detail.value = null;
     episodeView.value = null;
+    unbindConfirm.value = false;
     await refreshAll();
     note.value = `已解绑 ${key}: ${result.unbound} 个文件退回未识别，可以在「未识别」页重新绑`;
   } catch (err) {
@@ -2547,7 +2555,22 @@ async function testDmm(): Promise<void> {
                     摊到各季
                   </button>
                   <button type="button" :disabled="busy" @click="openRebindDialog">改绑</button>
-                  <button type="button" :disabled="busy" class="danger-ghost" @click="unbindCurrent">解绑</button>
+                  <template v-if="!unbindConfirm">
+                    <button
+                      type="button"
+                      :disabled="busy"
+                      class="danger-ghost"
+                      title="把这个条目名下的文件退回未识别; 磁盘文件不动, 但刮削结果会跟着条目一起删"
+                      @click="unbindConfirm = true"
+                    >
+                      解绑
+                    </button>
+                  </template>
+                  <template v-else>
+                    <span class="warn">文件退回未识别, 刮削结果会删掉。确认?</span>
+                    <button type="button" class="danger" :disabled="busy" @click="unbindCurrent">确认解绑</button>
+                    <button type="button" :disabled="busy" @click="unbindConfirm = false">取消</button>
+                  </template>
                   <button type="button" :disabled="busy || rescraping" @click="rescrapeShow">
                     {{ rescraping ? "刮削中…" : "重新刮削" }}
                   </button>

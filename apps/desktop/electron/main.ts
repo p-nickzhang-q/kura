@@ -742,8 +742,8 @@ function registerIpc(): void {
   ipcMain.handle("item:unbind", (_event, input: { key: string }) => {
     const rt = mustRuntime();
     const files = rt.db.all<{ path: string; library_id: number }>(
-      "select path, library_id from media_files where number = ?",
-      [input.key.toLowerCase()],
+      "select path, library_id from media_files where lower(number) = lower(?)",
+      [input.key],
     );
     if (files.length === 0) throw new AppError(`条目 ${input.key} 没有登记到文件`, EXIT.NOT_FOUND, { key: input.key });
     const libraryId = files[0]!.library_id;

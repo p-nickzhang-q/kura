@@ -204,6 +204,40 @@ describe("目录级绑定", () => {
   });
 });
 
+describe("按条目解绑", () => {
+  test("只清这个条目, 同目录里别的条目一个文件都不碰", async () => {
+    // 一个目录里可以绑出多条: 「绑这一集」是逐文件选的, 电影目录尤其如此
+    await makeShow("散装", ["甲.mp4", "乙.mp4", "丙.mp4"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
+    await scan(rt, { library });
+    const dir = join(media, "散装");
+    const all = listFiles(rt, { libraryId: library.id }).map((file) => file.path);
+    bindDirectory(rt, { libraryId: library.id, dir, key: "tmdb:tv:1", paths: [all[0]!] });
+    bindDirectory(rt, { libraryId: library.id, dir, key: "tmdb:movie:9", paths: [all[1]!, all[2]!] });
+
+    expect(unbindDirectory(rt, { libraryId: library.id, dir, key: "tmdb:tv:1" })).toBe(1);
+
+    const files = listFiles(rt, { libraryId: library.id });
+    expect(files.filter((file) => file.number === null)).toHaveLength(1);
+    // 另一条还在, 文件也还在它名下 —— 以前这里会被一起清空, 留下一条 0 文件的僵尸条目
+    expect(files.filter((file) => file.number === "tmdb:movie:9")).toHaveLength(2);
+    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(1);
+  });
+
+  test("跨目录的条目按条目解绑: 两个目录的文件一起退回", async () => {
+    await makeShow("第一季", ["甲01.mp4"]);
+    await makeShow("第二季", ["乙01.mp4"]);
+    const library = createLibrary(rt.db, { name: "剧库", root: media, domain: "video" });
+    await scan(rt, { library });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "第一季"), key: "tmdb:tv:7", season: 1 });
+    bindDirectory(rt, { libraryId: library.id, dir: join(media, "第二季"), key: "tmdb:tv:7", season: 2 });
+
+    expect(unbindDirectory(rt, { libraryId: library.id, dir: join(media, "第一季"), key: "tmdb:tv:7" })).toBe(2);
+    expect(listFiles(rt, { libraryId: library.id, unparsedOnly: true })).toHaveLength(2);
+    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(0);
+  });
+});
+
 describe("手工补集号", () => {
   test("绑定后给认不出的文件指定集号, 集行跟着长出来", async () => {
     await makeShow("某剧", ["第1集.mp4", "特典映像.mp4"]);
