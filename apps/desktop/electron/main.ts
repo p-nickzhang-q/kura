@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from "electron";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -1000,9 +1000,17 @@ function registerIpc(): void {
     return { ...result, item: getItem(rt, input.key) };
   });
 
+  /**
+   * 在资源管理器里定位。
+   *
+   * `shell.showItemInFolder` 对不存在的路径**什么都不做也不报错** —— 表现就是"点了没反应"。
+   * 索引比磁盘旧是常态(用户用别的程序删了片、换了硬盘), 所以这里先看一眼在不在,
+   * 不在就把话说清楚, 让人知道是"文件没了"而不是"按钮坏了"。
+   */
   ipcMain.handle("files:reveal", (_event, path: string) => {
+    if (!existsSync(path)) return { ok: false as const, reason: "missing" as const, path };
     shell.showItemInFolder(path);
-    return true;
+    return { ok: true as const, path };
   });
 
   // NFO 双向同步: Emby/Jellyfin 读的是文件, 不是这个库。

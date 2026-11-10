@@ -1225,8 +1225,17 @@ async function copyPath(path: string): Promise<void> {
   note.value = "路径已复制";
 }
 
+/**
+ * 在资源管理器里定位。
+ *
+ * 文件不在盘上时要说出来: 索引比磁盘旧是常态(别的程序删过片), 而
+ * `shell.showItemInFolder` 对不存在的路径既不做事也不报错 —— 表现就是"点了没反应"。
+ */
 async function reveal(path: string): Promise<void> {
-  await window.kura.revealFile(path);
+  const result = await window.kura.revealFile(path);
+  if (result.ok) return;
+  const name = path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
+  note.value = `文件不在盘上了: ${name} —— 索引还是旧的, 扫一遍库会清掉这一行`;
 }
 
 /** 详情页"打开位置"的候选文件夹(一个条目可能横跨多个目录)。 */

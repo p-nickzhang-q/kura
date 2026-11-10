@@ -407,7 +407,8 @@ interface KuraBridge {
     files: { path: string; number: string | null; libraryId: number; size: number }[];
     total: number;
   }>;
-  revealFile(path: string): Promise<boolean>;
+  /** 打开位置: 文件不在盘上时 ok=false (索引比磁盘旧), 界面要说话而不是静默。 */
+  revealFile(path: string): Promise<{ ok: boolean; path: string; reason?: "missing" }>;
   proxyTest(): Promise<{ configured: string; effective: string; reachable: string[] }>;
   itemFiles(key: string): Promise<{ path: string; size: number }[]>;
   retypeItem(
