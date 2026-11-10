@@ -180,6 +180,22 @@ kura file set-episode <路径> --episode 5 [--season 1]   # 绑了目录但文�
 - 记条目占位行时 `content_type` 存**空串**:它是 av 域的概念,而列是 `not null`(改成可空要重建表,不值得)。
 - `unbind` 把文件退回未识别;条目没有文件指向时一并删除(否则列表里会出现"0 个文件的剧")。
 
+### NFO: 两个域两套格式, 绝不能互相覆盖
+
+| 域 | 谁写 | 根元素 | 方向 |
+|---|---|---|---|
+| `av` | `tasks/nfo-sync.ts` → `domain/nfo.ts` | `<movie>` / `<episodedetails>` + `<uniqueid type="kura">` | 双向(读旧库的 nfo 当种子) |
+| `video` | `tasks/nfo-tv.ts` → `domain/nfo-tv.ts` | 剧级 `<tvshow>` + 集级 `<episodedetails>` + `<uniqueid type="tmdb">` | **只写**(Emby 会写集级 nfo, 回读等于把播放器状态当元数据) |
+
+以前两边都不过滤域: GUI 的「同步 NFO」拿 av 那套把影视文件写成 `<movie>/<num>/<uniqueid type="kura">`,
+下一次「整理」再用影视那套覆盖回去 —— 两个写手打架, 待办里的"待回写"永远清不掉。
+现在 `syncNfo` 的 SQL 带 `l.domain = 'av'`, GUI/CLI/待办计数都按域路由。
+
+同时修掉了一个"永远收敛不了"的比较 bug: 文件里是转义过的(`&amp;` `&apos;`),
+库里是原始值, 而旧代码只在一处用 `escapeXml(value)` 兜、别处直接比 ——
+带 `&` 的标签每同步一次就多一份(实测一个 nfo 里堆到 3 份), 带撇号的演员名永远是"待回写"。
+现在统一用 `unescapeXml` 还原后再比, 并且顺手删掉历史堆出来的重复项。
+
 ### 解绑有两种语义, 靠有没有给 `key` 区分
 
 | 入口 | 传 key | 清什么 |

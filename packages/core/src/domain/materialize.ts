@@ -81,6 +81,25 @@ export function sanitizeName(value: string): string {
     .slice(0, 120);
 }
 
+/**
+ * XML 实体还原。
+ *
+ * **比较时必须两侧同一形态**: 文件里的文本是转义过的(`Sci-Fi &amp; Fantasy`),
+ * 库里的值是原始的(`Sci-Fi & Fantasy`)。直接比 → 每次都判"文件里缺这个标签" →
+ * 每次同步都往文件里再追加一份, 于是标签越写越多(实测一个 nfo 里堆了 3 份)。
+ */
+export function unescapeXml(value: string): string {
+  return value
+    .replace(/&#x([0-9a-fA-F]+);/g, (_all, hex: string) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_all, dec: string) => String.fromCodePoint(Number.parseInt(dec, 10)))
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    // &amp; 必须最后: 否则 "&amp;lt;" 会被还原成 "<" 而不是 "&lt;"
+    .replace(/&amp;/g, "&");
+}
+
 export function escapeXml(value: string): string {
   return value
     .replace(/&/g, "&amp;")

@@ -1,5 +1,5 @@
 import { load } from "cheerio";
-import { escapeXml } from "./materialize";
+import { escapeXml, unescapeXml } from "./materialize";
 import type { NfoUpdate } from "./nfo";
 
 /**
@@ -109,6 +109,9 @@ export function mergeTvNfo(original: string, expected: TvNfoRoot, fields: TvShow
   const changed: string[] = [];
   if (root.length === 0) return { content: original, changed };
 
+  /** 文件里的文本 → 原始值(文件里是转义过的, 库里是原始值)。 */
+  const plain = (text: string): string => unescapeXml(text).trim();
+
   const setSingle = (tag: string, value: string | null | undefined, label: string): void => {
     if (value === null || value === undefined || value === "") return;
     const nodes = root.children(tag);
@@ -117,8 +120,8 @@ export function mergeTvNfo(original: string, expected: TvNfoRoot, fields: TvShow
       changed.push(`${label} 新增 ${value}`);
       return;
     }
-    const current = nodes.first().text().trim();
-    if (current === value || current === escapeXml(value)) {
+    const current = plain(nodes.first().text());
+    if (current === value.trim()) {
       if (nodes.length === 1) return;
       nodes.slice(1).remove();
       changed.push(`${label} 去掉重复 ${nodes.length - 1} 个`);
@@ -132,13 +135,28 @@ export function mergeTvNfo(original: string, expected: TvNfoRoot, fields: TvShow
   const unionAppend = (tag: string, values: string[] | undefined, label: string): void => {
     const items = dedupe((values ?? []).map((value) => value.trim()).filter(Boolean));
     if (items.length === 0) return;
-    const existing = root
-      .children(tag)
-      .map((_index, element) => $(element).text().trim())
+    const nodes = root.children(tag);
+    const existing = nodes
+      .map((_index, element) => plain($(element).text()))
       .get();
-    const missing = items.filter((item) => !existing.includes(item));
+
+    // 旧版比较形态不一致时已经堆重复, 顺手删掉
+    const seen = new Set<string>();
+    let duplicates = 0;
+    nodes.each((_index, element) => {
+      const value = plain($(element).text());
+      if (seen.has(value)) {
+        $(element).remove();
+        duplicates++;
+        return;
+      }
+      seen.add(value);
+    });
+
+    const missing = items.filter((item) => !seen.has(item));
     for (const item of missing) root.append($(`<${tag}/>`).text(escapeXml(item)));
     if (missing.length > 0) changed.push(`${label} 新增 ${missing.length} 个`);
+    if (duplicates > 0) changed.push(`${label} 去掉重复 ${duplicates} 个`);
   };
 
   mergeUniqueId($, root, changed, "tmdbId" in fields ? fields.tmdbId : null);
@@ -193,7 +211,7 @@ function mergeActors($: Cheerio, root: Node, changed: string[], actors: string[]
     if (index >= names.length) return;
     const block = $(element);
     const name = block.children("name");
-    const current = name.length > 0 ? name.first().text().trim() : "";
+    const current = name.length > 0 ? unescapeXml(name.first().text()).trim() : "";
     if (current === names[index]) return;
     if (name.length > 0) name.first().text(escapeXml(names[index]!));
     else block.prepend($("<name/>").text(escapeXml(names[index]!)));

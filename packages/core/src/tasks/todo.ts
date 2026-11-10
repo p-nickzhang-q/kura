@@ -2,6 +2,7 @@ import type { Runtime } from "../runtime";
 import { findLibrary, listLibraries } from "../db/rows";
 import { countUnrecognized } from "./bind";
 import { syncNfo } from "./nfo-sync";
+import { exportTvNfo } from "./nfo-tv";
 import { organize } from "./organize";
 import { organizeVideo } from "./organize-video";
 import { countFiles } from "./scan";
@@ -82,10 +83,23 @@ export async function todoPlans(rt: Runtime, options: { libraryId?: number } = {
   }
 
   // 整库干跑一次只为了数"有多少份 nfo 落后": 这里不写盘, 也不改库。
+  // 两个域两套 nfo, 必须分开算 —— 拿 av 那套去数影视, 数字会永远清不掉。
   let nfo: TodoPlans["nfo"] = null;
   try {
-    const report = await syncNfo(rt, options.libraryId === undefined ? {} : { libraryId: options.libraryId });
-    nfo = { created: report.created, written: report.written };
+    let created = 0;
+    let written = 0;
+    for (const library of scopeLibraries(rt, options.libraryId)) {
+      if (library.domain === "av") {
+        const report = await syncNfo(rt, { libraryId: library.id });
+        created += report.created;
+        written += report.written;
+      } else {
+        const report = await exportTvNfo(rt, { libraryId: library.id, apply: false });
+        created += report.created;
+        written += report.updated;
+      }
+    }
+    nfo = { created, written };
   } catch {
     // 数不出来就不显示数字 —— 首页不能因为一个可选提示变红。
     nfo = null;

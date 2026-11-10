@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { nfoPathFor, parseNfo, readNfo } from "../src/domain/nfo";
+import { nfoPathFor, parseNfo, readNfo, updateNfoContent } from "../src/domain/nfo";
 import { buildNfo } from "../src/domain/materialize";
 import { openRuntime } from "../src/runtime";
 import { createLibrary } from "../src/db/rows";
@@ -103,5 +103,40 @@ describe("nfo 回读", () => {
     expect(readNfo(join(media, "SSIS-002.mkv"))).toBeNull();
     rt.close();
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("写回 nfo 必须收敛 (带实体字符也一样)", () => {
+  const base = metadata;
+  const original = `<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<movie>
+  <title>被翻译过的标题</title>
+</movie>
+`;
+
+  test("含 & 的标签: 写一次之后再跑一次不该再报变化", () => {
+    const withTags: Metadata = { ...base, tags: ["Sci-Fi & Fantasy", "动作冒险"] };
+    const once = updateNfoContent(original, withTags);
+    expect(once.changed.join()).toContain("标签 新增 2 个");
+
+    // 以前比的是「文件里的 &amp; vs 库里的 &」→ 每次同步再追加一份, 实测堆到 3 份
+    const again = updateNfoContent(once.content, withTags);
+    expect(again.changed).toEqual([]);
+  });
+
+  test("含撇号的演员名同样收敛", () => {
+    const withActor: Metadata = { ...base, actors: ["Renato D'Angelo"] };
+    const once = updateNfoContent(original, withActor);
+    expect(updateNfoContent(once.content, withActor).changed).toEqual([]);
+  });
+
+  test("旧版堆出来的重复标签顺手删掉", () => {
+    const dirty = original.replace(
+      "</movie>",
+      "<tag>Sci-Fi &amp; Fantasy</tag><tag>Sci-Fi &amp; Fantasy</tag></movie>",
+    );
+    const result = updateNfoContent(dirty, { ...base, tags: ["Sci-Fi & Fantasy"] });
+    expect(result.changed.join()).toContain("去掉重复");
+    expect(result.content.match(/Sci-Fi &amp; Fantasy/g) ?? []).toHaveLength(1);
   });
 });

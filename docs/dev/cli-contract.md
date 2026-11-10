@@ -83,7 +83,7 @@ kura item retype --detect --apply --json    # 真的改
 kura item retype SSIS-915 censored --json   # 单条
 
 # NFO 双向同步: 先看清单, 确认后写盘 (只改 Kura 认识的字段, 其它标签原样保留)
-kura nfo sync --json                  # 所有库, dry-run
+kura nfo sync --json                  # 所有库, dry-run (番号制双向 + 影视只导出, 各自域各自的格式)
 kura nfo sync 电影库 --json              # 单个库
 kura nfo sync BOBB-371 --json          # 单个番号
 kura nfo sync --apply --json           # 真的写

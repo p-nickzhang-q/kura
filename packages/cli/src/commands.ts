@@ -590,6 +590,64 @@ export const COMMANDS: Command[] = [
         if (library) options.libraryId = library.id;
         else options.number = target;
       }
+
+      // 不带目标 = 所有库, 但两个域的 nfo 不是一回事: 番号制双向、影视只写。
+      // 以前这里只跑番号制那套, 影视库被静默跳过(而且 av 那套会把影视文件写成 <movie>)。
+      if (!target) {
+        const libraries = listLibraries(ctx.rt!.db);
+        const merged = {
+          dryRun: !options.apply,
+          scanned: 0,
+          imported: 0,
+          written: 0,
+          created: 0,
+          skipped: 0,
+          errors: 0,
+          cancelled: false,
+          entries: [] as Record<string, unknown>[],
+          byDomain: { av: 0, video: 0 },
+        };
+        for (const library of libraries) {
+          if (library.domain === "av") {
+            merged.byDomain.av += 1;
+            const report = options.apply
+              ? await syncNfo(ctx.rt!, { ...options, libraryId: library.id, apply: true })
+              : await syncNfo(ctx.rt!, { ...options, libraryId: library.id });
+            merged.scanned += report.scanned;
+            merged.imported += report.imported;
+            merged.written += report.written;
+            merged.created += report.created;
+            merged.skipped += report.skipped;
+            merged.errors += report.errors;
+            merged.cancelled = merged.cancelled || report.cancelled;
+            merged.entries.push(...(report.entries as unknown as Record<string, unknown>[]));
+          } else {
+            merged.byDomain.video += 1;
+            const report = await exportTvNfo(ctx.rt!, {
+              libraryId: library.id,
+              apply: options.apply,
+              limit: options.limit,
+            });
+            merged.scanned += report.shows;
+            merged.written += report.updated;
+            merged.created += report.created;
+            merged.skipped += report.skipped;
+            merged.errors += report.errors;
+            merged.cancelled = merged.cancelled || report.cancelled;
+            merged.entries.push(
+              ...report.entries.map((entry) => ({
+                number: entry.key,
+                path: entry.path,
+                nfoPath: entry.path,
+                action: entry.action,
+                changed: entry.changed,
+                ...(entry.error ? { error: entry.error } : {}),
+              })),
+            );
+          }
+        }
+        return merged;
+      }
       const action = args.positionals.action ?? "sync";
       if (!["sync", "write", "import"].includes(action)) {
         throw new AppError(`未知动作: ${action} (sync | write | import)`, EXIT.USAGE);

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import { load } from "cheerio";
-import { escapeXml } from "./materialize";
+import { escapeXml, unescapeXml } from "./materialize";
 import type { Metadata } from "./types";
 
 /**
@@ -164,6 +164,15 @@ export function updateNfoContent(original: string, metadata: Metadata): NfoUpdat
 
   const own = (tag: string) => root.children(tag);
 
+  /**
+   * 文件里的文本 → 原始值。
+   *
+   * 文件里是转义过的(`&amp;` `&apos;`), 库里是原始值。以前一处用 `escapeXml(value)` 兜、
+   * 别处直接比, 于是带 `&` 或 `'` 的值永远"不一致": 标签每同步一次多一份(实测堆到 3 份),
+   * 演员名带撇号的条目永远显示"待回写"。
+   */
+  const plain = (text: string): string => unescapeXml(text).trim();
+
   const setSingle = (tag: string, value: string | undefined, label: string): void => {
     if (!value) return;
     const nodes = own(tag);
@@ -172,8 +181,8 @@ export function updateNfoContent(original: string, metadata: Metadata): NfoUpdat
       changed.push(`${label} 新增 ${value}`);
       return;
     }
-    const current = nodes.first().text().trim();
-    if (current === value || current === escapeXml(value)) {
+    const current = plain(nodes.first().text());
+    if (current === value.trim()) {
       if (nodes.length === 1) return;
     }
     nodes.first().text(escapeXml(value));
@@ -193,7 +202,7 @@ export function updateNfoContent(original: string, metadata: Metadata): NfoUpdat
       return;
     }
     const name = sets.first().children("name");
-    const current = name.length > 0 ? name.first().text().trim() : "";
+    const current = name.length > 0 ? plain(name.first().text()) : "";
     if (current === series && sets.length === 1) return;
     if (name.length > 0) name.first().text(escapeXml(series));
     else sets.first().append($("<name/>").text(escapeXml(series)));
@@ -211,7 +220,7 @@ export function updateNfoContent(original: string, metadata: Metadata): NfoUpdat
       if (index >= actors.length) return;
       const block = $(element);
       const name = block.children("name");
-      const current = name.length > 0 ? name.first().text().trim() : "";
+      const current = name.length > 0 ? plain(name.first().text()) : "";
       if (current !== actors[index]) diffs.push(`${current || "(无)"} → ${actors[index]!}`);
       if (name.length > 0) name.first().text(escapeXml(actors[index]!));
       else block.prepend($("<name/>").text(escapeXml(actors[index]!)));
@@ -233,12 +242,29 @@ export function updateNfoContent(original: string, metadata: Metadata): NfoUpdat
   const unionAppend = (tag: string, values: string[] | undefined, label: string): void => {
     const items = (values ?? []).map((value) => value.trim()).filter(Boolean);
     if (items.length === 0) return;
-    const existing = own(tag)
-      .map((_index, element) => $(element).text().trim())
+    const nodes = own(tag);
+    const existing = nodes
+      .map((_index, element) => plain($(element).text()))
       .get();
-    const missing = items.filter((item) => !existing.includes(item));
+
+    // 历史遗留: 旧版比较错形态, 同一个标签可能已经被追加过好几遍。顺手去重, 不留垃圾。
+    const seen = new Set<string>();
+    let duplicates = 0;
+    nodes.each((index, element) => {
+      const value = plain($(element).text());
+      if (seen.has(value)) {
+        $(element).remove();
+        duplicates++;
+        return;
+      }
+      seen.add(value);
+      void index;
+    });
+
+    const missing = items.filter((item) => !seen.has(item));
     for (const item of missing) root.append($(`<${tag}/>`).text(escapeXml(item)));
     if (missing.length > 0) changed.push(`${label} 新增 ${missing.length} 个`);
+    if (duplicates > 0) changed.push(`${label} 去掉重复 ${duplicates} 个`);
   };
 
   const title = asText(metadata.title);

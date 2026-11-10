@@ -181,7 +181,10 @@ export async function syncNfo(rt: Runtime, options: NfoSyncOptions = {}): Promis
   const apply = options.apply === true;
   const limit = options.limit ?? 5000;
   const concurrency = options.concurrency ?? 8;
-  const where: string[] = ["m.number is not null"];
+  // 只管番号制: 影视库的 nfo 是另一套(剧级 tvshow.nfo + 集级 episodedetails, 只写不读)。
+  // 以前不过滤, 影视文件被写成 av 风格的 <movie>/<num>/<uniqueid type="kura">,
+  // 而「整理」又用影视那套重写 —— 两个写手互相覆盖, 标签还会越写越多。
+  const where: string[] = ["m.number is not null", "l.domain = 'av'"];
   const params: unknown[] = [];
   if (options.libraryId !== undefined) {
     where.push("m.library_id = ?");
@@ -200,7 +203,9 @@ export async function syncNfo(rt: Runtime, options: NfoSyncOptions = {}): Promis
   }
 
   const rows = rt.db.all<ItemRow & { path: string }>(
-    `select m.path, i.* from media_files m join items i on i.number = m.number
+    `select m.path, i.* from media_files m
+     join items i on i.number = m.number
+     join libraries l on l.id = m.library_id
      where ${where.join(" and ")}
      order by m.path
      limit ?`,

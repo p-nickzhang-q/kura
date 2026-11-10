@@ -206,3 +206,34 @@ describe("电影 NFO", () => {
     await expect(readFile(join(media, "某电影", "tvshow.nfo"), "utf8")).rejects.toThrow();
   });
 });
+
+describe("带实体字符的影视 nfo 也必须收敛", () => {
+  const existing = `<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<tvshow>
+  <title>某剧</title>
+</tvshow>
+`;
+
+  test("题材/演员里有 & 与撇号: 写一次后再跑一次不该再报变化", () => {
+    const fields = {
+      title: "某剧",
+      genres: ["Sci-Fi & Fantasy"],
+      actors: ["Renato D'Angelo"],
+    };
+    const once = mergeTvNfo(existing, "tvshow", fields);
+    expect(once.changed.length).toBeGreaterThan(0);
+
+    // 以前文件里是 `&amp;` / `&apos;`, 库里是原始值, 每次同步都再追加一遍
+    expect(mergeTvNfo(once.content, "tvshow", fields).changed).toEqual([]);
+  });
+
+  test("已经堆出来的重复题材顺手删掉", () => {
+    const dirty = existing.replace(
+      "</tvshow>",
+      "<genre>Sci-Fi &amp; Fantasy</genre><genre>Sci-Fi &amp; Fantasy</genre></tvshow>",
+    );
+    const result = mergeTvNfo(dirty, "tvshow", { title: "某剧", genres: ["Sci-Fi & Fantasy"] });
+    expect(result.changed.join()).toContain("去掉重复");
+    expect(result.content.match(/Sci-Fi &amp; Fantasy/g) ?? []).toHaveLength(1);
+  });
+});

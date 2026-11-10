@@ -48,6 +48,8 @@ import {
   listItems,
   countItems,
   countPending,
+  exportTvNfo,
+  exportTvNfoTask,
   todoCounts,
   todoPlans,
   countExhausted,
@@ -1014,6 +1016,43 @@ function registerIpc(): void {
     ) =>
       exclusive("同步 NFO", async (signal) => {
         const rt = mustRuntime();
+        // 影视库和番号制是两套 nfo: 影视只写(剧级 tvshow.nfo + 集级 episodedetails),
+        // 番号制双向。以前不分域, 影视文件被 av 那套覆盖成 <movie>/<num>,
+        // 下一次「整理」再覆盖回去 —— 两个写手打架, 待办里的数字也永远清不掉。
+        const target = input.libraryId !== undefined ? findLibrary(rt.db, String(input.libraryId)) : undefined;
+        if (target && target.domain !== "av") {
+          const tvOptions = {
+            libraryId: target.id,
+            apply: input.apply === true,
+            ...(Array.isArray(input.numbers) ? { keys: input.numbers } : {}),
+            onProgress: (progress: { index: number; total: number; key: string; action: string }) =>
+              win?.webContents.send("nfo:progress", progress),
+          };
+          // 真写盘要留任务行(历史里能看跑到哪、失败在哪), 干跑不留
+          const report =
+            input.apply === true
+              ? ((await exportTvNfoTask(rt, tvOptions, signal)).result ?? (await exportTvNfo(rt, tvOptions)))
+              : await exportTvNfo(rt, tvOptions);
+          // 统一成渲染进程已经认识的那套字段(它只关心 新建/写回/跳过/失败 与清单)
+          return {
+            dryRun: report.dryRun,
+            scanned: report.shows,
+            imported: 0,
+            written: report.updated,
+            created: report.created,
+            skipped: report.skipped,
+            errors: report.errors,
+            cancelled: report.cancelled,
+            entries: report.entries.map((entry) => ({
+              number: entry.key,
+              path: entry.path,
+              nfoPath: entry.path,
+              action: entry.action,
+              changed: entry.changed,
+              ...(entry.error ? { error: entry.error } : {}),
+            })),
+          };
+        }
         const options = {
           ...(input.libraryId !== undefined ? { libraryId: input.libraryId } : {}),
           ...(input.number ? { number: input.number } : {}),
