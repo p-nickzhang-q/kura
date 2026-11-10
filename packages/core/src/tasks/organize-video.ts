@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readdir, rmdir, unlink } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { isVideoFile } from "./scan";
@@ -316,7 +317,14 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
     rt.db.exec("begin");
     try {
       for (const result of applied) {
-        if (result.ok && result.entry.action === "move" && result.entry.from && result.entry.to) {
+        if (!result.ok || !result.entry.from || !result.entry.to) continue;
+        if (result.entry.action === "move") {
+          rt.db.run("update media_files set path = ? where path = ?", [result.entry.to, result.entry.from]);
+          continue;
+        }
+        // 计划说"目标就是它", 而源文件已经不在了 —— 说明上一次整理搬了文件、索引没跟上。
+        // 不纠正的话, 索引会一直指着空目录, nfo 同步往里写就是 ENOENT, 永远不收敛。
+        if (result.entry.action === "skip" && !existsSync(result.entry.from) && existsSync(result.entry.to)) {
           rt.db.run("update media_files set path = ? where path = ?", [result.entry.to, result.entry.from]);
         }
       }

@@ -1,5 +1,6 @@
 import { buildPlan, applyPlan, pruneEmptyDirs, type ApplyResult, type Library, type Plan, type PlanEntry, type PlanInput } from "../domain/materialize";
 import type { Metadata } from "../domain/types";
+import { existsSync } from "node:fs";
 import { dirname, extname, sep } from "node:path";
 import { parsePhase, rowToMetadata, type ItemRow } from "../db/rows";
 import type { Runtime } from "../runtime";
@@ -88,7 +89,14 @@ export async function organize(rt: Runtime, opts: OrganizeOptions): Promise<Orga
     try {
       for (const result of applied) {
         const { entry } = result;
-        if (result.ok && entry.action === "move" && entry.from && entry.to) {
+        if (!result.ok || !entry.from || !entry.to) continue;
+        if (entry.action === "move") {
+          rt.db.run("update media_files set path = ? where path = ?", [entry.to, entry.from]);
+          continue;
+        }
+        // 计划说"目标就是它", 而源文件已经不在了 —— 说明上一次整理搬了文件、索引没跟上。
+        // 不纠正的话, 索引会一直指着空目录, nfo 同步往里写就是 ENOENT, 永远不收敛。
+        if (entry.action === "skip" && !existsSync(entry.from) && existsSync(entry.to)) {
           rt.db.run("update media_files set path = ? where path = ?", [entry.to, entry.from]);
         }
       }

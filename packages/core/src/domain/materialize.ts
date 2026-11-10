@@ -290,7 +290,7 @@ export async function applyPlan(plan: Plan, options: ApplyPlanOptions = {}): Pro
             results.push({ entry, ok: true, unchanged: true });
             continue;
           }
-          await copyFile(entry.from, entry.to);
+          await copyWithRetry(entry.from, entry.to);
         }
       } else if (entry.action === "move" && entry.from) {
         await moveFile(entry.from, entry.to);
@@ -304,6 +304,22 @@ export async function applyPlan(plan: Plan, options: ApplyPlanOptions = {}): Pro
     }
   }
   return results;
+}
+
+/**
+ * 复制失败重试一次。
+ *
+ * 外置 USB 机械盘偶发 `EIO: i/o error`(实测一次整理里 8 张海报栽在这上面),
+ * 隔几十毫秒再试通常就过去了; 真坏道第二次仍然失败, 那时才报错。
+ */
+async function copyWithRetry(from: string, to: string): Promise<void> {
+  try {
+    await copyFile(from, to);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EIO") throw err;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    await copyFile(from, to);
+  }
 }
 
 /** 跨设备时 rename 会 EXDEV, 退化为 copy + unlink。 */

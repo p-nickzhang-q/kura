@@ -291,6 +291,12 @@ export async function exportTvNfoTask(
       },
     });
     // processed 用"写过的文件数", 不是"剧数" —— 82 部剧里有 1,466 集, 只报 5/82 等于没进度
+    // 失败原因进 jsonl: 任务详情的「失败 N」靠它列出是哪几个、为什么。
+    // 以前只记了进度事件, 于是"失败 24"点开是空的。
+    for (const entry of result.entries) {
+      if (!entry.error) continue;
+      run.log.write("item", { key: entry.key, path: entry.path, ok: false, error: entry.error });
+    }
     return { result, processed: result.created + result.updated + result.skipped, failed: result.errors };
   });
 }
@@ -382,12 +388,19 @@ async function readText(path: string): Promise<string | null> {
 /** 先写临时文件再改名: 中途失败留下的是临时文件, 不是半截 nfo。 */
 async function writeFileAtomic(path: string, content: string): Promise<void> {
   const tmp = `${path}.kura-tmp`;
-  try {
+  const attempt = async (): Promise<void> => {
     await writeFile(tmp, content, "utf8");
     await rename(tmp, path);
+  };
+  try {
+    await attempt();
   } catch (err) {
     await unlink(tmp).catch(() => undefined);
-    throw err;
+    // 外置 USB 机械盘偶发 `EIO: i/o error`(实测一次同步 24 个文件栽在这上面),
+    // 隔一会儿重试通常就过去了; 真坏道第二次仍失败, 那时才报错。
+    if ((err as NodeJS.ErrnoException).code !== "EIO") throw err;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await attempt();
   }
 }
 

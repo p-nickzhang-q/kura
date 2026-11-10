@@ -313,3 +313,38 @@ describe("并发与进度口径", () => {
     }
   });
 });
+
+describe("电影 nfo 不许写季/集", () => {
+  const existing = `<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<movie>
+  <title>某片</title>
+</movie>
+`;
+
+  test("merge 电影按电影字段走: 没有 season/episode, 也没有 undefined", () => {
+    const fields = {
+      title: "某片",
+      plot: "简介",
+      premiered: "2009-11-15",
+      studio: "某片商",
+      runtimeMin: 36,
+      genres: ["历史"],
+      actors: ["某人"],
+      tmdbId: "1008421",
+    };
+    const { content, changed } = mergeTvNfo(existing, "movie", fields);
+
+    // 以前 movie 落进"集"分支 → 往电影 nfo 里写 <season>undefined</season>
+    expect(content).not.toContain("undefined");
+    expect(content).not.toContain("<season>");
+    expect(content).not.toContain("<episode>");
+    expect(changed.join(" ")).not.toContain("季");
+    expect(changed.join(" ")).not.toContain("集");
+    // 电影该有的字段照样写
+    expect(content).toContain("<plot>简介</plot>");
+    expect(content).toContain('<uniqueid type="tmdb">1008421</uniqueid>');
+
+    // 再跑一次必须收敛
+    expect(mergeTvNfo(content, "movie", fields).changed).toEqual([]);
+  });
+});

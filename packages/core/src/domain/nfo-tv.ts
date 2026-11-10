@@ -170,6 +170,19 @@ export function mergeTvNfo(original: string, expected: TvNfoRoot, fields: TvShow
     setSingle("studio", show.studio, "电视台");
     unionAppend("genre", show.genres, "题材");
     mergeActors($, root, changed, show.actors ?? []);
+  } else if (expected === "movie") {
+    // 电影有自己的一套字段。以前这里没有分支, `movie` 落进下面的"集"分支 ——
+    // 于是每次同步都往电影 nfo 里写 `<season>undefined</season><episode>undefined</episode>`
+    // (字段根本不存在), 而且永远判成"有变化", 待办里那 88 条就出自这里。
+    const movie = fields as MovieNfoFields;
+    setSingle("title", movie.title, "标题");
+    setSingle("originaltitle", movie.originalTitle, "原名");
+    setSingle("plot", movie.plot, "简介");
+    setSingle("premiered", movie.premiered, "首映日");
+    setSingle("studio", movie.studio, "片商");
+    setSingle("runtime", movie.runtimeMin ? String(movie.runtimeMin) : null, "时长");
+    unionAppend("genre", movie.genres, "题材");
+    mergeActors($, root, changed, movie.actors ?? []);
   } else {
     const episode = fields as EpisodeNfoFields;
     setSingle("title", episode.title, "集名");
