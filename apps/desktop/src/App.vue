@@ -73,6 +73,33 @@ const items = ref<KuraItem[]>([]);
  * 里找下一步该点哪个。
  */
 const tab = ref<"todo" | "items" | "unparsed" | "plan" | "tasks" | "settings">("todo");
+
+/**
+ * 「未识别」「整理预览」不再是常驻 tab(它们是从待办进去的一次性页面), 但**进去过就要留着**。
+ *
+ * 事故: 在整理预览里看清单 → 切到「任务」看进度 → 回不去了, 只能再回待办点那一行,
+ * 而且整理预览一旦重新进入就要重新算计划。所以按"打开过的页面"处理: 进过一次就挂在
+ * tab 条上(带 ×), 直到人自己关掉。
+ */
+const openViews = ref<Array<"unparsed" | "plan">>([]);
+
+function openView(view: "unparsed" | "plan"): void {
+  if (!openViews.value.includes(view)) openViews.value = [...openViews.value, view];
+  tab.value = view;
+}
+
+function closeView(view: "unparsed" | "plan"): void {
+  openViews.value = openViews.value.filter((item) => item !== view);
+  if (tab.value === view) tab.value = "todo";
+}
+
+/** 打开过的页面在 tab 条上的名字。 */
+function viewLabel(view: "unparsed" | "plan"): string {
+  if (view === "unparsed") {
+    return isVideoMode.value ? `未识别 (${treeStats.value.dirs})` : `未识别 (${unparsedCount.value})`;
+  }
+  return "整理预览";
+}
 const busy = ref(false);
 /** 启动/刷新过程中的错误, 直接显示在界面顶部 —— 白屏最不该让人去猜。 */
 const errors = ref<string[]>([]);
@@ -526,7 +553,7 @@ const todoRows = computed<TodoRow[]>(() => {
     disabled: false,
     next: false,
     go: () => {
-      tab.value = "unparsed";
+      openView("unparsed");
     },
   });
 
@@ -574,7 +601,7 @@ const todoRows = computed<TodoRow[]>(() => {
       next: false,
       go: async () => {
         await preview();
-        tab.value = "plan";
+        openView("plan");
       },
     });
 
@@ -649,9 +676,9 @@ const paletteActions = computed<PaletteAction[]>(() => {
       disabled: libraries.value.length === 0,
       run: repairPaths,
     },
-    { id: "plan", title: "整理预览", hint: noOrganize ? "该库设为只索引, 不会整理" : "先看清单再执行", disabled: !hasLibrary, run: async () => { await preview(); tab.value = "plan"; } },
+    { id: "plan", title: "整理预览", hint: noOrganize ? "该库设为只索引, 不会整理" : "先看清单再执行", disabled: !hasLibrary, run: async () => { await preview(); openView("plan"); } },
     { id: "todo", title: "去待办", hint: "还差多少、下一步做什么", disabled: false, run: () => { tab.value = "todo"; } },
-    { id: "unparsed", title: "去未识别", hint: "认不出的文件 / 目录", disabled: false, run: () => { tab.value = "unparsed"; } },
+    { id: "unparsed", title: "去未识别", hint: "认不出的文件 / 目录", disabled: false, run: () => openView("unparsed") },
     { id: "items", title: "去条目", hint: "整个库的列表", disabled: false, run: () => { tab.value = "items"; } },
     { id: "tasks", title: "去任务", hint: "做过什么、哪条失败", disabled: false, run: () => { tab.value = "tasks"; } },
     { id: "settings", title: "去设置", hint: "数据目录 / 来源 / LLM / 代理", disabled: false, run: () => { tab.value = "settings"; } },
@@ -1966,7 +1993,7 @@ async function preview(): Promise<void> {
   if (report) {
     plan.value = report.plan;
     planWarnings.value = report.warnings ?? [];
-    tab.value = "plan";
+    openView("plan");
     confirmApply.value = false;
   }
 }
@@ -2256,6 +2283,19 @@ async function testDmm(): Promise<void> {
           <button type="button" :class="{ on: tab === 'todo' }" @click="tab = 'todo'">待办</button>
           <button type="button" :class="{ on: tab === 'items' }" @click="tab = 'items'">条目</button>
           <button type="button" :class="{ on: tab === 'tasks' }" @click="tab = 'tasks'">任务</button>
+          <!-- 从待办进去过的页面留在这里, 切到别处也能点回来 -->
+          <span v-for="view in openViews" :key="view" class="tab-pair">
+            <button type="button" :class="{ on: tab === view }" @click="tab = view">{{ viewLabel(view) }}</button>
+            <button
+              type="button"
+              class="tab-close"
+              :aria-label="`关闭 ${viewLabel(view)}`"
+              :title="`关闭「${viewLabel(view)}」`"
+              @click="closeView(view)"
+            >
+              ×
+            </button>
+          </span>
           <span class="spacer" />
           <span v-if="progress" class="progress">
             {{ progress.index }}/{{ progress.total || "?" }} · {{ progress.key }}
@@ -2751,7 +2791,7 @@ async function testDmm(): Promise<void> {
 
         <!-- 未识别 (影视库): 树。目录一层给"整目录"的动作, 文件一层给"就这一个"的动作 -->
         <div v-else-if="tab === 'unparsed' && isVideoMode" class="pane">
-          <button type="button" class="crumb" @click="tab = 'todo'">← 待办</button>
+          <button type="button" class="crumb" @click="closeView('unparsed')">← 待办</button>
           <div class="toolbar">
             <span class="muted">
               {{ treeStats.dirs }} 个目录 · {{ treeStats.files }} 个文件
@@ -2930,7 +2970,7 @@ async function testDmm(): Promise<void> {
 
         <!-- 未识别 -->
         <div v-else-if="tab === 'unparsed'" class="pane">
-          <button type="button" class="crumb" @click="tab = 'todo'">← 待办</button>
+          <button type="button" class="crumb" @click="closeView('unparsed')">← 待办</button>
           <div class="toolbar">
             <span class="muted">扫到了但认不出番号的文件: {{ unparsedCount }} 个（不会进入刮削）</span>
             <span class="spacer" />
@@ -2968,7 +3008,7 @@ async function testDmm(): Promise<void> {
 
         <!-- 整理预览 -->
         <div v-else-if="tab === 'plan'" class="pane">
-          <button type="button" class="crumb" @click="tab = 'todo'">← 待办</button>
+          <button type="button" class="crumb" @click="closeView('plan')">← 待办</button>
 
           <!-- 番号制: 维度决定第一层目录。影视库没有这一层 —— 形状由条目类型决定 -->
           <div v-if="!isVideoMode" class="lib-config">
@@ -5752,6 +5792,38 @@ td.pick {
   background: var(--panel);
   color: var(--muted);
   font-size: var(--fs-label);
+}
+
+/* 打开过的页面 + 它的 × : 视觉上是一组, 但 × 是独立的可点区域 */
+.tab-pair {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.tab-pair:has(button.on) {
+  border-color: var(--line-strong);
+  background: var(--panel-2);
+}
+
+.tab-pair > button {
+  border: 0;
+  background: transparent;
+}
+
+.tab-pair > button.on {
+  background: transparent;
+}
+
+.tab-close {
+  padding: 4px 8px;
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+}
+
+.tab-close:hover {
+  color: var(--text);
 }
 
 .tab-icon {
