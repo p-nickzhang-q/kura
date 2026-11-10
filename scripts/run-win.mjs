@@ -42,7 +42,45 @@ build("pnpm", ["exec", "vite", "build"], desktop);
 console.log("2/3 构建主进程…");
 build("bun", ["build", "./electron/main.ts", "--target=node", "--outfile", "dist-electron/main.mjs", "--external", "electron"], desktop);
 
+// 正在跑的实例必须先关掉: 换文件是 `rm -rf dist` 再拷, 运行中的 Electron 会在下一次
+// 懒加载 chunk 时拿到空文件 —— 表现是窗口卡死然后 APPCRASH(0x80000003),
+// 而且它当时正在跑的任务会被标成 interrupted。真实事故: 09:22:18 同步, 09:22:30 卡死,
+// 用户正在同步 NFO。别指望人能自己想起来先关。
+// 这个脚本可能跑在 WSL 里(Linux), 而被管的进程在 Windows 上 —— 所以用 tasklist.exe/taskkill.exe
+// 而不是判断 process.platform: WSL 里 node 是 linux, 但 tasklist.exe 走 Windows 互操作能跑。
+function windowsTool(name) {
+  if (process.platform === "win32") return `${name}.exe`;
+  const probe = spawnSync(`/mnt/c/Windows/System32/${name}.exe`, ["/?"], { stdio: "ignore" });
+  return probe.error ? null : `/mnt/c/Windows/System32/${name}.exe`;
+}
+
+function runningInstances() {
+  const tasklist = windowsTool("tasklist");
+  if (!tasklist) return [];
+  const out = spawnSync(tasklist, ["/FI", "IMAGENAME eq Kura.exe", "/NH"], { encoding: "utf8" }).stdout ?? "";
+  return out
+    .split(/\r?\n/)
+    .filter((line) => line.includes("Kura.exe"))
+    .map((line) => line.trim().split(/\s+/)[1])
+    .filter(Boolean);
+}
+
+async function stopRunning() {
+  const pids = runningInstances();
+  if (pids.length === 0) return;
+  if (process.argv.includes("--keep-running")) {
+    console.error(`有 ${pids.length} 个 Kura 实例在跑 (${pids.join(", ")}), --keep-running 下不替你关。`);
+    console.error("但换文件会让它们崩 —— 先手动关掉, 或者去掉 --keep-running。");
+    process.exit(1);
+  }
+  console.log(`   先关掉正在跑的 ${pids.length} 个 Kura 实例 (${pids.join(", ")})…`);
+  const taskkill = windowsTool("taskkill");
+  for (const pid of pids) spawnSync(taskkill, ["/PID", pid, "/F"], { stdio: "ignore" });
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+}
+
 console.log(`3/3 同步到 ${appDir}…`);
+await stopRunning();
 await rm(join(appDir, "dist"), { recursive: true, force: true });
 await rm(join(appDir, "dist-electron"), { recursive: true, force: true });
 await rm(join(appDir, "electron"), { recursive: true, force: true });

@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from "electron";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -1263,6 +1264,29 @@ function registerIpc(): void {
   );
 }
 
+/**
+ * 崩溃要留痕。
+ *
+ * 事故现场: 用户同步 NFO 到第 699/1,695 条时窗口消失, 任务表只留下 `interrupted`
+ * ("宿主进程已退出") —— 因为 Node 从 v15 起把未处理的 rejection 直接当致命错误,
+ * 主进程一死就没有任何日志。APPCRASH 的 dump 在 WER 里, 但那不是用户能给我看的东西。
+ */
+function logFatal(kind: string, detail: unknown): void {
+  const message = detail instanceof Error ? `${detail.message}\n${detail.stack ?? ""}` : String(detail);
+  try {
+    const { logDir, dataDir } = resolvePaths();
+    const line = `[${new Date().toISOString()}] ${kind} dataDir=${dataDir}\n${message}\n\n`;
+    mkdirSync(logDir, { recursive: true });
+    appendFileSync(join(logDir, "crash.log"), line, "utf8");
+  } catch {
+    // 连日志都写不了就没办法了, 至少别在错误处理里再抛一次
+  }
+  console.error(`[${kind}]`, detail);
+}
+
+process.on("uncaughtException", (err) => logFatal("uncaughtException", err));
+process.on("unhandledRejection", (reason) => logFatal("unhandledRejection", reason));
+
 // 第二个实例聚焦已有窗口: 两个 GUI 同时写库虽然 WAL 扛得住, 但用户会困惑。
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -1299,6 +1323,11 @@ if (!app.requestSingleInstanceLock()) {
     registerIpc();
     await createWindow();
 
+  });
+
+  // 渲染进程被杀(内存/GPU/自相残杀)时主进程还在, 界面却没了 —— 记下原因和退出码
+  app.on("child-process-gone", (_event, details) => {
+    logFatal("child-process-gone", `${details.type} ${details.reason} exitCode=${details.exitCode}`);
   });
 
   app.on("activate", async () => {

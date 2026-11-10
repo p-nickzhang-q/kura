@@ -306,6 +306,19 @@ const todoPlan = ref<KuraTodoPlans | null>(null);
 const todoLoading = ref(false);
 /** 快速切库时防止旧库的数字晚一步写回来。 */
 let todoSeq = 0;
+/**
+ * 贵的数字(整理计划 / nfo 差异)要读上千个 sidecar, 实测 1,845 个文件约 2 秒。
+ * 所以: 只在「待办」页可见时算, 算完缓存 20 秒; 库一改(绑定/解绑/刮削/整理)就作废。
+ * 以前每次 refreshAll 都重算 —— 绑一条重算一次, 页签在「条目」上也照算。
+ */
+let todoPlanAt = 0;
+let todoPlanKey = "";
+let todoPlanRunning = false;
+let todoPlanStale = true;
+
+function invalidateTodoPlan(): void {
+  todoPlanStale = true;
+}
 
 /* ---- 侧栏「⋯」与命令面板 ---- */
 const moreOpen = ref(false);
@@ -365,6 +378,11 @@ onMounted(async () => {
   await refreshAll();
 });
 
+// 切到「待办」时才去读磁盘算贵数字
+watch(tab, (value) => {
+  if (value === "todo") void refreshTodo();
+});
+
 onUnmounted(() => {
   stopTasksPolling();
   window.removeEventListener("keydown", onKeydown);
@@ -392,6 +410,7 @@ async function refreshAll(): Promise<void> {
   };
 
   errors.value = [];
+  invalidateTodoPlan();
   info.value = (await step("读取状态", () => window.kura.info())) ?? info.value;
   config.value = (await step("读取配置", () => window.kura.configGet())) ?? config.value;
   translateOn.value = config.value?.settings.translate ?? false;
@@ -421,18 +440,32 @@ async function refreshAll(): Promise<void> {
 async function refreshTodo(): Promise<void> {
   const seq = ++todoSeq;
   todoLoading.value = true;
-  todoPlan.value = null;
   try {
     const counts = await window.kura.todoCounts(selectedId.value ?? undefined);
     if (seq === todoSeq) todoCounts.value = counts;
   } catch {
     if (seq === todoSeq) todoCounts.value = null;
   }
-  try {
-    const plans = await window.kura.todoPlans(selectedId.value ?? undefined);
-    if (seq === todoSeq) todoPlan.value = plans;
-  } catch {
-    // 贵的数字算不出来就不显示, 待办页不能因为一个提示变红
+
+  // 贵的两行: 页签不在「待办」上就先不算 —— 那两行根本没人看着
+  const key = String(selectedId.value ?? "all");
+  const cached = !todoPlanStale && todoPlanKey === key && Date.now() - todoPlanAt < 20_000 && todoPlan.value !== null;
+  if (tab.value === "todo" && !cached && !todoPlanRunning) {
+    todoPlanRunning = true;
+    if (todoPlanKey !== key) todoPlan.value = null;
+    try {
+      const plans = await window.kura.todoPlans(selectedId.value ?? undefined);
+      if (seq === todoSeq) {
+        todoPlan.value = plans;
+        todoPlanKey = key;
+        todoPlanAt = Date.now();
+        todoPlanStale = false;
+      }
+    } catch {
+      // 贵的数字算不出来就不显示, 待办页不能因为一个提示变红
+    } finally {
+      todoPlanRunning = false;
+    }
   }
   if (seq === todoSeq) todoLoading.value = false;
 }

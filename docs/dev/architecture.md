@@ -187,6 +187,22 @@ GUI 与 CLI 是两个独立进程,共享一个库文件:
 - `dataDir` 归进程自己管,可以同步 IO。
 - 用户媒体目录**不归我们管**,所有遍历/读取都按"可能很慢(FUSE / NAS)"对待:大文件用流式 hash,不要 `readFile`。
 
+## 崩了去哪看
+
+`dataDir/logs/`:
+
+| 文件 | 什么时候有 |
+|---|---|
+| `startup.log` | 启动期失败(数据库被新版升级过、打不开) |
+| `crash.log` | 主进程 `uncaughtException` / `unhandledRejection`、渲染进程或子进程死亡 |
+
+`crash.log` 是被一次真实事故逼出来的:用户同步 NFO 到第 699/1,695 条时窗口消失,
+任务表只剩 `interrupted`(宿主进程已退出), 什么线索都没有 —— Node 从 v15 起把未处理的
+rejection 当致命错误, 主进程一死就静默退出了。现在至少能拿到栈和原因。
+
+任务本身的状态在 `tasks` 表与 `logs/tasks/<id>-<type>.jsonl` 里:跑到第几条、哪条失败、
+是不是被打断(`recover` 事件)。
+
 ## 迁移
 
 `core/src/db/schema.ts` 用 `pragma user_version` 递增,不引入迁移框架。规则:**只追加、不改已发布条目**;每条必须在旧库上幂等。
