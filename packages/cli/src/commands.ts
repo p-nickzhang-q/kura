@@ -31,6 +31,7 @@ import {
   exitCodeName,
   exportTvNfo,
   repairIndexPaths,
+  relocateLibrary,
   findLibrary,
   findResource,
   getItem,
@@ -223,17 +224,17 @@ function parseContentType(value: unknown): ContentType | null {
 export const COMMANDS: Command[] = [
   {
     name: "library",
-    summary: "媒体库: list | add <名称> <根目录> [--domain av|video] [--no-organize] | rename <库> --to <新名> | set-template | set-organize | repair-paths [库] [--apply] | remove <库>",
+    summary: "媒体库: list | add <名称> <根目录> [--domain av|video] [--no-organize] | rename <库> --to <新名> | relocate <库> <新根> [--apply] | set-template | set-organize | repair-paths [库] [--apply] | remove <库>",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "list | add | rename | set-template | set-organize | remove", positional: true, required: true },
+      { name: "action", type: "string", description: "list | add | rename | relocate | set-template | set-organize | repair-paths | remove", positional: true, required: true },
       { name: "name", type: "string", description: "库名 (add: 新库名; set-template: 目标库)", positional: true },
-      { name: "root", type: "string", description: "库根目录 (add)", positional: true },
+      { name: "root", type: "string", description: "库根目录 (add / relocate: 新根目录)", positional: true },
       { name: "template", type: "string", description: "自定义整理模板, 相对库根" },
       { name: "dimension", type: "string", description: `整理维度: ${DIMENSIONS.map((d) => d.id).join(" | ")}` },
       { name: "organize", type: "boolean", description: "允许整理 (--no-organize 表示只索引的旧成品库)", default: true },
       { name: "to", type: "string", description: "rename: 新库名" },
-      { name: "apply", type: "boolean", description: "repair-paths: 真的改索引 (默认只列清单)" },
+      { name: "apply", type: "boolean", description: "repair-paths / relocate: 真的改索引 (默认只列清单)" },
       {
         name: "domain",
         type: "string",
@@ -302,6 +303,17 @@ export const COMMANDS: Command[] = [
         return { library: renameLibrary(ctx.rt!.db, library.id, to) };
       }
 
+      // 换盘 / 目录改名: 路径变了但相对结构一样, 改前缀就能保住全部绑定关系
+      if (action === "relocate") {
+        const ref = args.positionals.name;
+        const root = args.positionals.root;
+        if (!ref || !root) throw new AppError("用法: library relocate <库> <新根目录> [--apply]", EXIT.USAGE);
+        const library = requireLibrary(ctx, ref);
+        const apply = Boolean(args.options.apply);
+        const relocate = relocateLibrary(ctx.rt!.db, library, root, { apply });
+        return { relocate: { ...relocate, applied: apply } };
+      }
+
       if (action === "set-organize") {
         const ref = args.positionals.name;
         if (!ref) throw new AppError("用法: library set-organize <库> [--no-organize]", EXIT.USAGE);
@@ -337,6 +349,15 @@ export const COMMANDS: Command[] = [
       libraries?: { name: string; root: string; template: string; organizeEnabled?: boolean }[];
       library?: { name: string; root: string; template: string; organizeEnabled?: boolean };
       removed?: { library: { name: string; root: string }; removedFiles: number; orphanItems: number };
+      relocate?: {
+        library: string;
+        from: string;
+        to: string;
+        moved: number;
+        missing: number;
+        missingSample: string[];
+        applied: boolean;
+      };
       repair?: {
         dryRun: boolean;
         repaired: { from: string; to: string; key: string | null; orphanNfo: string | null }[];
@@ -353,6 +374,20 @@ export const COMMANDS: Command[] = [
           `  磁盘上的文件一个都没动`,
           `  清掉索引 ${removedFiles} 个文件${orphanItems ? ` · 保留 ${orphanItems} 个条目 (条目跨库, 元数据没删)` : ""}`,
         ].join("\n");
+      }
+      if (data.relocate) {
+        const { library, from, to, moved, missing, missingSample, applied: apply } = data.relocate;
+        if (moved === 0) return `「${library}」的索引里没有文件, 无需搬。`;
+        const lines = [
+          apply ? `「${library}」已搬到 ${to} (改了 ${moved} 条索引路径)` : `「${library}」可以搬到 ${to} (要改 ${moved} 条索引路径)`,
+          `  原位置: ${from}`,
+        ];
+        if (missing > 0) {
+          lines.push(`  ${missing} 条在新位置找不到对应文件${missing === moved ? " (文件还没拷过来吧?)" : ""}`);
+          for (const sample of missingSample) lines.push(`    ${sample}`);
+        }
+        if (!apply) lines.push("(这是干跑; 加 --apply 才改索引)");
+        return lines.join("\n");
       }
       if (data.repair) {
         const { dryRun, repaired, missing, ambiguous } = data.repair;

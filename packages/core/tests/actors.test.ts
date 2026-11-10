@@ -111,7 +111,7 @@ describe("演员索引", () => {
       ]);
       db.exec("pragma user_version = 7");
 
-      expect(migrate(db)).toBe(13);
+      expect(migrate(db)).toBe(14);
 
       const actors = db.all<{ name: string }>("select name from actors order by name");
       expect(actors.map((row) => row.name)).toEqual(["乙", "甲"]);

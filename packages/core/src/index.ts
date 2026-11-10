@@ -135,6 +135,14 @@ export { bindManyTask, type BindManyItem, type BindManyOptions, type BindManyRes
 export { openAliasEngine, createAliasEngine, parseAliasResponse, type AliasEngine, type AliasGuess } from "./llm/ai-title";
 export { todoCounts, todoPlans, type TodoCounts, type TodoPlans } from "./tasks/todo";
 export { repairIndexPaths, type PathRepair, type PathRepairReport } from "./tasks/repair";
+export {
+  assertLibraryMounted,
+  bindVolume,
+  relocateLibrary,
+  volumeFingerprint,
+  describeVolume,
+  type RelocateReport,
+} from "./db/volume";
 export { countPendingTranslation, pendingTranslationKeys, translationStats, translateItem, repairTranslations, translateItemsTask, translatePending, translatePendingTask, type RepairReport, type TranslateBatchResult, type TranslateProgress } from "./tasks/translate";
 export type { TranslateReport } from "./tasks/translate";
 export { buildSystemPrompt, chatEndpoint, createTranslator, hasKana, needsTranslation, openTranslator, probeTranslator, TranslationCache } from "./llm/translate";

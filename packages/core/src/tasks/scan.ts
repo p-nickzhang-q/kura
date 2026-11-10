@@ -1,4 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
+import { assertLibraryMounted, bindVolume } from "../db/volume";
 import { AppError, EXIT } from "../exit";
 import { basename, extname, join } from "node:path";
 import { detectContentType, extractNumber, isAuxiliaryMedia, parseFileInfo } from "../domain/identify";
@@ -112,10 +113,9 @@ async function scanAv(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
   const dryRun = opts.dryRun ?? false;
   const emit = opts.onEvent ?? (() => {});
 
-  const rootStat = await stat(library.root).catch(() => null);
-  if (!rootStat?.isDirectory()) {
-    throw new Error(`媒体库目录不存在: ${library.root}`);
-  }
+  // 盘插对了吗、根目录还在吗 —— 两道门都在这一个函数里, 两个域共用。
+  assertLibraryMounted(library);
+  const bound = bindVolume(rt.db, library);
 
   const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, auxiliary: 0, nfoPending: 0, retyped: 0, shows: 0 };
   const found: Found[] = [];
@@ -267,10 +267,8 @@ async function scanVideo(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
   const dryRun = opts.dryRun ?? false;
   const emit = opts.onEvent ?? (() => {});
 
-  const rootStat = await stat(library.root).catch(() => null);
-  if (!rootStat?.isDirectory()) {
-    throw new Error(`媒体库目录不存在: ${library.root}`);
-  }
+  assertLibraryMounted(library);
+  bindVolume(rt.db, library);
 
   const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, auxiliary: 0, nfoPending: 0, retyped: 0, shows: 0 };
   const found: Found[] = [];

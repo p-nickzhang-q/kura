@@ -42,6 +42,10 @@ interface KuraLibrary {
   domain: "av" | "video";
   /** false = 只索引, 不允许移动/改名/写 NFO。 */
   organizeEnabled?: boolean;
+  /** 库根所在卷的指纹; null = 老库还没绑定, 下次扫描时补记。 */
+  volumeId?: string | null;
+  /** 库根目录当前打不开(盘拔了 / 换了盘 / 目录改名)。 */
+  rootMissing?: boolean;
 }
 
 /** 影视条目: 集数角标 (声明/盘上)。 */
@@ -345,6 +349,23 @@ interface KuraBridge {
     repaired: { from: string; to: string; key: string | null; orphanNfo: string | null }[];
     missing: { path: string }[];
     ambiguous: { from: string; to: string }[];
+  }>;
+  /**
+   * 换盘 / 目录改名: 把库根搬到一个新位置。
+   * 只改索引路径的前缀, 不动磁盘; 没给 root 时弹目录选择框。
+   */
+  relocateLibrary(
+    libraryId: number,
+    root?: string,
+  ): Promise<{
+    cancelled: boolean;
+    applied?: boolean;
+    library: string;
+    from: string;
+    to: string;
+    moved: number;
+    missing: number;
+    missingSample: string[];
   }>;
   /** 待办页的便宜数字 (SQL 计数)。 */
   todoCounts(libraryId?: number): Promise<KuraTodoCounts>;

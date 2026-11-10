@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld("kura", {
   // 手动加入库: 本地条目 (local: 身份, ugc 标记), 不连任何来源
   // 待办页: 便宜的数字同步回, 贵的(整理计划 / nfo 差异)自己补
   repairPaths: (libraryId) => ipcRenderer.invoke("library:repair-paths", { libraryId }),
+  relocateLibrary: (libraryId, root) => ipcRenderer.invoke("library:relocate", { libraryId, root }),
   todoCounts: (libraryId) => ipcRenderer.invoke("todo:counts", { libraryId }),
   todoPlans: (libraryId) => ipcRenderer.invoke("todo:plans", { libraryId }),
   bindLocalDir: (libraryId, dir, paths, title, type) =>

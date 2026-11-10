@@ -52,6 +52,7 @@ import {
   openAliasEngine,
   organizeTask,
   repairIndexPaths,
+  relocateLibrary,
   exportTvNfo,
   exportTvNfoTask,
   todoCounts,
@@ -552,7 +553,11 @@ function registerIpc(): void {
     };
   });
 
-  ipcMain.handle("library:list", () => listLibraries(mustRuntime().db));
+  // 顺带告诉界面"库根还在不在": 移动硬盘拔了/换了盘时, 侧栏能立刻显示出来,
+  // 而不是等人点了扫描才看到"文件全消失"。
+  ipcMain.handle("library:list", () =>
+    listLibraries(mustRuntime().db).map((library) => ({ ...library, rootMissing: !existsSync(library.root) })),
+  );
 
   ipcMain.handle("library:add", async (_event, input: { domain?: string } = {}) => {
     const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
@@ -725,6 +730,46 @@ function registerIpc(): void {
     if (answer.response !== 0) return { ...dry, applied: false };
     return { ...(await repairIndexPaths(rt, { ...scope, apply: true })), applied: true };
   });
+
+  /**
+   * 换盘 / 目录改名: 把库根搬到一个新位置。
+   *
+   * 移动硬盘换了盘符、或者目录改了名, 路径变了但相对结构一样 —— 改索引前缀就能
+   * 保住全部绑定关系(不用重扫、不用重新找建议)。只改索引, 一个视频文件都不动。
+   */
+  ipcMain.handle(
+    "library:relocate",
+    async (_event, input: { libraryId: number; root?: string }) => {
+      const rt = mustRuntime();
+      const library = listLibraries(rt.db).find((item) => item.id === input.libraryId);
+      if (!library) throw new Error("媒体库不存在");
+
+      const picked =
+        input.root ??
+        (await dialog.showOpenDialog({ title: `把「${library.name}」搬到哪个目录`, properties: ["openDirectory"] }))
+          .filePaths[0];
+      if (!picked) return { cancelled: true as const };
+
+      const dry = relocateLibrary(rt.db, library, picked);
+      if (dry.moved === 0) return { ...dry, cancelled: false as const, applied: false };
+
+      const answer = await dialog.showMessageBox({
+        type: "question",
+        buttons: ["搬到这个目录", "取消"],
+        defaultId: 0,
+        cancelId: 1,
+        message: `把「${library.name}」搬到 ${dry.to}?`,
+        detail:
+          `要改 ${dry.moved} 条索引路径, 一个视频文件都不会动。` +
+          (dry.missing > 0
+            ? `\n\n注意: 其中 ${dry.missing} 条在新目录里找不到对应文件` +
+              (dry.missing === dry.moved ? " —— 新目录是空的, 文件还没拷过来吧?" : "。")
+            : "\n\n新目录里的文件都对得上。"),
+      });
+      if (answer.response !== 0) return { ...dry, cancelled: false as const, applied: false };
+      return { ...relocateLibrary(rt.db, library, picked, { apply: true }), cancelled: false as const, applied: true };
+    },
+  );
 
   // 手动加入: 不连任何来源, 只建一个本地条目 (local: 身份, ugc 标记)
   ipcMain.handle(

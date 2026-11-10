@@ -13,6 +13,11 @@ export interface Library {
   template: string;
   /** false = 只索引, 不允许移动/改名/写 NFO。默认视为允许。 */
   organizeEnabled?: boolean;
+  /**
+   * 库根所在卷的指纹(Windows 上是卷序列号的 hex)。
+   * 换盘时盘符会复用, 只有它能区分"原来那块盘"和"插错盘"。null = 老库还没绑定。
+   */
+  volumeId?: string | null;
 }
 
 export type PlanAction = "move" | "write-nfo" | "copy-image" | "skip";

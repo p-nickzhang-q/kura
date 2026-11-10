@@ -11,6 +11,7 @@ import type { Library } from "../domain/materialize";
 import { sanitizeActorNames } from "../domain/actors";
 import { resolve, sep } from "node:path";
 import type { Db } from "./driver";
+import { volumeFingerprint } from "./volume";
 import { AppError, EXIT } from "../exit";
 
 export interface ItemRow {
@@ -131,6 +132,7 @@ export interface LibraryRow {
   template: string;
   organize_enabled?: number;
   domain?: string | null;
+  volume_id?: string | null;
 }
 
 export function rowToLibrary(row: LibraryRow): Library {
@@ -143,21 +145,23 @@ export function rowToLibrary(row: LibraryRow): Library {
     organizeEnabled: row.organize_enabled !== 0,
     // v9 之前建的库没有 domain 列, 一律是番号制; v11 把 movie/tv 并成 video
     domain: isLibraryDomain(row.domain) ? row.domain : "av",
+    // v14 之前建的库没有卷指纹, 下次扫描时补记(见 db/volume.ts)
+    volumeId: row.volume_id ?? null,
   };
 }
 
 export function listLibraries(db: Db): Library[] {
-  return db.all<LibraryRow>("select id, name, root, template, organize_enabled, domain from libraries order by name").map(rowToLibrary);
+  return db.all<LibraryRow>("select id, name, root, template, organize_enabled, domain, volume_id from libraries order by name").map(rowToLibrary);
 }
 
 export function findLibrary(db: Db, ref: string): Library | undefined {
   const byId = Number(ref);
   const row = Number.isInteger(byId)
-    ? db.get<LibraryRow>("select id, name, root, template, organize_enabled, domain from libraries where id = ?", [byId])
+    ? db.get<LibraryRow>("select id, name, root, template, organize_enabled, domain, volume_id from libraries where id = ?", [byId])
     : undefined;
   const found =
     row ??
-    db.get<LibraryRow>("select id, name, root, template, organize_enabled, domain from libraries where name = ?", [ref]);
+    db.get<LibraryRow>("select id, name, root, template, organize_enabled, domain, volume_id from libraries where name = ?", [ref]);
   return found ? rowToLibrary(found) : undefined;
 }
 
@@ -242,7 +246,7 @@ export function createLibrary(
     input.domain ?? "av",
   ]);
   const row = db.get<LibraryRow>(
-    "select id, name, root, template, organize_enabled, domain from libraries where name = ?",
+    "select id, name, root, template, organize_enabled, domain, volume_id from libraries where name = ?",
     [name],
   )!;
   return rowToLibrary(row);
@@ -265,7 +269,7 @@ export interface DeleteLibraryResult {
  */
 export function deleteLibrary(db: Db, libraryId: number): DeleteLibraryResult {
   const row = db.get<LibraryRow>(
-    "select id, name, root, template, organize_enabled, domain from libraries where id = ?",
+    "select id, name, root, template, organize_enabled, domain, volume_id from libraries where id = ?",
     [libraryId],
   );
   if (!row) throw new AppError(`媒体库不存在: ${libraryId}`, EXIT.NOT_FOUND, { libraryId });
@@ -301,7 +305,7 @@ export function renameLibrary(db: Db, libraryId: number, name: string): Library 
 
   db.run("update libraries set name = ? where id = ?", [trimmed, libraryId]);
   const row = db.get<LibraryRow>(
-    "select id, name, root, template, organize_enabled, domain from libraries where id = ?",
+    "select id, name, root, template, organize_enabled, domain, volume_id from libraries where id = ?",
     [libraryId],
   )!;
   return rowToLibrary(row);

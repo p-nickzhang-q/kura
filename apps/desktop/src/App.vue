@@ -703,11 +703,25 @@ const paletteActions = computed<PaletteAction[]>(() => {
     { id: "nfo", title: "同步 NFO", hint: "先列清单, 确认后才写", disabled: !hasLibrary, run: () => writeNfoFiles() },
     { id: "cleanup", title: "清理空目录", hint: "先列清单, 确认后才删", disabled: !hasLibrary, run: cleanupDirs },
     {
+      id: "relocate",
+      title: "换库根目录",
+      hint: "换了硬盘或目录改名: 改索引前缀, 保住绑定关系",
+      disabled: !hasLibrary,
+      run: relocateLibrary,
+    },
+    {
       id: "repair-paths",
       title: "修复索引路径",
       hint: "文件被整理走了但索引还是旧路径; 改索引不动视频",
       disabled: libraries.value.length === 0,
       run: repairPaths,
+    },
+    {
+      id: "relocate",
+      title: "换库根目录",
+      hint: "换了移动硬盘 / 目录改名; 只改索引, 不动视频",
+      disabled: libraries.value.length === 0,
+      run: relocateLibrary,
     },
     { id: "plan", title: "整理预览", hint: noOrganize ? "该库设为只索引, 不会整理" : "先看清单再执行", disabled: !hasLibrary, run: async () => { await preview(); openView("plan"); } },
     { id: "todo", title: "去待办", hint: "还差多少、下一步做什么", disabled: false, run: () => { tab.value = "todo"; } },
@@ -1151,6 +1165,34 @@ async function repairPaths(): Promise<void> {
     await refreshAll();
   } catch (err) {
     errors.value.push(`修复路径: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * 换库根目录: 移动硬盘换了盘符、或者目录改了名。
+ *
+ * 只改索引路径的前缀, 一个视频文件都不动 —— 这样"文件↔条目"的绑定、刮削结果、
+ * 季集关系全都保住, 不用重新扫描 + 重新找建议。主进程会先干跑再弹确认。
+ */
+async function relocateLibrary(): Promise<void> {
+  moreOpen.value = false;
+  const library = selected.value;
+  if (!library) return;
+  try {
+    const result = await window.kura.relocateLibrary(library.id);
+    if (result.cancelled) return;
+    if (!result.applied) {
+      note.value = result.moved
+        ? `已取消, 「${library.name}」还指着 ${result.from}`
+        : `「${library.name}」的索引里没有文件, 没什么可搬的`;
+      return;
+    }
+    await refreshAll();
+    note.value = `「${result.library}」已搬到 ${result.to}，改了 ${result.moved} 条索引路径${
+      result.missing ? ` · ${result.missing} 条在新位置找不到文件` : ""
+    }`;
+  } catch (err) {
+    errors.value.push(`换库根目录: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -2270,8 +2312,9 @@ async function testDmm(): Promise<void> {
                 </strong>
                 <!-- 「只索引」放第二行: 第一行留给名字, 悬停时的动作按钮会盖住行尾,
                      角标放第一行会被切成半个空胶囊 -->
-                <small v-if="showRoot(library)" :title="library.root">
-                  <span v-if="library.organizeEnabled === false" class="badge">只索引</span>
+                <small v-if="showRoot(library) || library.rootMissing" :title="library.root">
+                  <span v-if="library.rootMissing" class="badge warn" :title="`目录现在打不开: ${library.root}`">盘不在</span>
+                  <span v-else-if="library.organizeEnabled === false" class="badge">只索引</span>
                   {{ library.root }}
                 </small>
               </button>

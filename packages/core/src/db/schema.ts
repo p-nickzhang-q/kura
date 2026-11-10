@@ -183,6 +183,13 @@ const MIGRATIONS: string[] = [
 
   // v13 — 纯数据修复: 清理绑定时误写进 episodes 的"文件行"(动作在 AFTER_MIGRATIONS[13])
   ``,
+
+  // v14 — 库记住自己绑在哪块盘上(卷指纹)。
+  // 移动硬盘的盘符是谁插上谁占: 两块盘轮流套 E:\视频 时路径一模一样、内容全换,
+  // 光看路径分不出"原来那块盘"和"插错盘了"。老库这一列为 NULL, 下次扫描时补记。
+  `
+  alter table libraries add column volume_id text;
+  `,
 ];
 
 /**
