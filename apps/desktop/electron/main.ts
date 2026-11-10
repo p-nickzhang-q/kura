@@ -48,6 +48,7 @@ import {
   listItems,
   countItems,
   countPending,
+  openAliasEngine,
   repairIndexPaths,
   exportTvNfo,
   exportTvNfoTask,
@@ -594,15 +595,24 @@ function registerIpc(): void {
    */
   ipcMain.handle(
     "tmdb:suggest",
-    async (_event, input: { libraryId?: number; kind?: "tv" | "movie"; dirs?: string[] } = {}) =>
+    async (
+      _event,
+      input: { libraryId?: number; kind?: "tv" | "movie"; dirs?: string[]; ai?: boolean } = {},
+    ) =>
     exclusive("找绑定建议", async (signal) => {
       const rt = mustRuntime();
       const tmdb = await tmdbClient(rt);
       if (!tmdb) return { suggestions: [], taskId: null, error: "未配置 TMDB API key（设置页填写）" };
+      // AI 别名补搜(ADR 0010): 只对 0 命中的候选问模型, 它给的名字仍然要过 TMDB
+      const aliases = input.ai ? await openAliasEngine(rt, createHttp(), resolveLlm(settings)) : null;
+      if (input.ai && !aliases) {
+        return { suggestions: [], taskId: null, error: "未配置 LLM（设置页填 baseUrl + model）" };
+      }
       const { task, result } = await suggestBindingsTask(
         rt,
         {
           tmdb,
+          ...(aliases ? { aliases } : {}),
           libraryId: input.libraryId ?? undefined,
           ...(input.kind ? { kind: input.kind } : {}),
           ...(input.dirs && input.dirs.length > 0 ? { dirs: input.dirs } : {}),

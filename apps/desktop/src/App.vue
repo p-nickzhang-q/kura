@@ -930,8 +930,12 @@ async function applyDirSeason(dir: string): Promise<void> {
  * 批量找建议: 把"待绑定目录"逐个拿去搜 TMDB, 给出建议并默认勾上高把握的。
  * 只是把搜索这一步自动化 —— 绑哪个仍然要人看一眼。
  */
-async function findSuggestions(): Promise<void> {
+async function findSuggestions(ai = false): Promise<void> {
   if (selectedId.value === null) return;
+  if (ai && !info.value?.llmConfigured) {
+    errors.value.push("AI 补搜需要先配置 LLM（设置页填 baseUrl 与 model）");
+    return;
+  }
   suggestBusy.value = true;
   suggestProgress.value = { index: 0, total: 0, dir: "准备中" };
   runningLabel.value = `找绑定建议 · ${selected.value?.name ?? ""}`;
@@ -939,7 +943,7 @@ async function findSuggestions(): Promise<void> {
     // 勾了目录就只搜勾选的: 全库几十个目录一次搜要一两分钟, 而人往往只想处理刚整理完的那几个
     const scope = suggestPicked.value.length > 0 ? plainArray(suggestPicked.value) : undefined;
     // 没勾选时按当前筛选的那一类搜: 电影候选几百个, 一起搜会卡很久且大多没结果
-    const result = await window.kura.tmdbSuggest(selectedId.value, bindKind.value || undefined, scope);
+    const result = await window.kura.tmdbSuggest(selectedId.value, bindKind.value || undefined, scope, ai);
     if (result.error) {
       errors.value.push(result.error);
       return;
@@ -2751,8 +2755,22 @@ async function testDmm(): Promise<void> {
             >
               {{ treeNodes.length > 0 && treeNodes.every((node) => suggestPicked.includes(node.dir)) ? "全不选" : `全选 ${treeNodes.length}` }}
             </button>
-            <button type="button" :disabled="busy || suggestBusy || treeStats.dirs === 0" @click="findSuggestions">
+            <button type="button" :disabled="busy || suggestBusy || treeStats.dirs === 0" @click="findSuggestions(false)">
               {{ suggestBusy ? "搜索中…" : suggestPicked.length > 0 ? `找建议 (已勾选 ${suggestPicked.length})` : "批量找建议" }}
+            </button>
+            <!-- AI 别名补搜: 只对"一个都没搜到"的候选再问一次模型, 名字仍要过 TMDB 校验 -->
+            <button
+              type="button"
+              class="chip"
+              :disabled="busy || suggestBusy || treeStats.dirs === 0 || !info?.llmConfigured"
+              :title="
+                info?.llmConfigured
+                  ? '对 0 命中的候选再问一次模型: 它可能叫别的名字(港台译名/原名)。命中仍由 TMDB 决定'
+                  : '先在设置里配置 LLM (baseUrl + model)'
+              "
+              @click="findSuggestions(true)"
+            >
+              AI 补搜
             </button>
           </div>
 
@@ -2797,6 +2815,9 @@ async function testDmm(): Promise<void> {
                         >
                           {{ suggestions[node.dir]!.confidence === "high" ? "很可能是" : "可能是" }}
                         </span>
+                        <span v-if="suggestions[node.dir]!.viaAlias" class="badge warn">
+                          按别名 {{ suggestions[node.dir]!.viaAlias }}
+                        </span>
                       </template>
                       <span v-else-if="suggestions[node.dir]!.error" class="warn">搜索失败: {{ suggestions[node.dir]!.error }}</span>
                       <span v-else class="muted">没搜到，手动搜一次</span>
@@ -2838,6 +2859,7 @@ async function testDmm(): Promise<void> {
                       <span v-if="suggestions[file.path]?.hit" class="muted nowrap">
                         建议：{{ suggestions[file.path]!.hit!.title }}
                         <template v-if="suggestions[file.path]!.hit!.year">({{ suggestions[file.path]!.hit!.year }})</template>
+                        <span v-if="suggestions[file.path]!.viaAlias" class="badge warn">按别名 {{ suggestions[file.path]!.viaAlias }}</span>
                       </span>
                     </div>
                   </div>
@@ -2869,7 +2891,7 @@ async function testDmm(): Promise<void> {
             </span>
             <span class="spacer" />
             <button type="button" :disabled="suggestBusy" @click="suggestPicked = []">取消勾选</button>
-            <button type="button" :disabled="suggestBusy || busy" @click="findSuggestions">
+            <button type="button" :disabled="suggestBusy || busy" @click="findSuggestions(false)">
               只搜勾选的
             </button>
             <button

@@ -235,6 +235,11 @@ function cacheFor(dataDir: string): Promise<TranslationCache> {
   return opened;
 }
 
+/** 别名补搜也用同一个缓存库(纯缓存, 删了重问), 所以这里暴露出来。 */
+export function openCache(dataDir: string): Promise<TranslationCache> {
+  return cacheFor(dataDir);
+}
+
 /** 供 scrape / translate 复用: 配置齐了才构造, 否则返回 null(翻译是可选步骤)。 */
 export async function openTranslator(
   rt: Runtime,

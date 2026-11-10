@@ -122,6 +122,8 @@ interface KuraBindingSuggestion {
   hit: { key: string; title: string; year: string | null; id: number } | null;
   confidence: "high" | "medium" | "low" | "none";
   error?: string;
+  /** 这条建议是按别名找到的(原搜索词 0 命中), 值是命中的那个别名。 */
+  viaAlias?: string;
 }
 
 interface KuraBindManyResult {
@@ -317,7 +319,8 @@ interface KuraBridge {
   ): Promise<{ dirs: KuraBindableDir[]; total: number; tv: number; movie: number }>;
   tmdbSearch(kind: "tv" | "movie", query: string): Promise<KuraTmdbHit[]>;
   tmdbTest(probeId?: number): Promise<KuraTmdbTest>;
-  tmdbSuggest(libraryId?: number, kind?: "tv" | "movie", dirs?: string[]): Promise<{
+  /** `ai` = 对 0 命中的候选再问一次模型要别名(ADR 0010), 结果仍要过 TMDB 校验。 */
+  tmdbSuggest(libraryId?: number, kind?: "tv" | "movie", dirs?: string[], ai?: boolean): Promise<{
     suggestions: KuraBindingSuggestion[];
     taskId: number | null;
     error: string | null;

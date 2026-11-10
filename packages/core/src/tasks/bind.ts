@@ -46,6 +46,11 @@ export interface BindableDir {
    * 不会把整目录写进同一个 TMDB id。
    */
   suspectSeries?: boolean;
+  /**
+   * 这条建议是**按别名**找到的(原搜索词 0 命中, 模型给了另一个写法)。
+   * 界面要能区分: 名字直接对上和绕了一层, 该多看一眼。
+   */
+  viaAlias?: string;
 }
 
 /** 未识别页要的清单: 有哪些东西等着绑定。 */
@@ -317,6 +322,13 @@ export interface BindingSuggestion {
   confidence: "high" | "medium" | "low" | "none";
   /** 搜索出错了(网络/限速): 与"没搜到"分开报。 */
   error?: string;
+  /** 这个文件来自"多文件、无集号"的目录, 名字又共享前缀 —— 大概率是一部剧的散集。 */
+  suspectSeries?: boolean;
+  /**
+   * 这条建议是**按别名**找到的(原搜索词 0 命中, 模型给了另一个写法, 例如
+   * `60号高地之下` → `The Outpost`)。界面要能区分: 名字直接对上和绕了一层。
+   */
+  viaAlias?: string;
 }
 
 export interface BindResult {

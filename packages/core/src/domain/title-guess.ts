@@ -175,20 +175,33 @@ export function normalizeTitle(text: string): string {
  */
 export function matchConfidence(
   guess: TitleGuess,
-  hit: { title: string; year: string | null },
+  hit: { title: string; year: string | null; originalTitle?: string | null },
 ): MatchConfidence {
   const left = normalizeTitle(guess.title);
-  const right = normalizeTitle(hit.title);
-  if (!left || !right) return "low";
-
+  if (!left) return "low";
   const yearMatches = !guess.year || !hit.year || guess.year === hit.year;
 
-  if (left === right) return yearMatches ? "high" : "medium";
-  if (left.length >= 2 && (right.startsWith(left) || left.startsWith(right))) {
-    return yearMatches ? "medium" : "low";
-  }
-  if (left.length >= 4 && (right.includes(left) || left.includes(right))) return "low";
-  return "low";
+  const score = (candidate: string | null | undefined): MatchConfidence => {
+    const right = normalizeTitle(candidate ?? "");
+    if (!right) return "low";
+    if (left === right) return yearMatches ? "high" : "medium";
+    if (left.length >= 2 && (right.startsWith(left) || left.startsWith(right))) {
+      return yearMatches ? "medium" : "low";
+    }
+    if (left.length >= 4 && (right.includes(left) || left.includes(right))) return "low";
+    return "low";
+  };
+
+  // 双语条目: 别名常常只和**原名**对得上(`Beneath Hill 60` vs 中文「60号高地之下」)
+  return rank(score(hit.title)) >= rank(score(hit.originalTitle)) ? score(hit.title) : score(hit.originalTitle);
+}
+
+function rankOf(confidence: MatchConfidence): number {
+  return confidence === "high" ? 3 : confidence === "medium" ? 2 : confidence === "low" ? 1 : 0;
+}
+
+function rank(confidence: MatchConfidence): number {
+  return rankOf(confidence);
 }
 
 /** 搜索时用哪个关键词: 片名叫不出来就不搜(交给人工)。 */

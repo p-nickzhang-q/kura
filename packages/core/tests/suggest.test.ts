@@ -45,10 +45,11 @@ function fakeTmdb(table: Record<string, TmdbSearchHit[]>, calls: string[] = []):
   };
 }
 
-const hit = (id: number, title: string, year: string | null): TmdbSearchHit => ({
+const hit = (id: number, title: string, year: string | null, originalTitle: string | null = null): TmdbSearchHit => ({
   id,
   key: `tmdb:tv:${id}`,
   title,
+  originalTitle,
   year,
   overview: null,
   score: 8,
@@ -290,5 +291,105 @@ describe("勾选目录后再找建议", () => {
     );
     expect(task.total).toBe(1);
     expect(listTasks(rt)[0]?.total).toBe(1);
+  });
+});
+
+describe("AI 别名补搜", () => {
+  test("原搜索词 0 命中时, 用别名再搜一次, 命中标记 viaAlias 且降一档", async () => {
+    await makeDir("各种电影3", ["[迅雷下载www.2tu.cc]60号高地之下.BD1024高清中英双字.rmvb"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const calls: string[] = [];
+    const aliases = {
+      errors: [] as string[],
+      suggest: async (names: string[]) => {
+        expect(names).toEqual(["60号高地之下"]);
+        return new Map([["60号高地之下", { name: "60号高地之下", title: "前哨", aliases: ["The Outpost"], year: "2020" }]]);
+      },
+    };
+
+    const suggestions = await suggestBindings(rt, {
+      libraryId: library.id,
+      aliases,
+      // TMDB 用中文标题回, 别名 `The Outpost` 只和 originalTitle 对得上
+      tmdb: fakeTmdb({ 前哨: [hit(1, "前哨", "2020", "The Outpost")] }, calls),
+    });
+
+    expect(calls).toEqual(["60号高地之下", "前哨"]);
+    expect(suggestions[0]?.hit?.title).toBe("前哨");
+    expect(suggestions[0]?.viaAlias).toBe("前哨");
+    // 绕了一层, 不该直接给 high
+    expect(suggestions[0]?.confidence).toBe("medium");
+  });
+
+  test("原搜索词已经有命中时, 不再花模型调用", async () => {
+    await makeDir("进击的巨人 (2013)", ["第1集.mp4", "第2集.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    let called = 0;
+    const aliases = {
+      errors: [] as string[],
+      suggest: async () => {
+        called++;
+        return new Map();
+      },
+    };
+    await suggestBindings(rt, {
+      libraryId: library.id,
+      aliases,
+      tmdb: fakeTmdb({ 进击的巨人: [hit(1429, "进击的巨人", "2013")] }),
+    });
+    expect(called).toBe(0);
+  });
+
+  test("别名也没搜到: 保持原样, 不造假建议", async () => {
+    await makeDir("各种电影3", ["[迅雷下载www.2tu.cc]60号高地之下.BD1024高清中英双字.rmvb"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const suggestions = await suggestBindings(rt, {
+      libraryId: library.id,
+      aliases: {
+        errors: [],
+        suggest: async () => new Map([["60号高地之下", { name: "60号高地之下", title: "前哨", aliases: [], year: null }]]),
+      },
+      tmdb: fakeTmdb({}),
+    });
+    expect(suggestions[0]?.hit).toBeNull();
+    expect(suggestions[0]?.viaAlias).toBeUndefined();
+  });
+});
+
+describe("别名只和原文名对得上时也算命中", () => {
+  test("搜 Beneath Hill 60 回来的是中文标题, 靠 originalTitle 认出来", async () => {
+    await makeDir("各种电影", ["[迅雷下载]60号高地之下.BD1024高清.rmvb"]);
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const calls: string[] = [];
+    const suggestions = await suggestBindings(rt, {
+      libraryId: library.id,
+      aliases: {
+        errors: [],
+        suggest: async () =>
+          new Map([["60号高地之下", { name: "60号高地之下", title: "前哨", aliases: ["Beneath Hill 60"], year: "2010" }]]),
+      },
+      tmdb: fakeTmdb(
+        {
+          // 模型给的中文名在 TMDB 搜不到; 英文别名能搜到, 但回来的是中文标题,
+          // 只有 originalTitle 能和别名对上
+          前哨: [],
+          "Beneath Hill 60": [hit(2, "60号高地之下", "2010", "Beneath Hill 60")],
+        },
+        calls,
+      ),
+    });
+
+    expect(suggestions[0]?.hit?.title).toBe("60号高地之下");
+    expect(suggestions[0]?.viaAlias).toBe("Beneath Hill 60");
+    // 别名搜索不带年份, 所以两次调用都没有 year 参数
+    expect(calls).toEqual(["60号高地之下", "前哨", "Beneath Hill 60"]);
   });
 });

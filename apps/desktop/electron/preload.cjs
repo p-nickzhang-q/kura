@@ -10,8 +10,9 @@ contextBridge.exposeInMainWorld("kura", {
     ipcRenderer.invoke("file:dirs", { ...(libraryId === undefined ? {} : { libraryId }), ...(paging ?? {}) }),
   tmdbSearch: (kind, query) => ipcRenderer.invoke("tmdb:search", { kind, query }),
   tmdbTest: (probeId) => ipcRenderer.invoke("tmdb:test", probeId),
-  tmdbSuggest: (libraryId, kind, dirs) =>
+  tmdbSuggest: (libraryId, kind, dirs, ai) =>
     ipcRenderer.invoke("tmdb:suggest", {
+      ...(ai ? { ai: true } : {}),
       ...(libraryId === undefined ? {} : { libraryId }),
       ...(kind ? { kind } : {}),
       ...(dirs && dirs.length > 0 ? { dirs } : {}),

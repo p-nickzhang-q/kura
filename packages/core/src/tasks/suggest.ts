@@ -1,3 +1,4 @@
+import type { AliasEngine } from "../llm/ai-title";
 import type { TmdbClient, TmdbSearchHit } from "../sources/tmdb";
 import { guessTitleFromDir, guessTitleFromFile, matchConfidence, searchableGuess, type MatchConfidence } from "../domain/title-guess";
 import { sep } from "node:path";
@@ -25,6 +26,12 @@ export interface SuggestOptions {
    */
   dirs?: string[];
   tmdb: TmdbClient;
+  /**
+   * 配了就给"一个都没搜到"的候选补一轮别名搜索(ADR 0010)。
+   *
+   * 只补 0 命中的: 已经把 TMDB 搜到的候选不再花模型调用。
+   */
+  aliases?: AliasEngine | null;
   limit?: number;
   signal?: AbortSignal;
   onProgress?: (progress: { index: number; total: number; dir: string }) => void;
@@ -145,7 +152,49 @@ export async function suggestBindings(rt: Runtime, options: SuggestOptions): Pro
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, dirs.length) }, worker));
 
-  return out.filter((entry): entry is BindingSuggestion => entry !== null);
+  const results = out.filter((entry): entry is BindingSuggestion => entry !== null);
+
+  // 第二批: 一条都没搜到的候选, 问模型"它还可能叫什么", 再各搜一次。
+  // 只做 0 命中的 —— 已经有 high 命中的候选不该再烧模型调用。
+  if (options.aliases && !options.signal?.aborted) {
+    const misses = results.filter(
+      (entry) => !entry.hit && !entry.error && !entry.suspectSeries && searchableGuess({ title: entry.query, year: entry.year }),
+    );
+    if (misses.length > 0) {
+      const names = [...new Set(misses.map((entry) => entry.query).filter((name) => name.length > 0))];
+      const guesses = await options.aliases.suggest(names).catch(() => new Map());
+      await Promise.all(
+        misses.map(async (entry) => {
+          const guess = guesses.get(entry.query);
+          if (!guess) return;
+          const queries = [guess.title, ...guess.aliases].filter((value): value is string => Boolean(value));
+          for (const query of queries) {
+            if (options.signal?.aborted) return;
+            let hits: TmdbSearchHit[];
+            try {
+              // **不带年份**: 模型给的年份可能差一年, 而 TMDB 的 year 过滤会让整个搜索变空
+              // (实测 `告白 2010` → 0 条, `告白` → 20 条)。
+              hits = await searchOnce("movie", query, null);
+            } catch {
+              continue;
+            }
+            const scored = hits
+              .map((hit) => ({ hit, confidence: matchConfidence({ title: query, year: guess.year }, hit) }))
+              .sort((a, b) => rank(b.confidence) - rank(a.confidence) || b.hit.score - a.hit.score);
+            const best = scored[0];
+            if (!best || best.confidence === "low") continue;
+            entry.hit = { key: best.hit.key, title: best.hit.title, year: best.hit.year, id: best.hit.id };
+            // 别名找到的一律降一档: 不是文件名直接对上的, 让人多看一眼
+            entry.confidence = best.confidence === "high" ? "medium" : best.confidence;
+            entry.viaAlias = query;
+            return;
+          }
+        }),
+      );
+    }
+  }
+
+  return results;
 }
 
 function rank(confidence: MatchConfidence): number {

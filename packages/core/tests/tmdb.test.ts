@@ -77,6 +77,8 @@ describe("搜索候选", () => {
       id: 1001,
       key: "tmdb:tv:1001",
       title: "示例剧名",
+      // 原文名: 别名补搜靠它认条目(中文标题和英文别名对不上)
+      originalTitle: null,
       year: "2013",
       overview: "示例简介。",
       score: 8.7,

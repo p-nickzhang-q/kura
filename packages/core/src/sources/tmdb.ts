@@ -54,6 +54,11 @@ export interface TmdbSearchHit {
   /** `tmdb:tv:1399` 这种, 直接就是条目的身份。 */
   key: string;
   title: string;
+  /**
+   * TMDB 的原文名。**别名补搜靠它**: 拿 `Beneath Hill 60` 搜回来的条目,
+   * `title` 是中文「60号高地之下」, 只有 `originalTitle` 能和别名对上。
+   */
+  originalTitle: string | null;
   year: string | null;
   overview: string | null;
   /** 0–10, 用于排序建议; 不参与自动决策。 */
@@ -103,7 +108,17 @@ interface TmdbSeasonResponse {
 }
 
 interface TmdbSearchResponse {
-  results?: { id?: number; name?: string; title?: string; first_air_date?: string; release_date?: string; overview?: string; vote_average?: number }[];
+  results?: {
+    id?: number;
+    name?: string;
+    title?: string;
+    original_name?: string;
+    original_title?: string;
+    first_air_date?: string;
+    release_date?: string;
+    overview?: string;
+    vote_average?: number;
+  }[];
 }
 
 /** 剧级字段映射。纯函数, 便于用一份录制的真实响应做穷举测试。 */
@@ -204,6 +219,7 @@ export function toSearchHits(payload: TmdbSearchResponse, kind: "tv" | "movie"):
       id,
       key: `tmdb:${kind}:${id}`,
       title,
+      originalTitle: (kind === "tv" ? raw.original_name : raw.original_title)?.trim() || null,
       year: date ? date.slice(0, 4) : null,
       overview: raw.overview ?? null,
       score: typeof raw.vote_average === "number" ? raw.vote_average : 0,
