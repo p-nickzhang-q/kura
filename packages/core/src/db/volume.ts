@@ -134,7 +134,10 @@ export function relocateLibrary(
   newRoot: string,
   opts: { apply?: boolean } = {},
 ): RelocateReport {
-  const to = resolve(newRoot.replace(/[\\/]+$/, ""));
+  // 先 resolve 再裁尾分隔符 —— 反过来会把 `F:\` 变成 `F:`, 而 `F:` 是"F 盘的当前
+  // 目录", `resolve()` 拿不到时会回退到进程 cwd 的盘(实测 `F:\` 变成了 `D:\`)。
+  const to = resolve(newRoot);
+  const toBase = trimTrailing(to);
   const target = statSyncSafe(to);
   if (!target?.isDirectory()) {
     throw new AppError(`新目录不存在: ${to}`, EXIT.NOT_FOUND, {
@@ -145,7 +148,7 @@ export function relocateLibrary(
   }
 
   for (const other of db.all<{ name: string; root: string }>("select name, root from libraries where id != ?", [library.id])) {
-    if (overlapsPath(to, other.root)) {
+    if (overlapsPath(toBase, trimTrailing(resolve(other.root)))) {
       throw new AppError(`新目录与「${other.name}」(${other.root}) 重叠了, 两个库不能共用一个目录`, EXIT.USAGE, {
         to,
         conflictsWith: other.name,
@@ -154,13 +157,13 @@ export function relocateLibrary(
     }
   }
 
-  const oldRoot = resolve(library.root.replace(/[\\/]+$/, ""));
+  const oldRoot = trimTrailing(resolve(library.root));
   const rows = db.all<{ path: string }>("select path from media_files where library_id = ?", [library.id]);
   const moved: Array<{ from: string; to: string }> = [];
   for (const row of rows) {
     const relative = relativeTo(row.path, oldRoot);
     if (relative === null) continue;
-    moved.push({ from: row.path, to: relative ? `${to}${sep}${relative}` : to });
+    moved.push({ from: row.path, to: relative ? `${toBase}${sep}${relative}` : to });
   }
 
   const missing = moved.filter((item) => !statSyncSafe(item.to));
@@ -208,13 +211,20 @@ function relativeTo(path: string, root: string): string | null {
 }
 
 function overlapsPath(a: string, b: string): boolean {
-  const left = resolve(a).replace(/[\\/]+$/, "");
-  const right = resolve(b).replace(/[\\/]+$/, "");
   const norm = (value: string) => (process.platform === "win32" ? value.toLowerCase() : value);
-  const l = norm(left);
-  const r = norm(right);
+  const l = norm(trimTrailing(a));
+  const r = norm(trimTrailing(b));
   if (l === r) return true;
   return l.startsWith(`${r}${sep}`) || r.startsWith(`${l}${sep}`);
+}
+
+/**
+ * 去掉尾部分隔符, 但 `F:\` 收敛成 `F:` 而不是空串 ——
+ * 比较时 `F:` + `\` 正好就是"根下", 而空串会把一切都算成重叠。
+ */
+function trimTrailing(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  return trimmed || sep;
 }
 
 /** 给界面/CLI 用的一句话: 库根现在是什么盘。 */

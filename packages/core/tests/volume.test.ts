@@ -170,3 +170,26 @@ describe("库搬家 library relocate", () => {
     await rt.close();
   });
 });
+
+describe("根目录的写法", () => {
+  test("搬到盘根 (F:\\) 不会被 `resolve` 拉回到进程所在的盘, 也不误报重叠", async () => {
+    const dataDir = await scratch();
+    const oldRoot = join(dataDir, "旧");
+    await mkdir(oldRoot, { recursive: true });
+    await writeFile(join(oldRoot, "a.rmvb"), "x");
+    const rt = await openRuntime({ dataDir });
+    const library = createLibrary(rt.db, { name: "旧", root: oldRoot, domain: "av" });
+    rt.db.run("insert into media_files (path, library_id, number, size, mtime_ms) values (?, ?, null, 1, 1)", [
+      join(oldRoot, "a.rmvb"),
+      library.id,
+    ]);
+    // 别的库, 与本库毫无关系 —— 以前 `F:\` 被 resolve 成 `D:\` 会误报跟它重叠
+    createLibrary(rt.db, { name: "别的", root: join(dataDir, "别处"), domain: "av" });
+
+    // 盘根在 Linux 上是 "/", 拿它当"另一个根"来验: 不该抛重叠, 只该报 missing
+    const report = relocateLibrary(rt.db, library, "/");
+    expect(report.to).toBe("/");
+    expect(report.moved).toBe(1);
+    await rt.close();
+  });
+});
