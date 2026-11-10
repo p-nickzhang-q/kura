@@ -1,5 +1,5 @@
 import { readdir, rmdir } from "node:fs/promises";
-import { copyFile, mkdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { CONTENT_TYPE_LABEL, type FileInfo, type LibraryDomain, type Metadata } from "./types";
 
@@ -229,6 +229,8 @@ export interface ApplyResult {
   entry: PlanEntry;
   ok: boolean;
   error?: string;
+  /** 计划说要动, 实际发现"已经是对的" —— 没碰磁盘。 */
+  unchanged?: boolean;
 }
 
 /** 只有这里会动用户的磁盘。默认不调用它 —— Plan 默认 dry-run。 */
@@ -237,23 +239,31 @@ export interface ApplyPlanOptions {
   signal?: AbortSignal;
   /** 进度: 一个条目一次。任务行靠它显示跑到第几个。 */
   onProgress?: (progress: { index: number; total: number; action: PlanEntry["action"]; path: string }) => void;
+  /** 每个条目结束后的结果(成功/失败/本来就不用动)。任务日志靠它记失败原因。 */
+  onResult?: (result: ApplyResult, progress: { index: number; total: number }) => void;
 }
 
 export async function applyPlan(plan: Plan, options: ApplyPlanOptions = {}): Promise<ApplyResult[]> {
   const results: ApplyResult[] = [];
   const roots = new Set<string>();
-  const total = plan.entries.length;
+  /**
+   * 进度只算**真的要动**的条目。
+   *
+   * 计划里一半以上是 skip(已在目标位置 / 无法判断), 以前把它们也算进 total ——
+   * 用户看到「整理 2754」, 而预览里明明只有几十个文件要搬。分母虚高, 进度就没有意义。
+   */
+  const total = plan.entries.filter((entry) => entry.action !== "skip").length;
   let index = 0;
 
   for (const entry of plan.entries) {
     if (options.signal?.aborted) break;
+    if (entry.action === "skip") {
+      results.push({ entry, ok: true });
+      continue;
+    }
     index++;
     options.onProgress?.({ index, total, action: entry.action, path: entry.to ?? entry.from ?? "" });
     try {
-      if (entry.action === "skip") {
-        results.push({ entry, ok: true });
-        continue;
-      }
       if (!entry.to) throw new Error("计划缺少目标路径");
 
       const directory = dirname(entry.to);
@@ -263,16 +273,34 @@ export async function applyPlan(plan: Plan, options: ApplyPlanOptions = {}): Pro
       }
 
       if (entry.action === "write-nfo") {
+        // 内容一模一样就别写: 每整理一次重写上千份 nfo, 在移动硬盘上等于白等一小时,
+        // 还会把文件 mtime 抖一遍(Emby 于是重新扫)。
+        const existing = await readFile(entry.to, "utf8").catch(() => null);
+        if (existing === (entry.content ?? "")) {
+          results.push({ entry, ok: true, unchanged: true });
+          continue;
+        }
         await writeFile(entry.to, entry.content ?? "", "utf8");
       } else if (entry.action === "copy-image" && entry.from) {
         // 图片已经在目标位置 (整理过的库再跑一遍): 不复制, 否则等于自己覆盖自己
-        if (resolve(entry.from) !== resolve(entry.to)) await copyFile(entry.from, entry.to);
+        if (resolve(entry.from) !== resolve(entry.to)) {
+          // 目标已有同尺寸的图就跳过: 每次整理重抄 300 张海报, 在移动硬盘上是白等几分钟
+          const [source, target] = await Promise.all([stat(entry.from).catch(() => null), stat(entry.to).catch(() => null)]);
+          if (target && source && target.size === source.size) {
+            results.push({ entry, ok: true, unchanged: true });
+            continue;
+          }
+          await copyFile(entry.from, entry.to);
+        }
       } else if (entry.action === "move" && entry.from) {
         await moveFile(entry.from, entry.to);
       }
       results.push({ entry, ok: true });
     } catch (err) {
       results.push({ entry, ok: false, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      const last = results.at(-1);
+      if (last) options.onResult?.(last, { index, total });
     }
   }
   return results;

@@ -72,6 +72,8 @@ export interface VideoOrganizeOptions {
   signal?: AbortSignal;
   /** 进度: 一个计划条目一次。 */
   onProgress?: (progress: { index: number; total: number; action: "move" | "write-nfo" | "copy-image" | "skip"; path: string }) => void;
+  /** 每个条目结束后的结果(成功/失败/本来就不用动)。 */
+  onResult?: (result: { entry: PlanEntry; ok: boolean; error?: string; unchanged?: boolean }, progress: { index: number; total: number }) => void;
 }
 
 interface ItemFilesRow {
@@ -304,7 +306,9 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
   }
 
   const plan: Plan = { libraryId: opts.library.id, libraryRoot: root, entries, summary };
-  const applied = apply ? await applyPlan(plan, { signal: opts.signal, onProgress: opts.onProgress }) : null;
+  const applied = apply
+    ? await applyPlan(plan, { signal: opts.signal, onProgress: opts.onProgress, onResult: opts.onResult })
+    : null;
 
   let prune: PruneResult | null = null;
   if (applied) {

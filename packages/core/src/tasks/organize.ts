@@ -1,4 +1,4 @@
-import { buildPlan, applyPlan, pruneEmptyDirs, type ApplyResult, type Library, type Plan, type PlanInput } from "../domain/materialize";
+import { buildPlan, applyPlan, pruneEmptyDirs, type ApplyResult, type Library, type Plan, type PlanEntry, type PlanInput } from "../domain/materialize";
 import type { Metadata } from "../domain/types";
 import { dirname, extname, sep } from "node:path";
 import { parsePhase, rowToMetadata, type ItemRow } from "../db/rows";
@@ -13,6 +13,8 @@ export interface OrganizeOptions {
   signal?: AbortSignal;
   /** 进度: 一个计划条目一次。 */
   onProgress?: (progress: { index: number; total: number; action: "move" | "write-nfo" | "copy-image" | "skip"; path: string }) => void;
+  /** 每个条目结束后的结果(成功/失败/本来就不用动)。 */
+  onResult?: (result: { entry: PlanEntry; ok: boolean; error?: string; unchanged?: boolean }, progress: { index: number; total: number }) => void;
 }
 
 export interface OrganizeReport {
@@ -76,7 +78,9 @@ export async function organize(rt: Runtime, opts: OrganizeOptions): Promise<Orga
   }
 
   const plan = await buildPlan(opts.library, inputs);
-  const applied = apply ? await applyPlan(plan, { signal: opts.signal, onProgress: opts.onProgress }) : null;
+  const applied = apply
+    ? await applyPlan(plan, { signal: opts.signal, onProgress: opts.onProgress, onResult: opts.onResult })
+    : null;
 
   // 移动成功后必须同步索引, 否则下一次扫描会把"同一文件的旧路径"判成 removed + added。
   if (applied) {

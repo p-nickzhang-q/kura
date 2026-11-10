@@ -35,22 +35,34 @@ export async function organizeTask(
     return { task: { id: 0 } as TaskRow, report, cancelled: false };
   }
 
+  // 先算一遍计划只为拿到**真实工作量**: 以前任务 total 直接取 entries.length,
+  // 而计划里一半以上是 skip(已在目标位置), 于是"整理 2754"里真正的搬运只有几十个。
+  const planned = await runOrganize(rt, library, false, signal);
+  const total = planned.plan.summary.move + planned.plan.summary.writeNfo + planned.plan.summary.copyImage;
+
   const task = createTask(rt, {
     type: "organize",
     payload: { libraryId: library.id, domain: library.domain },
-    // 总数要等计划算完才知道; 先给 0, 第一帧进度会把它更新成真实值
-    total: 0,
+    total,
   });
 
   const { result } = await runTask(rt, task, signal, async (run) => {
+    const failures: { key: string; error: string; index: number }[] = [];
     const report = await runOrganize(rt, library, true, run.signal, (progress) => {
-      run.progress(progress.index, 0, progress.total);
-      run.log.write("item", progress);
-      onProgress?.({ index: progress.index, total: progress.total, key: progress.path });
+      run.progress(progress.index, failures.length, total);
+      onProgress?.({ index: progress.index, total, key: progress.path });
+    }, undefined, (entry, progress) => {
+      if (entry.ok) return;
+      failures.push({ key: entry.entry.to ?? entry.entry.from ?? "", error: entry.error ?? "未知原因", index: progress.index });
+      // 失败原因进 jsonl: 任务详情的「失败 N」靠它列出是哪几个、为什么
+      run.log.write("item", { index: progress.index, key: entry.entry.to ?? entry.entry.from ?? "", ok: false, error: entry.error });
     });
     const applied = (report as VideoOrganizeReport).applied ?? (report as OrganizeReport).applied ?? [];
-    const failed = applied.filter((entry) => !entry.ok).length;
-    return { result: report, processed: applied.length, failed };
+    return {
+      result: report,
+      processed: applied.filter((entry) => entry.entry.action !== "skip").length,
+      failed: failures.length,
+    };
   });
 
   return { task: getTask(rt, task.id) ?? task, report: result, cancelled: signal.aborted };
@@ -62,12 +74,15 @@ async function runOrganize(
   apply: boolean,
   signal: AbortSignal,
   onProgress?: (progress: { index: number; total: number; action: string; path: string }) => void,
+  _unused?: undefined,
+  onResult?: (entry: { ok: boolean; error?: string; entry: { from?: string; to?: string } }, progress: { index: number; total: number }) => void,
 ): Promise<OrganizeReport | VideoOrganizeReport> {
   const common = {
     library,
     apply,
     signal,
     ...(onProgress ? { onProgress } : {}),
+    ...(onResult ? { onResult } : {}),
   };
   return library.domain === "video" ? organizeVideo(rt, common) : organize(rt, common);
 }

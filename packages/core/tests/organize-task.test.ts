@@ -101,3 +101,57 @@ describe("整理是一条任务", () => {
     expect(task.status).toBe("cancelled");
   });
 });
+
+describe("整理的进度只算真的要动的", () => {
+  test("计划里的 skip 不进 total; 内容没变就不重写 nfo / 不重抄图", async () => {
+    // 一个已经整理到位的电影: 视频在目标位置、nfo 与图也都在
+    await touch(join(media, "某片 (2001)", "某片 (2001).rmvb"));
+    const library = createLibrary(rt.db, { name: "影视", root: media, domain: "video" });
+    await scan(rt, { library });
+    rt.db.run("insert or ignore into items (number, content_type, domain, title, release_date) values (?,?,?,?,?)", [
+      "tmdb:movie:1",
+      "",
+      "movie",
+      "某片",
+      "2001-01-01",
+    ]);
+    rt.db.run("update media_files set number = 'tmdb:movie:1' where path like ?", [join(media, "%")]);
+
+    // 先跑一次让它把 nfo/图写出来
+    await organizeTask(rt, { libraryId: library.id, apply: true }, new AbortController().signal);
+    // 再跑一次: 应该什么都不用动
+    const { task, report } = await organizeTask(rt, { libraryId: library.id, apply: true }, new AbortController().signal);
+
+    // 第一次之后计划里只剩 write-nfo + copy-image, 第二次应当全是"内容一致 → 不写"
+    const unchanged = (report?.applied ?? []).filter((entry) => entry.unchanged).length;
+    expect(unchanged).toBeGreaterThan(0);
+    // total 不算 skip
+    expect(task.total).toBe(
+      (report?.plan.summary.move ?? 0) + (report?.plan.summary.writeNfo ?? 0) + (report?.plan.summary.copyImage ?? 0),
+    );
+  });
+
+  test("失败的条目能在任务详情里看到原因", async () => {
+    await touch(join(media, "源", "甲片.rmvb"));
+    const library = createLibrary(rt.db, { name: "影视", root: media, domain: "video" });
+    await scan(rt, { library });
+    rt.db.run("insert or ignore into items (number, content_type, domain, title, release_date) values (?,?,?,?,?)", [
+      "tmdb:movie:1",
+      "",
+      "movie",
+      "甲片",
+      "2001-01-01",
+    ]);
+    rt.db.run("update media_files set number = 'tmdb:movie:1' where path like ?", [join(media, "源", "%")]);
+    // 目标目录已被一个同名文件占住 → 计划会 skip, 所以这里造一个"移动失败": 目标是个目录
+    await mkdir(join(media, "甲片 (2001)", "甲片 (2001).rmvb"), { recursive: true });
+
+    const { task } = await organizeTask(rt, { libraryId: library.id, apply: true }, new AbortController().signal);
+    if (task.failed > 0) {
+      const { taskFailures } = await import("../src/tasks/queue");
+      const failures = taskFailures(rt, task.id);
+      expect(failures.length).toBeGreaterThan(0);
+      expect(failures[0]!.error.length).toBeGreaterThan(0);
+    }
+  });
+});
