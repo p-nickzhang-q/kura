@@ -930,12 +930,11 @@ async function applyDirSeason(dir: string): Promise<void> {
  * 批量找建议: 把"待绑定目录"逐个拿去搜 TMDB, 给出建议并默认勾上高把握的。
  * 只是把搜索这一步自动化 —— 绑哪个仍然要人看一眼。
  */
-async function findSuggestions(ai = false): Promise<void> {
+async function findSuggestions(): Promise<void> {
   if (selectedId.value === null) return;
-  if (ai && !info.value?.llmConfigured) {
-    errors.value.push("AI 补搜需要先配置 LLM（设置页填 baseUrl 与 model）");
-    return;
-  }
+  // 配了 LLM 就顺手补别名: 只对"一条都没搜到"的候选问模型, 且结果仍要过 TMDB。
+  // 不单独做按钮 —— 它就是找建议的一部分(用户不该先知道"该不该点 AI")。
+  const ai = info.value?.llmConfigured === true;
   suggestBusy.value = true;
   suggestProgress.value = { index: 0, total: 0, dir: "准备中" };
   runningLabel.value = `找绑定建议 · ${selected.value?.name ?? ""}`;
@@ -962,9 +961,11 @@ async function findSuggestions(ai = false): Promise<void> {
     }
     const total = result.suggestions.length;
     const hit = result.suggestions.filter((item) => item.hit).length;
+    const viaAlias = result.suggestions.filter((item) => item.viaAlias).length;
+    const aliasNote = viaAlias > 0 ? `，其中 ${viaAlias} 条是 AI 按别名找到的` : "";
     note.value = result.cancelled
       ? `已停止 · 完成 ${total} 个候选 (${hit} 个有建议)`
-      : `找到 ${hit}/${total} 个建议${scope ? ` (范围: 勾选的 ${scope.length} 个目录)` : ""} · 确认后一次绑完`;
+      : `找到 ${hit}/${total} 个建议${aliasNote}${scope ? ` (范围: 勾选的 ${scope.length} 个目录)` : ""} · 确认后一次绑完`;
     // 任务记录了这次搜索, 任务页能看到进度与结果
     void refreshTasks();
   } catch (err) {
@@ -2185,14 +2186,6 @@ async function testDmm(): Promise<void> {
               >
                 强制扫描
               </button>
-              <button
-                type="button"
-                :disabled="busy || !selected"
-                title="按当前解析器重新判定内容类型 (会先列出清单让你确认)"
-                @click="moreOpen = false; retypeDetect()"
-              >
-                修正内容类型
-              </button>
               <button type="button" :disabled="busy || !selected" @click="repairPaths">
                 修复索引路径
               </button>
@@ -2301,8 +2294,8 @@ async function testDmm(): Promise<void> {
 
           <p class="muted pane-foot">
             扫描是秒级动作, 不记任务; 其余都会出现在「任务」里, 跑到一半能停。<br />
-            其他动作 (强制扫描 / 修正内容类型 / 同步 NFO / 清理空目录) 在 <kbd>Ctrl K</kbd> 里,
-            或在「⋯ 更多」里。
+            库级动作 (强制扫描 / 修复索引路径 / 改名 / 删除) 在「⋯ 更多」里;
+            修正内容类型在「条目」页, 同步 NFO 与清理空目录在「整理预览」页, 都能用 <kbd>Ctrl K</kbd> 搜到。
           </p>
         </div>
 
@@ -2374,6 +2367,16 @@ async function testDmm(): Promise<void> {
               </button>
               <button type="button" :disabled="busy || picked.length === 0" @click="translateSelected">
                 翻译选中 ({{ picked.length }})
+              </button>
+              <!-- 类型是**条目**的字段(而且只有番号制有这个概念), 所以它属于这一页 -->
+              <button
+                v-if="!isVideoMode"
+                type="button"
+                :disabled="busy"
+                title="按当前解析器重新判定内容类型 (先列清单, 确认后才改)"
+                @click="retypeDetect"
+              >
+                修正内容类型
               </button>
               <button v-if="translateProgress" type="button" class="danger" @click="cancelTranslate">停止翻译</button>
             </div>
@@ -2733,15 +2736,6 @@ async function testDmm(): Promise<void> {
               <button type="button" class="chip" :class="{ on: bindKind === '' }" @click="bindKind = ''">
                 全部 {{ treeStats.dirs }}
               </button>
-              <button
-                type="button"
-                class="chip"
-                :disabled="busy"
-                title="按当前解析器重新判定内容类型 (会先列出清单让你确认)"
-                @click="retypeDetect"
-              >
-                修正内容类型
-              </button>
             </div>
             <span v-if="suggestProgress" class="muted nowrap">
               搜索中 {{ suggestProgress.index }}/{{ suggestProgress.total || "?" }} · {{ suggestProgress.dir }}
@@ -2755,22 +2749,8 @@ async function testDmm(): Promise<void> {
             >
               {{ treeNodes.length > 0 && treeNodes.every((node) => suggestPicked.includes(node.dir)) ? "全不选" : `全选 ${treeNodes.length}` }}
             </button>
-            <button type="button" :disabled="busy || suggestBusy || treeStats.dirs === 0" @click="findSuggestions(false)">
+            <button type="button" :disabled="busy || suggestBusy || treeStats.dirs === 0" @click="findSuggestions()">
               {{ suggestBusy ? "搜索中…" : suggestPicked.length > 0 ? `找建议 (已勾选 ${suggestPicked.length})` : "批量找建议" }}
-            </button>
-            <!-- AI 别名补搜: 只对"一个都没搜到"的候选再问一次模型, 名字仍要过 TMDB 校验 -->
-            <button
-              type="button"
-              class="chip"
-              :disabled="busy || suggestBusy || treeStats.dirs === 0 || !info?.llmConfigured"
-              :title="
-                info?.llmConfigured
-                  ? '对 0 命中的候选再问一次模型: 它可能叫别的名字(港台译名/原名)。命中仍由 TMDB 决定'
-                  : '先在设置里配置 LLM (baseUrl + model)'
-              "
-              @click="findSuggestions(true)"
-            >
-              AI 补搜
             </button>
           </div>
 
@@ -2891,7 +2871,7 @@ async function testDmm(): Promise<void> {
             </span>
             <span class="spacer" />
             <button type="button" :disabled="suggestBusy" @click="suggestPicked = []">取消勾选</button>
-            <button type="button" :disabled="suggestBusy || busy" @click="findSuggestions(false)">
+            <button type="button" :disabled="suggestBusy || busy" @click="findSuggestions()">
               只搜勾选的
             </button>
             <button
@@ -2910,14 +2890,6 @@ async function testDmm(): Promise<void> {
           <button type="button" class="crumb" @click="tab = 'todo'">← 待办</button>
           <div class="toolbar">
             <span class="muted">扫到了但认不出番号的文件: {{ unparsedCount }} 个（不会进入刮削）</span>
-            <button
-              type="button"
-              :disabled="busy"
-              title="按当前解析器重新判定内容类型 (会先列出清单让你确认)"
-              @click="retypeDetect"
-            >
-              修正内容类型
-            </button>
             <span class="spacer" />
             <button type="button" aria-label="上一页" title="上一页" :disabled="unparsedPage === 0" @click="goUnparsedPage(unparsedPage - 1)">‹</button>
             <span class="muted">{{ unparsedPage + 1 }}/{{ Math.max(1, Math.ceil(unparsedCount / unparsedPageSize)) }}</span>
