@@ -104,3 +104,32 @@ describe("文件名猜片名 (电影候选是文件, 不是目录)", () => {
     expect(guessTitleFromFile("BD1024高清.mkv").title.length).toBeGreaterThan(0);
   });
 });
+
+describe("粘在片名后面的裸介质标记", () => {
+  // 这些站不写分辨率, 只在片名后面粘一个 HD/BD/DVD —— 以前整串拿去搜, 0 命中
+  const cases: [string, string][] = [
+    ["[66影视www.66ys.org]开心鬼上身HD中字1024高清.rmvb", "开心鬼上身"],
+    ["[电影天堂-www.dy2018.net]阳光姐妹淘BD中字.rmvb", "阳光姐妹淘"],
+    ["[迅雷下载www.99b.cc]逍遥法外DVD中英双字CD1.rmvb", "逍遥法外"],
+    ["[迅雷下载www.XunBo.Cc]教父1BD1280高清中英双字.rmvb", "教父1"],
+    ["[迅播影院www.xunbo.cc]机器人9号BD中英双字1280x720高清版.rmvb", "机器人9号"],
+    ["刺客信条：血系HD版[www.qire123.com].rmvb", "刺客信条：血系"],
+    // 半截方括号要清掉
+    ["疯狂初恋[高清版].mp4", "疯狂初恋"],
+  ];
+  for (const [name, want] of cases) {
+    test(name, () => {
+      expect(guessTitleFromFile(name).title).toBe(want);
+    });
+  }
+
+  test("整个名字都是方括号分组时, 挑一个最像片名的", () => {
+    const name = "[goxiazai.com][2011韩国最新爱情喜剧][攒钱罗曼史][DVD][韩语中字][迅雷下载].rmvb";
+    expect(guessTitleFromFile(name).title).toBe("攒钱罗曼史");
+  });
+
+  test("书名号里的是真片名", () => {
+    const name = "〖韩国〗喜剧爱情影片《一番街的奇迹》；又名：〈 1号街的奇迹〉.flv";
+    expect(guessTitleFromFile(name).title).toBe("一番街的奇迹");
+  });
+});

@@ -383,3 +383,30 @@ describe("清掉季集", () => {
     expect(row).toEqual({ number: "tmdb:tv:9", season: null, episode: null });
   });
 });
+
+describe("散集嫌疑不能靠发布站前缀判定", () => {
+  test("同一网站的十几部不同电影, 不该被当成'某部剧的散集'而跳过搜索", async () => {
+    await makeShow("各种电影3", [
+      "[迅雷下载www.2tu.cc]北京遇上西雅图.HD1024高清国语中字.mkv",
+      "[迅雷下载www.2tu.cc]好好先生.BD1024超清中英双字.mkv",
+      "[迅雷下载www.XunBo.Cc]告白BD1024高清中字.rmvb",
+    ]);
+    const library = createLibrary(rt.db, { name: "影视", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const dirs = listBindableDirs(rt, { libraryId: library.id });
+    // 以前 sharedPrefix 拿原始文件名比, 共同前缀是 "[迅", 于是每一部都被标成 suspectSeries,
+    // suggestOne 直接 return base —— 表现就是"找建议一个都找不到"
+    expect(dirs.every((dir) => dir.suspectSeries !== true)).toBe(true);
+  });
+
+  test("真正的散集(同一部剧, 集号没被认出)仍然标出来", async () => {
+    // 剥掉发布组前缀后仍然共享"某剧"这个真前缀 —— 那才是"像一部剧"
+    await makeShow("某剧", ["[组]某剧 上.mp4", "[组]某剧 下.mp4", "[组]某剧 番外.mp4"]);
+    const library = createLibrary(rt.db, { name: "影视", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    const dirs = listBindableDirs(rt, { libraryId: library.id });
+    expect(dirs.some((dir) => dir.suspectSeries === true)).toBe(true);
+  });
+});

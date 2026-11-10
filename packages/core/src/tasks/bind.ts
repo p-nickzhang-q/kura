@@ -907,7 +907,14 @@ export function setFileEpisode(
  */
 function sharedPrefix(paths: string[]): string {
   if (paths.length < 2) return "";
-  const stems = paths.map((path) => basename(path).replace(/\.[^.]+$/, ""));
+  // 先剥掉 `[迅雷下载www.2tu.cc]` 这种发布站前缀 —— 它**不是**"同一部剧"的证据,
+  // 而是一整个资源站目录的共同记号。不剥的话, 一个装满不同电影的目录会因为
+  // 文件名都以 `[迅` 开头而被判定成"某部剧的散集", 于是全部跳过搜索(实测 0 命中)。
+  const stems = paths.map((path) =>
+    basename(path)
+      .replace(/\.[^.]+$/, "")
+      .replace(/^\s*(?:[[【][^\]】]{1,60}[\]】]\s*)+/, ""),
+  );
   let prefix = stems[0] ?? "";
   for (const stem of stems.slice(1)) {
     let index = 0;

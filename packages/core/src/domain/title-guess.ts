@@ -40,7 +40,7 @@ const EDITION_PATTERNS = [
   /\b(?:director'?s|theatrical|extended|unrated)\s+cut\b/gi,
   /\b\d{3,4}p\b/gi,
   /\b(?:web[-_.]?dl|webrip|bluray|blu[-_.]?ray|bdrip|dvdrip|hdtv|remux)\b/gi,
-  /\b(?:x264|x265|h\.?264|h\.?265|hevc|avc|10bit|8bit)\b/gi,
+  /\b(?:x264|x265|h\.?264|h\.?265|hevc|avc|xvid|divx|10bit|8bit)\b/gi,
   /\b(?:aac|ac3|ddp?5\.?1|dd5\.?1|flac|truehd|atmos|dts)\b/gi,
   /\b(?:hdr10|hdr|dovi|sdr)\b/gi,
 ];
@@ -96,11 +96,20 @@ const GLUED_MARKERS = [
   /(?:BD|HD|DVD|WEB|BR|BluRay|Blu-?ray|HDRip|BDRip|DVDRip)\s*\d{3,4}/i,
   /\d{3,4}\s*(?:高清|超清|标清|高码)/,
   /\d{3,4}[pPiI](?![a-z])/,
-  /(?:x264|x265|h\.?264|h\.?265|hevc|10bit|8bit|aac|ac3|ddp)/i,
+  /(?:x264|x265|h\.?264|h\.?265|hevc|xvid|divx|10bit|8bit|aac|ac3|ddp)/i,
   /(?:中字|中英|双字|双语|国粤|国语|粤语|韩语|日语|英语|简中|繁中|简体|繁体|中文字幕|无字|生肉)/,
   /(?:高清|超清|标清|蓝光|未删减|未删|无删|完整版|修复版|国配|中配|加长版|导演剪辑)/,
   /(?:CD|Disc|Part)\s?\d{1,2}(?![0-9])/i,
 ];
+
+/**
+ * 裸介质标记**不带数字**直接粘在片名后面: `开心鬼上身HD`、`逍遥法外DVD`、`教父1BD`。
+ *
+ * 上面第一条要求标记后面跟 3-4 位数字, 而很多站压根不写分辨率 —— 剩下一个 `HD` 粘在
+ * 片名上, 整串拿去搜 TMDB 就是 0 命中。要求前一个字符是汉字或数字, 免得误伤英文词尾。
+ * 单独一条是因为它要把"前一个字符"当锚点, 截断位置得 +1。
+ */
+const BARE_MEDIUM = /[\p{Script=Han}\d](?:HD|BD|DVD|WEB|BR|TS|TC)(?=$|[^0-9A-Za-z])/u;
 
 /**
  * 文件名 → {片名, 年份}。
@@ -119,10 +128,33 @@ export function guessTitleFromFile(fileName: string): TitleGuess {
     // 位置 0 说明整段就是标记(比如文件名就叫 `BD1024高清`), 那种不该截
     if (match && match.index > 0 && match.index < cut) cut = match.index;
   }
-  text = text.slice(0, cut).replace(/[\s._\-–—]+$/, "");
-  const guess = guessTitleFromDir(text);
-  // 截断后如果连两个字符都不剩, 退回原名再猜一次(宁可搜不准, 也别一个词都不发)
-  return normalizeTitle(guess.title).length >= 2 ? guess : guessTitleFromDir(base);
+  const bare = BARE_MEDIUM.exec(text);
+  // 匹配到的是"最后一个汉字 + 标记", 截断点要跳过那个汉字
+  if (bare && bare.index > 0) cut = Math.min(cut, bare.index + 1);
+
+  // 截断点常落在一个方括号标记里面(`疯狂初恋[高清版]`), 会留下半个 `[`
+  text = text.slice(0, cut).replace(/[\s._\-–—[【(《〈〖]+$/, "");
+  // 中文资源站常写成 `〖韩国〗喜剧爱情影片《一番街的奇迹》；又名：…` ——
+  // 真正的片名在书名号里, 外面的都是分类与说明。
+  const bookTitle = /《([^》]{2,40})》/.exec(text);
+  const guess = guessTitleFromDir(bookTitle ? bookTitle[1]! : text);
+  if (normalizeTitle(guess.title).length >= 2) return guess;
+
+  // 整个名字都是方括号分组时(`[站名][2011韩国最新爱情喜剧][攒钱罗曼史][DVD][韩语中字]`),
+  // 上面那套剥完什么都不剩。这时从分组里挑一个最像片名的: 含汉字、不含网址/语种/年份。
+  const groups = [...base.matchAll(/[[【]([^\]】]{2,24})[\]】]/g)].map((match) => match[1]!.trim());
+  const picked = groups.find(
+    (group) =>
+      /\p{Script=Han}/u.test(group) &&
+      normalizeTitle(group).length >= 2 &&
+      !/(?:www|https?|com|net|cc|下载|迅雷|影视|影院|天堂|字幕|中字|国语|粤语|韩语|日语|英语|双语)/i.test(group) &&
+      !/^(?:19|20)\d{2}/.test(group) &&
+      // `[2011韩国最新爱情喜剧]` 这种是分类说明, 不是片名
+      !/(?:喜剧|爱情|动作|剧情|恐怖|惊悚|悬疑|科幻|犯罪|伦理|纪实|记录|最新|合集|系列|高清)/.test(group) &&
+      !/^(?:韩国|日本|美国|欧美|泰国|印度|香港|台湾|国产)$/.test(group),
+  );
+  // 再不行就退回原名再猜一次: 宁可搜不准, 也别一个词都不发
+  return guessTitleFromDir(picked ?? base);
 }
 
 export type MatchConfidence = "high" | "medium" | "low";
