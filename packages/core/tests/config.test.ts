@@ -213,3 +213,22 @@ describe("图片落盘开关", () => {
     }
   });
 });
+
+describe("找建议的别名补搜开关", () => {
+  test("默认开; 显式关掉之后要留住", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { loadSettings, saveSettings, maskSettings, EMPTY_SETTINGS } = await import("../src/config");
+    const dir = await mkdtemp(join(tmpdir(), "kura-cfg-"));
+    const paths = { dataDir: dir } as never;
+
+    expect(loadSettings(paths).suggestAliases).toBe(true);
+    saveSettings(paths, { suggestAliases: false });
+    expect(loadSettings(paths).suggestAliases).toBe(false);
+    // 脱敏输出也要带上, 设置页靠它初始化
+    expect(maskSettings(loadSettings(paths)).suggestAliases).toBe(false);
+    // 老配置文件没有这个字段 → 视为开
+    expect(EMPTY_SETTINGS.suggestAliases).toBe(true);
+  });
+});

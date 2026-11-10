@@ -156,6 +156,7 @@ kura scrape --library 剧库                            # 整库: 待刮的影�
 kura source test tmdb --probe 1429                   # 影视来源自检 (key + 语言 + 集列表)
 kura config set --tmdb-api-key <key>                 # key 存 config.json (0600), 不进日志
 kura config set --no-save-images                     # 关掉"刮削顺手存图" (默认开; 图只进 dataDir/resources)
+kura config set --no-suggest-aliases                 # 关掉"找建议时用 AI 补别名" (默认开; 只对 0 命中的候选)
 kura library list                                    # 每行带 domain 与模板
 ```
 

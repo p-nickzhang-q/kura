@@ -340,6 +340,8 @@ const llmModelInput = ref("");
 const translateOn = ref(false);
 /** 刮削时顺手下图 (只进本地缓存; 整理时才复制到媒体目录)。 */
 const saveImagesOn = ref(true);
+/** 找建议时是否让模型补别名(ADR 0010)。只对"一条都没搜到"的候选生效。 */
+const suggestAliasesOn = ref(true);
 const dmmTest = ref<KuraDmmTest | null>(null);
 
 let unsubscribe: (() => void) | null = null;
@@ -415,6 +417,7 @@ async function refreshAll(): Promise<void> {
   config.value = (await step("读取配置", () => window.kura.configGet())) ?? config.value;
   translateOn.value = config.value?.settings.translate ?? false;
   saveImagesOn.value = config.value?.settings.saveImages !== false;
+  suggestAliasesOn.value = config.value?.settings.suggestAliases !== false;
   libraries.value = (await step("读取媒体库", () => window.kura.libraries())) ?? libraries.value;
   if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
   await step("读取条目", () => refreshItems());
@@ -932,9 +935,8 @@ async function applyDirSeason(dir: string): Promise<void> {
  */
 async function findSuggestions(): Promise<void> {
   if (selectedId.value === null) return;
-  // 配了 LLM 就顺手补别名: 只对"一条都没搜到"的候选问模型, 且结果仍要过 TMDB。
-  // 不单独做按钮 —— 它就是找建议的一部分(用户不该先知道"该不该点 AI")。
-  const ai = info.value?.llmConfigured === true;
+  // 不单独做按钮 —— 它就是找建议的一部分。要不要真的补别名由**设置**决定
+  // (设置页「找建议时用 AI 补别名」), 主进程判断, 这里只表达"我想要"。
   suggestBusy.value = true;
   suggestProgress.value = { index: 0, total: 0, dir: "准备中" };
   runningLabel.value = `找绑定建议 · ${selected.value?.name ?? ""}`;
@@ -942,7 +944,7 @@ async function findSuggestions(): Promise<void> {
     // 勾了目录就只搜勾选的: 全库几十个目录一次搜要一两分钟, 而人往往只想处理刚整理完的那几个
     const scope = suggestPicked.value.length > 0 ? plainArray(suggestPicked.value) : undefined;
     // 没勾选时按当前筛选的那一类搜: 电影候选几百个, 一起搜会卡很久且大多没结果
-    const result = await window.kura.tmdbSuggest(selectedId.value, bindKind.value || undefined, scope, ai);
+    const result = await window.kura.tmdbSuggest(selectedId.value, bindKind.value || undefined, scope);
     if (result.error) {
       errors.value.push(result.error);
       return;
@@ -1965,6 +1967,7 @@ async function saveConfig(): Promise<void> {
     llmModel?: string;
     translate?: boolean;
     saveImages?: boolean;
+    suggestAliases?: boolean;
     tmdbApiKey?: string;
   } = {};
   if (apiIdInput.value.trim()) patch.apiId = apiIdInput.value.trim();
@@ -1976,12 +1979,14 @@ async function saveConfig(): Promise<void> {
   if (tmdbKeyInput.value.trim()) patch.tmdbApiKey = tmdbKeyInput.value.trim();
   patch.translate = translateOn.value;
   patch.saveImages = saveImagesOn.value;
+  patch.suggestAliases = suggestAliasesOn.value;
 
   const changed =
     patch.apiId || patch.affiliateId || patch.proxy || patch.llmBaseUrl || patch.llmApiKey || patch.llmModel ||
     patch.tmdbApiKey ||
     patch.translate !== Boolean(config.value?.settings.translate) ||
-    patch.saveImages !== (config.value?.settings.saveImages !== false);
+    patch.saveImages !== (config.value?.settings.saveImages !== false) ||
+    patch.suggestAliases !== (config.value?.settings.suggestAliases !== false);
   if (!changed) {
     note.value = "没有改动";
     return;
@@ -3225,6 +3230,15 @@ async function testDmm(): Promise<void> {
             </label>
             <span class="muted">{{ info?.llmConfigured ? "LLM 已配置" : "LLM 未配置" }}</span>
           </div>
+          <label class="check">
+            <input v-model="suggestAliasesOn" type="checkbox" />
+            找建议时用 AI 补别名
+          </label>
+          <p class="muted hint">
+            正则抽出来的名字在 TMDB 一条都搜不到时, 问一次模型"它还可能叫什么"(港台译名/外文原名),
+            拿它给的写法再搜一遍。**模型只产搜索词**, 命中与否仍由 TMDB 决定, 找到的一律降一档并标「按别名」。
+            只对搜不到的候选发请求, 同一个文件名只问一次(缓存)。
+          </p>
 
           <h2>图片</h2>
           <p class="muted">

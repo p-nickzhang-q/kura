@@ -131,6 +131,7 @@ let settings: Settings = {
   llm: { baseUrl: "", apiKey: "", model: "" },
   translate: false,
   saveImages: true,
+  suggestAliases: true,
 };
 
 /** Electron 主进程的 fetch: 跟随系统代理(Clash 开了系统代理/TUN 就直接生效)。 */
@@ -604,10 +605,10 @@ function registerIpc(): void {
       const tmdb = await tmdbClient(rt);
       if (!tmdb) return { suggestions: [], taskId: null, error: "未配置 TMDB API key（设置页填写）" };
       // AI 别名补搜(ADR 0010): 只对 0 命中的候选问模型, 它给的名字仍然要过 TMDB
-      const aliases = input.ai ? await openAliasEngine(rt, createHttp(), resolveLlm(settings)) : null;
-      if (input.ai && !aliases) {
-        return { suggestions: [], taskId: null, error: "未配置 LLM（设置页填 baseUrl + model）" };
-      }
+      // 是否补别名由**设置**决定(ADR 0010): 默认开, 但只在配了 LLM 时才真的跑。
+      // 关掉 = 只用正则抽出来的名字搜 TMDB, 一次模型调用都不发。
+      const wantAliases = settings.suggestAliases !== false;
+      const aliases = wantAliases ? await openAliasEngine(rt, createHttp(), resolveLlm(settings)) : null;
       const { task, result } = await suggestBindingsTask(
         rt,
         {
@@ -1257,6 +1258,7 @@ function registerIpc(): void {
         llmModel?: string;
         translate?: boolean;
         saveImages?: boolean;
+        suggestAliases?: boolean;
         tmdbApiKey?: string;
       },
     ) => {
@@ -1274,6 +1276,7 @@ function registerIpc(): void {
         llm,
         translate: patch.translate,
         ...(patch.saveImages !== undefined ? { saveImages: patch.saveImages } : {}),
+        ...(patch.suggestAliases !== undefined ? { suggestAliases: patch.suggestAliases } : {}),
         ...(patch.tmdbApiKey !== undefined ? { tmdbApiKey: patch.tmdbApiKey.trim() } : {}),
       });
     await applyProxy();
@@ -1283,6 +1286,7 @@ function registerIpc(): void {
       tmdbConfigured: Boolean(resolveTmdbEnv(settings).apiKey),
       llmConfigured: Boolean(resolveLlm(settings)),
       translate: translateEnabled(settings),
+      suggestAliases: settings.suggestAliases !== false,
       pendingTranslation: translateEnabled(settings) ? countPendingTranslation(rt) : 0,
       translation: translateEnabled(settings) ? translationStats(rt) : null,
       dimensions: DIMENSIONS,

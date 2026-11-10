@@ -240,6 +240,8 @@ interface KuraConfig {
     translate: boolean;
     /** 刮削顺手把图存进本地缓存 (默认开)。 */
     saveImages: boolean;
+    /** 找建议时让模型补别名 (默认开; 没配 LLM 时自动不生效)。 */
+    suggestAliases: boolean;
     proxy: string;
     tmdbApiKey: string;
   };
@@ -475,6 +477,7 @@ interface KuraBridge {
     llmModel?: string;
     translate?: boolean;
     saveImages?: boolean;
+    suggestAliases?: boolean;
     tmdbApiKey?: string;
   }): Promise<{ settings: KuraConfig["settings"]; dmmConfigured: boolean; tmdbConfigured: boolean }>;
   testDmm(probe?: string): Promise<KuraDmmTest>;

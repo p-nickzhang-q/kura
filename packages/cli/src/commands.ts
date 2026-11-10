@@ -1520,7 +1520,7 @@ export const COMMANDS: Command[] = [
 
   {
     name: "config",
-    summary: "配置: get (脱敏) | set --llm-base-url / --tmdb-api-key ... | test-llm (真发一次模型请求) | path",
+    summary: "配置: get (脱敏) | set --llm-base-url / --tmdb-api-key / --no-suggest-aliases ... | test-llm (真发一次模型请求) | path",
     needsDb: true,
     args: [
       { name: "action", type: "string", description: "get | set | test-llm | path", positional: true, default: "get" },
@@ -1535,6 +1535,12 @@ export const COMMANDS: Command[] = [
       { name: "no-translate", type: "boolean", description: "set: 关闭翻译开关", default: false },
       { name: "no-save-images", type: "boolean", description: "set: 图片只存缓存, 不复制到视频旁边", default: false },
       { name: "save-images", type: "boolean", description: "set: 图片同时复制一份到视频旁边 (默认开)", default: false },
+      {
+        name: "suggest-aliases",
+        type: "boolean",
+        description: "set: 找建议时让模型补别名(默认开); --no-suggest-aliases 关掉, 只靠正则抽的名字搜",
+        default: true,
+      },
     ],
     async run(ctx, args) {
       const action = args.positionals.action ?? "get";
@@ -1555,6 +1561,7 @@ export const COMMANDS: Command[] = [
           proxyFromEnv: Boolean(process.env.KURA_PROXY),
           llm: resolveLlm(ctx.rt!.settings) ? "已配置" : "未配置",
           translate: translateEnabled(ctx.rt!.settings),
+          suggestAliases: ctx.rt!.settings.suggestAliases !== false,
           tmdb: resolveTmdbEnv(ctx.rt!.settings).apiKey ? "已配置" : "未配置",
           tmdbFromEnv: Boolean(process.env.KURA_TMDB_API_KEY),
         };
@@ -1586,6 +1593,7 @@ export const COMMANDS: Command[] = [
           llm: { baseUrl?: string; apiKey?: string; model?: string };
           translate?: boolean;
           saveImages?: boolean;
+          suggestAliases?: boolean;
         } = { dmm: {}, llm: {} };
         if (typeof args.options["dmm-api-id"] === "string") patch.dmm.apiId = args.options["dmm-api-id"];
         if (typeof args.options["dmm-affiliate-id"] === "string") patch.dmm.affiliateId = args.options["dmm-affiliate-id"];
@@ -1598,6 +1606,7 @@ export const COMMANDS: Command[] = [
         if (args.options["no-translate"] === true) patch.translate = false;
         if (args.options["no-save-images"] === true) patch.saveImages = false;
         if (args.options["save-images"] === true) patch.saveImages = true;
+        if (typeof args.options["suggest-aliases"] === "boolean") patch.suggestAliases = args.options["suggest-aliases"];
 
         const touched =
           Object.keys(patch.dmm).length > 0 ||
@@ -1605,10 +1614,11 @@ export const COMMANDS: Command[] = [
           patch.proxy !== undefined ||
           patch.tmdbApiKey !== undefined ||
           patch.translate !== undefined ||
-          patch.saveImages !== undefined;
+          patch.saveImages !== undefined ||
+          patch.suggestAliases !== undefined;
         if (!touched) {
           throw new AppError(
-            "用法: config set --dmm-api-id ... | --tmdb-api-key <key> | --proxy auto | --llm-base-url ... --llm-model ... | --translate | --save-images/--no-save-images",
+            "用法: config set --dmm-api-id ... | --tmdb-api-key <key> | --proxy auto | --llm-base-url ... --llm-model ... | --translate | --save-images/--no-save-images | --suggest-aliases/--no-suggest-aliases",
             EXIT.USAGE,
           );
         }

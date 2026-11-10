@@ -39,6 +39,11 @@ export interface Settings {
    * 默认开: 图只躺在进程的数据目录里, 换个播放器就看不见了。
    */
   saveImages: boolean;
+  /**
+   * 找建议时是否让模型补别名(ADR 0010)。默认开, 但只在配了 LLM 时才真正生效。
+   * 关掉它 = 只用正则抽出来的名字去搜 TMDB。
+   */
+  suggestAliases: boolean;
 }
 
 export const EMPTY_SETTINGS: Settings = {
@@ -48,6 +53,7 @@ export const EMPTY_SETTINGS: Settings = {
   llm: { baseUrl: "", apiKey: "", model: "" },
   translate: false,
   saveImages: true,
+  suggestAliases: true,
 };
 
 export function settingsPath(paths: Paths): string {
@@ -72,8 +78,9 @@ export function loadSettings(paths: Paths): Settings {
         model: String(raw.llm?.model ?? ""),
       },
       translate: Boolean(raw.translate),
-      // 旧配置文件里没有这个字段, 默认开。
+      // 旧配置文件里没有这两个字段, 默认开。
       saveImages: raw.saveImages === undefined ? true : Boolean(raw.saveImages),
+      suggestAliases: raw.suggestAliases === undefined ? true : Boolean(raw.suggestAliases),
     };
   } catch {
     // 坏配置不能挡住启动: 退回空设置, 让调用方按"未配置"处理。
@@ -90,6 +97,7 @@ export function saveSettings(
     llm?: Partial<Settings["llm"]>;
     translate?: boolean;
     saveImages?: boolean;
+    suggestAliases?: boolean;
   },
 ): Settings {
   const current = loadSettings(paths);
@@ -100,6 +108,7 @@ export function saveSettings(
     llm: { ...current.llm, ...(patch.llm ?? {}) },
     translate: patch.translate !== undefined ? patch.translate : current.translate,
     saveImages: patch.saveImages !== undefined ? patch.saveImages : (current.saveImages ?? true),
+    suggestAliases: patch.suggestAliases !== undefined ? patch.suggestAliases : (current.suggestAliases ?? true),
   };
 
   mkdirSync(paths.dataDir, { recursive: true });
@@ -148,6 +157,7 @@ export function maskSettings(settings: Settings): Settings {
     },
     translate: Boolean(settings.translate),
     saveImages: settings.saveImages ?? true,
+    suggestAliases: settings.suggestAliases ?? true,
     tmdbApiKey: maskSecret(settings.tmdbApiKey ?? ""),
     // 代理地址不含密钥, 原样展示便于排障。
     proxy: settings.proxy,
