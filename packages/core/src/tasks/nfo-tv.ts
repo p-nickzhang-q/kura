@@ -54,6 +54,8 @@ export interface TvNfoOptions {
   keys?: string[];
   apply: boolean;
   limit?: number;
+  /** 并发写盘数, 默认 8(移动硬盘上单次 read+write+rename 约 1.5 秒)。 */
+  concurrency?: number;
   signal?: AbortSignal;
   onProgress?: (progress: { index: number; total: number; key: string; action: TvNfoAction }) => void;
 }
@@ -85,6 +87,24 @@ interface FileRow {
   episode: number | null;
 }
 
+/** 一个待写目标: 剧级 tvshow.nfo、集级 nfo、或电影的 nfo。 */
+interface NfoJob {
+  path: string;
+  kind: "tvshow" | "episode" | "movie";
+  key: string;
+  render: () => string;
+  merge: (original: string) => { content: string; changed: string[] };
+}
+
+/**
+ * 影视 nfo 导出。
+ *
+ * **并发 8**: 以前是纯串行 —— 每部剧先写 tvshow.nfo, 再一集一集 `await`。
+ * 移动硬盘上单次 read+write+rename 约 1.5 秒, 于是 1,548 个文件要跑 40 分钟,
+ * 用户看到「正在写… 5/82」卡着不动。番号制那条路一直是 8 并发。
+ *
+ * 工作量口径也从"剧数"改成"文件数": 82 部剧里有 1,466 集, 只报 5/82 等于没报。
+ */
 export async function exportTvNfo(rt: Runtime, options: TvNfoOptions): Promise<TvNfoReport> {
   const report: TvNfoReport = {
     dryRun: !options.apply,
@@ -101,18 +121,20 @@ export async function exportTvNfo(rt: Runtime, options: TvNfoOptions): Promise<T
   const roots = new Map<number, string>();
   for (const row of rt.db.all<{ id: number; root: string }>("select id, root from libraries")) roots.set(row.id, row.root);
 
-  for (let index = 0; index < shows.length; index++) {
+  // 先把要写的目标全部列出来(纯 DB 查询 + 纯函数), 再并发执行 ——
+  // 不在并发体里查库, 免得一集一集地串行等 IO。
+  const jobs: NfoJob[] = [];
+  const skipped: TvNfoEntry[] = [];
+
+  for (const show of shows) {
+    report.shows++;
     if (options.signal?.aborted) {
       report.cancelled = true;
       break;
     }
-    const show = shows[index]!;
-    report.shows++;
     const files = filesOf(rt, show.number, options.libraryId);
     if (files.length === 0) {
-      report.skipped++;
-      report.entries.push({ path: "", kind: "tvshow", key: show.number, action: "skip", changed: ["没有绑定文件"] });
-      options.onProgress?.({ index: index + 1, total: shows.length, key: show.number, action: "skip" });
+      skipped.push({ path: "", kind: "tvshow", key: show.number, action: "skip", changed: ["没有绑定文件"] });
       continue;
     }
 
@@ -133,7 +155,6 @@ export async function exportTvNfo(rt: Runtime, options: TvNfoOptions): Promise<T
     // 曾经把电影也当成剧写进 `<目录>/tvshow.nfo` —— Emby 于是把整个电影文件夹当电视剧,
     // 一部电影变成"剧集 0 季 0 集", 而真正的 movie nfo 根本没生成。
     if (tmdb?.kind === "movie") {
-      const target = nfoPathFor(files[0]!.path);
       const movieFields: MovieNfoFields = {
         title: show.title,
         originalTitle: show.title_original,
@@ -145,29 +166,24 @@ export async function exportTvNfo(rt: Runtime, options: TvNfoOptions): Promise<T
         actors: parseList(show.actors),
         tmdbId: String(tmdb.id),
       };
-      const entry = await writeOne({
-        path: target,
+      jobs.push({
+        path: nfoPathFor(files[0]!.path),
         kind: "movie",
         key: show.number,
-        apply: options.apply,
         render: () => renderMovieNfo(movieFields),
         merge: (original) => mergeTvNfo(original, "movie", movieFields),
       });
-      tally(report, entry);
-      options.onProgress?.({ index: index + 1, total: shows.length, key: show.number, action: entry.action });
       continue;
     }
 
     // 剧级: <剧目录>/tvshow.nfo
-    const showEntry = await writeOne({
+    jobs.push({
       path: `${dir}${sep}tvshow.nfo`,
       kind: "tvshow",
       key: show.number,
-      apply: options.apply,
       render: () => renderTvShowNfo(showFields),
       merge: (original) => mergeTvNfo(original, "tvshow", showFields),
     });
-    tally(report, showEntry);
 
     // 集级: 每个绑了集号的视频旁边一个同名 nfo
     const episodes = new Map<string, EpisodeRow>();
@@ -190,21 +206,66 @@ export async function exportTvNfo(rt: Runtime, options: TvNfoOptions): Promise<T
         episode: file.episode,
         tmdbId: tmdb ? String(tmdb.id) : null,
       };
-      const entry = await writeOne({
+      jobs.push({
         path: nfoPathFor(file.path),
         kind: "episode",
         key: show.number,
-        apply: options.apply,
         render: () => renderEpisodeNfo(fields),
         merge: (original) => mergeTvNfo(original, "episodedetails", fields),
       });
-      tally(report, entry);
     }
-
-    options.onProgress?.({ index: index + 1, total: shows.length, key: show.number, action: "update" });
   }
 
+  for (const entry of skipped) tally(report, entry);
+
+  // 并发执行。结果按下标回填: 报告里的清单顺序稳定, 不是"谁先写完谁在前"。
+  const total = jobs.length;
+  const results = new Array<TvNfoEntry | undefined>(total);
+  let cursor = 0;
+  let done = 0;
+  const workers = Math.max(1, Math.min(options.concurrency ?? 8, total));
+
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      if (options.signal?.aborted) {
+        report.cancelled = true;
+        return;
+      }
+      const index = cursor++;
+      if (index >= total) return;
+      const job = jobs[index]!;
+      const entry = await writeOne({ path: job.path, kind: job.kind, key: job.key, apply: options.apply, render: job.render, merge: job.merge });
+      results[index] = entry;
+      done++;
+      options.onProgress?.({ index: done, total, key: entry.key, action: entry.action });
+    }
+  };
+
+  await Promise.all(Array.from({ length: workers }, worker));
+
+  for (const entry of results) if (entry) tally(report, entry);
   return report;
+}
+
+/** 影视 nfo 一共有多少个目标(剧级 + 集级 + 电影) —— 任务行的 total 用它。 */
+export function countTvNfoTargets(rt: Runtime, options: { libraryId?: number; keys?: string[] } = {}): number {
+  const shows = listTvShows(rt, { ...options, limit: Number.MAX_SAFE_INTEGER }).length;
+  const where = ["l.domain = 'video'", "m.number is not null", "m.season is not null", "m.episode is not null"];
+  const params: (number | string)[] = [];
+  if (options.libraryId !== undefined) {
+    where.push("m.library_id = ?");
+    params.push(options.libraryId);
+  }
+  if (options.keys && options.keys.length > 0) {
+    where.push(`m.number in (${options.keys.map(() => "?").join(", ")})`);
+    params.push(...options.keys.map((key) => key.toLowerCase()));
+  }
+  const episodes =
+    rt.db.get<{ c: number }>(
+      `select count(*) c from media_files m join libraries l on l.id = m.library_id where ${where.join(" and ")}`,
+      params,
+    )?.c ?? 0;
+  return shows + episodes;
 }
 
 export async function exportTvNfoTask(
@@ -212,7 +273,7 @@ export async function exportTvNfoTask(
   options: TvNfoOptions,
   signal: AbortSignal,
 ): Promise<{ task: TaskRow; result: TvNfoReport | null }> {
-  const total = listTvShows(rt, { ...options, limit: Number.MAX_SAFE_INTEGER }).length;
+  const total = countTvNfoTargets(rt, options);
   const task = createTask(rt, {
     type: "nfo.tv",
     payload: { libraryId: options.libraryId ?? null, apply: options.apply },
@@ -229,7 +290,8 @@ export async function exportTvNfoTask(
         options.onProgress?.(progress);
       },
     });
-    return { result, processed: result.shows, failed: result.errors };
+    // processed 用"写过的文件数", 不是"剧数" —— 82 部剧里有 1,466 集, 只报 5/82 等于没进度
+    return { result, processed: result.created + result.updated + result.skipped, failed: result.errors };
   });
 }
 

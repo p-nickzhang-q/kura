@@ -237,3 +237,79 @@ describe("带实体字符的影视 nfo 也必须收敛", () => {
     expect(result.content.match(/Sci-Fi &amp; Fantasy/g) ?? []).toHaveLength(1);
   });
 });
+
+describe("并发与进度口径", () => {
+  test("countTvNfoTargets 数的是文件, 不是剧数", async () => {
+    const { mkdtemp, mkdir, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { openRuntime } = await import("../src/runtime");
+    const { createLibrary } = await import("../src/db/rows");
+    const { scan } = await import("../src/tasks/scan");
+    const { bindDirectory } = await import("../src/tasks/bind");
+    const { countTvNfoTargets } = await import("../src/tasks/nfo-tv");
+
+    const root = await mkdtemp(join(tmpdir(), "kura-tvnfo-"));
+    const media = join(root, "media");
+    await mkdir(join(media, "某剧"), { recursive: true });
+    for (let i = 1; i <= 5; i++) await writeFile(join(media, "某剧", `某剧${String(i).padStart(2, "0")}.mp4`), "x");
+    const rt = await openRuntime({ dataDir: join(root, "data") });
+    try {
+      const library = createLibrary(rt.db, { name: "影视", root: media, domain: "video" });
+      await scan(rt, { library });
+      bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1" });
+
+      // 1 部剧 = 1 个 tvshow.nfo + 5 个集级 nfo
+      expect(countTvNfoTargets(rt, { libraryId: library.id })).toBe(6);
+    } finally {
+      rt.close();
+    }
+  });
+
+  test("进度按文件数走(1..N), 且并发不打乱清单顺序", async () => {
+    const { mkdtemp, mkdir, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join, basename } = await import("node:path");
+    const { openRuntime } = await import("../src/runtime");
+    const { createLibrary } = await import("../src/db/rows");
+    const { scan } = await import("../src/tasks/scan");
+    const { bindDirectory } = await import("../src/tasks/bind");
+    const { exportTvNfo } = await import("../src/tasks/nfo-tv");
+
+    const root = await mkdtemp(join(tmpdir(), "kura-tvnfo2-"));
+    const media = join(root, "media");
+    await mkdir(join(media, "某剧"), { recursive: true });
+    for (let i = 1; i <= 8; i++) await writeFile(join(media, "某剧", `某剧${String(i).padStart(2, "0")}.mp4`), "x");
+    const rt = await openRuntime({ dataDir: join(root, "data") });
+    try {
+      const library = createLibrary(rt.db, { name: "影视", root: media, domain: "video" });
+      await scan(rt, { library });
+      bindDirectory(rt, { libraryId: library.id, dir: join(media, "某剧"), key: "tmdb:tv:1" });
+
+      const indexes: number[] = [];
+      const report = await exportTvNfo(rt, {
+        libraryId: library.id,
+        apply: false,
+        onProgress: (progress) => indexes.push(progress.index),
+      });
+
+      // 1 个 tvshow + 8 集 = 9 个文件; 进度必须是 1..9, 不是"1 部剧"
+      expect(report.entries).toHaveLength(9);
+      expect(indexes).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      // 清单顺序 = 目标声明顺序(剧级在前, 集级按文件), 并发完成顺序不会打乱它
+      expect(report.entries.map((entry) => basename(entry.path))).toEqual([
+        "tvshow.nfo",
+        "某剧01.nfo",
+        "某剧02.nfo",
+        "某剧03.nfo",
+        "某剧04.nfo",
+        "某剧05.nfo",
+        "某剧06.nfo",
+        "某剧07.nfo",
+        "某剧08.nfo",
+      ]);
+    } finally {
+      rt.close();
+    }
+  });
+});
