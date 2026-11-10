@@ -705,7 +705,7 @@ const paletteActions = computed<PaletteAction[]>(() => {
     {
       id: "relocate",
       title: "换库根目录",
-      hint: "换了硬盘或目录改名: 改索引前缀, 保住绑定关系",
+      hint: "换了移动硬盘 / 目录改名; 只改索引路径, 不动视频",
       disabled: !hasLibrary,
       run: relocateLibrary,
     },
@@ -715,13 +715,6 @@ const paletteActions = computed<PaletteAction[]>(() => {
       hint: "文件被整理走了但索引还是旧路径; 改索引不动视频",
       disabled: libraries.value.length === 0,
       run: repairPaths,
-    },
-    {
-      id: "relocate",
-      title: "换库根目录",
-      hint: "换了移动硬盘 / 目录改名; 只改索引, 不动视频",
-      disabled: libraries.value.length === 0,
-      run: relocateLibrary,
     },
     { id: "plan", title: "整理预览", hint: noOrganize ? "该库设为只索引, 不会整理" : "先看清单再执行", disabled: !hasLibrary, run: async () => { await preview(); openView("plan"); } },
     { id: "todo", title: "去待办", hint: "还差多少、下一步做什么", disabled: false, run: () => { tab.value = "todo"; } },
