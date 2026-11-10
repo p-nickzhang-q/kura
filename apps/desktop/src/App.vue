@@ -30,6 +30,7 @@ const TASK_TYPE_LABEL: Record<string, string> = {
   "nfo.tv": "同步 NFO (影视)",
   "bind.suggest": "找绑定建议",
   "bind.many": "绑定并刮削",
+  organize: "整理",
 };
 
 const TASK_STATUS_LABEL: Record<string, string> = {
@@ -310,6 +311,8 @@ const suggestBusy = ref(false);
 const suggestProgress = ref<{ index: number; total: number; dir: string } | null>(null);
 /** 绑定并刮削的进度(同一个动作可能要几分钟)。 */
 const bindProgress = ref<{ index: number; total: number; dir: string } | null>(null);
+/** 整理的进度: 搬文件 + 写 nfo + 复制图片, 三项加起来动辄上千。 */
+const organizeProgress = ref<{ index: number; total: number; key: string } | null>(null);
 /** 打开中的剧的集列表 (影视条目才有)。 */
 const episodeView = ref<{ key: string; episodes: KuraEpisode[]; stats: KuraEpisodeStats } | null>(null);
 const unparsedCount = ref(0);
@@ -380,6 +383,7 @@ let unsubscribe: (() => void) | null = null;
 let unsubscribeProgress: (() => void) | null = null;
 let unsubscribeSuggest: (() => void) | null = null;
 let unsubscribeBind: (() => void) | null = null;
+let unsubscribeOrganize: (() => void) | null = null;
 let unsubscribeTranslate: (() => void) | null = null;
 let unsubscribeNfo: (() => void) | null = null;
 
@@ -401,6 +405,9 @@ onMounted(async () => {
   });
   unsubscribeNfo = window.kura.onNfoProgress((update) => {
     nfoProgress.value = { index: update.index, total: update.total, key: update.key };
+  });
+  unsubscribeOrganize = window.kura.onOrganizeProgress((update) => {
+    organizeProgress.value = update;
   });
   unsubscribeBind = window.kura.onBindProgress((update) => {
     bindProgress.value = update;
@@ -425,6 +432,7 @@ onUnmounted(() => {
   stopTasksPolling();
   window.removeEventListener("keydown", onKeydown);
   unsubscribeBind?.();
+  unsubscribeOrganize?.();
   unsubscribeSuggest?.();
   unsubscribe?.();
   unsubscribeProgress?.();
@@ -2000,8 +2008,14 @@ async function preview(): Promise<void> {
 
 async function apply(): Promise<void> {
   if (selectedId.value === null) return;
+  organizeProgress.value = { index: 0, total: 0, key: "准备中" };
+  runningLabel.value = "整理";
   const report = await run("整理", () => window.kura.organizeApply(selectedId.value!));
+  organizeProgress.value = null;
+  runningLabel.value = "";
   if (report) {
+    // 整理现在也是任务(Lee 任务页能看到跑到哪、失败在哪)
+    void refreshTasks();
     plan.value = report.plan;
     planWarnings.value = report.warnings ?? [];
     const failed = (report.applied ?? []).filter((result) => !result.ok);
@@ -3068,6 +3082,9 @@ async function testDmm(): Promise<void> {
             </p>
 
             <!-- 动作放在汇总下面并吸顶: 计划动辄几百行, 放尾巴等于每次都要滑到底 -->
+            <p v-if="organizeProgress" class="muted progress-line">
+              整理中 {{ organizeProgress.index }}/{{ organizeProgress.total || "?" }} · {{ organizeProgress.key }}
+            </p>
             <div class="apply">
               <template v-if="!confirmApply">
                 <button
@@ -5514,6 +5531,11 @@ td.pick {
 }
 
 /* 整理动作条: 吸在预览页顶部, 计划列表再长也不用滚回去找按钮 */
+.progress-line {
+  margin: 8px 0 0;
+  font-size: var(--fs-label);
+}
+
 .apply {
   position: sticky;
   top: 0;

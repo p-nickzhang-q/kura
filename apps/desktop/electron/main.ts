@@ -50,6 +50,7 @@ import {
   bindManyTask,
   countPending,
   openAliasEngine,
+  organizeTask,
   repairIndexPaths,
   exportTvNfo,
   exportTvNfoTask,
@@ -1320,12 +1321,18 @@ function registerIpc(): void {
       : organizeVideo(mustRuntime(), { library });
   });
 
+  // 真搬运走任务: 搬几百个文件 + 写上千份 nfo 要好几分钟, 这一步又会**移动用户文件**,
+  // 不给进度、不能停、关掉窗口就不知道跑到哪, 说不过去。
   ipcMain.handle("organize:apply", (_event, input: { libraryId: number }) =>
-    exclusive("整理", () => {
-      const library = mustLibrary(input.libraryId);
-      return library.domain === "av"
-        ? organize(mustRuntime(), { library, apply: true })
-        : organizeVideo(mustRuntime(), { library, apply: true });
+    exclusive("整理", async (signal) => {
+      const rt = mustRuntime();
+      const { task, report } = await organizeTask(
+        rt,
+        { libraryId: input.libraryId, apply: true },
+        signal,
+        (progress) => win?.webContents.send("organize:progress", progress),
+      );
+      return { ...(report ?? {}), taskId: task.id };
     }),
   );
 }

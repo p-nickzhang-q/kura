@@ -9,6 +9,10 @@ export interface OrganizeOptions {
   library: Library;
   /** 默认 false —— 见 ADR 0002: 整理是唯一不可逆的动作。 */
   apply?: boolean;
+  /** 停止信号(只对真搬运有意义: 已经搬完的保持原样)。 */
+  signal?: AbortSignal;
+  /** 进度: 一个计划条目一次。 */
+  onProgress?: (progress: { index: number; total: number; action: "move" | "write-nfo" | "copy-image" | "skip"; path: string }) => void;
 }
 
 export interface OrganizeReport {
@@ -72,7 +76,7 @@ export async function organize(rt: Runtime, opts: OrganizeOptions): Promise<Orga
   }
 
   const plan = await buildPlan(opts.library, inputs);
-  const applied = apply ? await applyPlan(plan) : null;
+  const applied = apply ? await applyPlan(plan, { signal: opts.signal, onProgress: opts.onProgress }) : null;
 
   // 移动成功后必须同步索引, 否则下一次扫描会把"同一文件的旧路径"判成 removed + added。
   if (applied) {

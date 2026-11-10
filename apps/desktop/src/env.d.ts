@@ -329,6 +329,8 @@ interface KuraBridge {
     cancelled?: boolean;
   }>;
   onSuggestProgress(callback: (update: { index: number; total: number; dir: string }) => void): () => void;
+  /** 整理的进度 (搬文件 + 写 nfo + 复制图片, 一条任务行)。 */
+  onOrganizeProgress(callback: (update: { index: number; total: number; key: string }) => void): () => void;
   /** 绑定并刮削的进度 (一条任务行, 任务页能看到历史)。 */
   onBindProgress(callback: (update: { index: number; total: number; dir: string }) => void): () => void;
   bindMany(

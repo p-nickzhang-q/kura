@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld("kura", {
       ...(kind ? { kind } : {}),
       ...(dirs && dirs.length > 0 ? { dirs } : {}),
     }),
+  onOrganizeProgress: (callback) => {
+    const listener = (_event, update) => callback(update);
+    ipcRenderer.on("organize:progress", listener);
+    return () => ipcRenderer.removeListener("organize:progress", listener);
+  },
   onBindProgress: (callback) => {
     const listener = (_event, update) => callback(update);
     ipcRenderer.on("bind:progress", listener);

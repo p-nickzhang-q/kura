@@ -232,11 +232,23 @@ export interface ApplyResult {
 }
 
 /** 只有这里会动用户的磁盘。默认不调用它 —— Plan 默认 dry-run。 */
-export async function applyPlan(plan: Plan): Promise<ApplyResult[]> {
+export interface ApplyPlanOptions {
+  /** 停止信号: 整理要搬几百个文件, 中途能停(已经搬完的保持原样)。 */
+  signal?: AbortSignal;
+  /** 进度: 一个条目一次。任务行靠它显示跑到第几个。 */
+  onProgress?: (progress: { index: number; total: number; action: PlanEntry["action"]; path: string }) => void;
+}
+
+export async function applyPlan(plan: Plan, options: ApplyPlanOptions = {}): Promise<ApplyResult[]> {
   const results: ApplyResult[] = [];
   const roots = new Set<string>();
+  const total = plan.entries.length;
+  let index = 0;
 
   for (const entry of plan.entries) {
+    if (options.signal?.aborted) break;
+    index++;
+    options.onProgress?.({ index, total, action: entry.action, path: entry.to ?? entry.from ?? "" });
     try {
       if (entry.action === "skip") {
         results.push({ entry, ok: true });
