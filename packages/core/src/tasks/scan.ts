@@ -146,10 +146,10 @@ async function scanAv(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
       // 解析本身是纯函数、不花 IO, 所以每次都重算, 不跟着 size/mtime 一起跳过。
       // 这样解析器升级后, 旧库里"以前认不出"的文件重扫一次就能自愈。
       //
-      // 先看文件名, 认不出再拿整条路径兜底: 目录名里的数字常常不是番号
-      // (临时目录 kura-scanvideo-wtyk17 会被认成 WTYK-17, 真实世界里的 `4K-2024`
-      // 同理)。文件名里没有时仍然靠路径 —— 目录名带番号、文件名是 video.mp4 的库很常见。
-      const number = extractNumber(basename(file.path)) ?? extractNumber(file.path);
+      // 先看文件名, 认不出再拿**相对库根的路径**兜底: 目录名带番号、文件名是 video.mp4
+      // 的库很常见, 但库根以外的东西不该参与识别 —— 盘符、用户名、临时目录名里的
+      // `abc123` / `kura-scanvideo-wtyk17` 都会被认成番号(后者是真实踩过的)。
+      const number = extractNumber(basename(file.path)) ?? extractNumber(relativeInLibrary(library.root, file.path));
       const phase = parseFileInfo(file.path);
       if (!number) counts.unparsed++;
 
@@ -544,4 +544,15 @@ async function walk(dir: string, out: Found[], auxiliary: { count: number }): Pr
       out.push({ path, size: info.size, mtimeMs: Math.round(info.mtimeMs) });
     }
   }
+}
+
+/**
+ * 相对库根的路径, 用于番号识别的兜底。
+ *
+ * 不能直接 `path.relative()`: Windows 上库根与文件路径的大小写可能不一致, 那时
+ * `relative` 会返回绝对路径, 等于把库根又算了进去。这里只做前缀裁剪。
+ */
+function relativeInLibrary(root: string, path: string): string {
+  if (!path.startsWith(root)) return path;
+  return path.slice(root.length).replace(/^[\\/]+/, "");
 }

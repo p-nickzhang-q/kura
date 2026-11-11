@@ -426,3 +426,40 @@ describe("影视身份走番号刮削路径", () => {
     expect(routeFor(registry, "" as never)).toEqual([]);
   });
 });
+
+describe("番号兜底只看库根以内", () => {
+  test("库根上面的盘符/临时目录名再像番号也不算", async () => {
+    // 复现过的真实场景: 临时目录名 `kura-scanvideo-wtyk17` 被认成 WTYK-17,
+    // 于是整目录的文件都被贴上同一个假番号, 而它们其实一个都认不出来。
+    const rt = await openRuntime({ dataDir });
+    try {
+      // 故意把库根建在一个"像番号"的目录里
+      const weirdRoot = join(root, "abc123");
+      await mkdir(join(weirdRoot, "某部片"), { recursive: true });
+      await writeFile(join(weirdRoot, "某部片", "视频.mp4"), "v", "utf8");
+      const library = createLibrary(rt.db, { name: "怪路径", root: weirdRoot });
+
+      const report = await scan(rt, { library });
+      expect(report.counts.unparsed).toBe(1);
+      expect(rt.db.get("select 1 from media_files where number is not null")).toBeFalsy();
+    } finally {
+      rt.close();
+    }
+  });
+
+  test("库根**以内**的目录名带番号仍然能认出来", async () => {
+    const rt = await openRuntime({ dataDir });
+    try {
+      const root2 = join(root, "media2");
+      await mkdir(join(root2, "ABC-123"), { recursive: true });
+      await writeFile(join(root2, "ABC-123", "video.mp4"), "v", "utf8");
+      const library = createLibrary(rt.db, { name: "目录带番号", root: root2 });
+
+      await scan(rt, { library });
+      const row = rt.db.get<{ number: string }>("select number from media_files limit 1");
+      expect(row?.number).toBe("ABC-123");
+    } finally {
+      rt.close();
+    }
+  });
+});
