@@ -39,7 +39,7 @@ export interface TodoPlans {
    * 盘上有带着 TMDB id 的 nfo、但库里还没绑定 —— 换电脑/换盘的典型状态。
    * 非 0 说明"不用重新刮, 点一下就能恢复"。
    */
-  nfoRecover: { shows: number; movies: number; files: number; unbound: number } | null;
+  nfoRecover: { shows: number; movies: number; files: number; unbound: number; locals: number } | null;
 }
 
 /** 待办数字里的"库范围": 侧栏选中哪个库就只看哪个, 没选就是全部。 */
@@ -119,6 +119,7 @@ export async function todoPlans(rt: Runtime, options: { libraryId?: number } = {
     let movies = 0;
     let files = 0;
     let unbound = 0;
+    let locals = 0;
     let needsScan = false;
     for (const library of scopeLibraries(rt, options.libraryId)) {
       if (library.domain !== "video") continue;
@@ -127,9 +128,10 @@ export async function todoPlans(rt: Runtime, options: { libraryId?: number } = {
       movies += report.movies;
       files += report.files;
       unbound += report.unbound;
+      locals += report.locals;
       needsScan = needsScan || report.needsScan;
     }
-    nfoRecover = { shows, movies, files, unbound: needsScan ? 0 : unbound };
+    nfoRecover = { shows, movies, files, locals, unbound: needsScan ? 0 : unbound };
   } catch {
     nfoRecover = null;
   }

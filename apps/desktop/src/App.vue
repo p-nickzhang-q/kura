@@ -584,7 +584,7 @@ const todoRows = computed<TodoRow[]>(() => {
 
   // 盘上的 nfo 能直接给出身份时, 这条比什么都优先: 点一下就把"未识别"和"待刮削"一起消掉。
   const recover = plan?.nfoRecover ?? null;
-  const recoverable = recover ? recover.shows + recover.movies : 0;
+  const recoverable = recover ? recover.shows + recover.movies + (recover.locals ?? 0) : 0;
   // 有未绑定文件就亮出这一行, 哪怕一条都恢复不了 —— 否则界面是空白,
   // 人分不清"盘上没有可用 nfo"和"这个功能坏了"。
   if (video && recover && (recoverable > 0 || recover.needsScan || recover.unbound > 0)) {
@@ -1228,10 +1228,12 @@ async function recoverNfo(): Promise<void> {
     invalidateTodoPlan();
     await refreshAll();
     const episodes = result.done.reduce((sum, entry) => sum + entry.episodes, 0);
+    const locals = result.done.filter((entry) => entry.local).length;
     note.value =
       `从 nfo 恢复了 ${result.shows} 个剧 + ${result.movies} 部电影 · ` +
       `绑定 ${result.files} 个文件${episodes ? ` · 补回 ${episodes} 集名` : ""}` +
-      (result.noTmdbId.length ? ` · ${result.noTmdbId.length} 个 nfo 没带 TMDB id` : "");
+      (locals ? ` · 其中 ${locals} 个按标题加成本地条目` : "") +
+      (result.noTmdbId.length ? ` · ${result.noTmdbId.length} 个 nfo 连标题都没有` : "");
   } catch (err) {
     errors.value.push(`从 nfo 恢复: ${err instanceof Error ? err.message : String(err)}`);
   }

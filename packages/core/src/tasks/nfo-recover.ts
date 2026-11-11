@@ -7,6 +7,7 @@ import type { Metadata } from "../domain/types";
 import { AppError, EXIT } from "../exit";
 import { metadataColumns, rowToMetadata, type ItemRow } from "../db/rows";
 import { setItemActors } from "../db/actors";
+import { bindLocalDirectory } from "./bind";
 import { nfoPathFor } from "../domain/nfo";
 import { showDirOf } from "../domain/episodes";
 import { parseTvNfo, type ParsedTvNfo } from "../domain/nfo-tv-read";
@@ -34,6 +35,8 @@ export interface NfoRecoverEntry {
   title: string | null;
   /** false = 库里这条已经有条目了, 这次只补空字段。 */
   created: boolean;
+  /** true = 没有 TMDB 身份, 按 nfo 里的标题加成本地条目(UGC)。 */
+  local: boolean;
   /** 集级 nfo 里读回来多少集名/简介。 */
   episodes: number;
 }
@@ -57,6 +60,8 @@ export interface NfoRecoverReport {
   /** 会(或已经)绑定上的文件总数。 */
   files: number;
   done: NfoRecoverEntry[];
+  /** 其中按 nfo 标题加成本地条目(UGC)的目录数。 */
+  locals: number;
   /**
    * 有 nfo 但读不出身份(TMDB id 也没有本地 id)的目录。
    *
@@ -118,6 +123,10 @@ export async function recoverFromNfo(
   // 第一步: 分组。剧 = 所在目录, 电影 = 那个文件本身。
   const tvDirs = new Map<string, { nfo: ParsedTvNfo; paths: string[] }>();
   const movieFiles: Array<{ path: string; nfo: ParsedTvNfo }> = [];
+  // nfo 里有标题、但没有身份 —— 这类只能是本地条目(UGC, 比如 B站投稿、讲座、综艺)。
+  // 它们没有 TMDB 可刮, 但标题就是明确线索, 而且 `local:` 是独立命名空间, 建错了随时能改。
+  const untitledDirs = new Map<string, { title: string | null; paths: string[] }>();
+  const untitledMovies = new Map<string, { title: string | null; path: string }>();
   const noTmdbId = new Set<string>();
 
   // 剧目录是文件的**祖先**, 不一定是父目录: 整理之后文件在 `<剧>/Season 01/` 里,
@@ -135,7 +144,14 @@ export async function recoverFromNfo(
 
     if (dirNfo?.root === "tvshow") {
       if (!dirNfo.tmdbId && !dirNfo.kuraId) {
-        noTmdbId.add(dir);
+        // 有标题就能加成本地条目; 连标题都没有的才是真的没线索
+        if (dirNfo.title) {
+          const group = untitledDirs.get(dir) ?? { title: dirNfo.title, paths: [] };
+          group.paths.push(file.path);
+          untitledDirs.set(dir, group);
+        } else {
+          noTmdbId.add(dir);
+        }
         continue;
       }
       const group = tvDirs.get(dir) ?? { nfo: dirNfo, paths: [] };
@@ -148,7 +164,8 @@ export async function recoverFromNfo(
     const own = await readCached(nfoPathFor(file.path));
     if (own?.root === "movie") {
       if (!own.tmdbId && !own.kuraId) {
-        noTmdbId.add(nfoPathFor(file.path));
+        if (own.title) untitledMovies.set(file.path, { title: own.title, path: file.path });
+        else noTmdbId.add(nfoPathFor(file.path));
         continue;
       }
       movieFiles.push({ path: file.path, nfo: own });
@@ -163,8 +180,13 @@ export async function recoverFromNfo(
     unbound: files.length,
     shows: tvDirs.size,
     movies: movieFiles.length,
-    files: [...tvDirs.values()].reduce((sum, group) => sum + group.paths.length, 0) + movieFiles.length,
+    files:
+      [...tvDirs.values()].reduce((sum, group) => sum + group.paths.length, 0) +
+      [...untitledDirs.values()].reduce((sum, group) => sum + group.paths.length, 0) +
+      movieFiles.length +
+      untitledMovies.size,
     done: [],
+    locals: untitledDirs.size + untitledMovies.size,
     noTmdbId: [...noTmdbId].sort(),
   };
 
@@ -197,6 +219,49 @@ export async function recoverFromNfo(
   } catch (err) {
     rt.db.exec("rollback");
     throw err;
+  }
+
+  // 没有身份、但有标题的: 按标题加成本地条目(UGC)。
+  // 复用 bindLocalDirectory 而不是自己拼 key —— 那边已经有标题推导、key 去重、
+  // "同一目录重复加入就复用"这些规则, 复制一份迟早对不上。
+  for (const [dir, group] of untitledDirs) {
+    const result = bindLocalDirectory(rt, {
+      libraryId: library.id,
+      dir,
+      paths: group.paths,
+      ...(group.title ? { title: group.title } : {}),
+      type: "tv",
+    });
+    report.done.push({
+      kind: "tv",
+      key: result.key,
+      target: dir,
+      files: result.bound,
+      title: result.title,
+      created: true,
+      local: true,
+      episodes: 0,
+    });
+  }
+  for (const movie of untitledMovies.values()) {
+    const dir = parentOf(movie.path);
+    const result = bindLocalDirectory(rt, {
+      libraryId: library.id,
+      dir,
+      paths: [movie.path],
+      ...(movie.title ? { title: movie.title } : {}),
+      type: "movie",
+    });
+    report.done.push({
+      kind: "movie",
+      key: result.key,
+      target: movie.path,
+      files: result.bound,
+      title: result.title,
+      created: true,
+      local: true,
+      episodes: 0,
+    });
   }
 
   return report;
@@ -273,6 +338,7 @@ async function bindOne(
     files: input.paths.length,
     title: input.nfo.title ?? input.nfo.originalTitle ?? null,
     created: !existingBefore,
+    local: input.key.startsWith("local:"),
     episodes: episodeCount,
   };
 }

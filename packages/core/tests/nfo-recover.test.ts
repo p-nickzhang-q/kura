@@ -228,7 +228,7 @@ describe("从 nfo 恢复整库", () => {
     await rt.close();
   });
 
-  test("nfo 里没有 tmdb id → 列进 noTmdbId, 不猜身份", async () => {
+  test("nfo 里没有身份 → 不猜 TMDB, 而是按标题加成本地条目", async () => {
     const dataDir = await scratch();
     const root = join(dataDir, "影视");
     const showDir = join(root, "不知道叫啥");
@@ -244,9 +244,16 @@ describe("从 nfo 恢复整库", () => {
     ]);
 
     const report = await recoverFromNfo(rt, { libraryId: library.id, apply: true });
+    // 没有 TMDB id 就不猜 TMDB 身份 —— 但标题是明确线索, 加成本地条目(UGC)
     expect(report.shows).toBe(0);
-    expect(report.noTmdbId.length).toBe(1);
-    expect(rt.db.get("select 1 from items")).toBeFalsy();
+    expect(report.locals).toBe(1);
+    const row = rt.db.get<{ number: string; content_type: string; title: string }>(
+      "select number, content_type, title from items",
+    )!;
+    expect(row.number.startsWith("local:")).toBe(true);
+    expect(row.number.startsWith("tmdb:")).toBe(false);
+    expect(row.content_type).toBe("ugc");
+    expect(row.title).toBe("不知道叫啥");
     await rt.close();
   });
 
@@ -372,5 +379,68 @@ describe("本地条目(UGC)的身份也要能读回来", () => {
 
     const movie = renderMovieNfo({ title: "本地片", kuraId: "local:本地片" });
     expect(movie).toContain('<uniqueid type="kura">local:本地片</uniqueid>');
+  });
+});
+
+describe("nfo 只有标题、没有身份 → 按标题加成本地条目", () => {
+  test("B站那种 tvshow.nfo（只有 title）也能恢复, 不留在未识别", async () => {
+    const dataDir = await scratch();
+    const root = join(dataDir, "视频");
+    const dir = join(root, "B站");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "tvshow.nfo"), "<tvshow><title>食贫道充电视频</title></tvshow>");
+    for (const name of ["投稿01.mp4", "投稿02.mp4", "投稿03.mp4"]) await writeFile(join(dir, name), "x");
+
+    const rt = await openRuntime({ dataDir });
+    const library = createLibrary(rt.db, { name: "视频", root, domain: "video" });
+    for (const name of ["投稿01.mp4", "投稿02.mp4", "投稿03.mp4"]) {
+      rt.db.run("insert into media_files (path, library_id, number, size, mtime_ms) values (?, ?, null, 1, 1)", [
+        join(dir, name),
+        library.id,
+      ]);
+    }
+
+    const dry = await recoverFromNfo(rt, { libraryId: library.id });
+    expect(dry.locals).toBe(1);
+    expect(dry.files).toBe(3);
+    expect(dry.noTmdbId).toEqual([]);
+
+    const applied = await recoverFromNfo(rt, { libraryId: library.id, apply: true });
+    expect(applied.done[0]!.local).toBe(true);
+    expect(applied.done[0]!.key.startsWith("local:")).toBe(true);
+
+    const row = rt.db.get<{ content_type: string; title: string; domain: string }>(
+      "select content_type, title, domain from items",
+    )!;
+    expect(row.content_type).toBe("ugc");
+    expect(row.title).toBe("食贫道充电视频");
+    expect(row.domain).toBe("tv");
+    expect(rt.db.get<{ n: number }>("select count(*) as n from media_files where number is null")!.n).toBe(0);
+
+    // 再跑一次: 文件都绑上了, 没有新东西
+    expect((await recoverFromNfo(rt, { libraryId: library.id })).files).toBe(0);
+    await rt.close();
+  });
+
+  test("连 title 都没有才进 noTmdbId", async () => {
+    const dataDir = await scratch();
+    const root = join(dataDir, "视频");
+    const dir = join(root, "空壳");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "tvshow.nfo"), "<tvshow></tvshow>");
+    await writeFile(join(dir, "a.mp4"), "x");
+
+    const rt = await openRuntime({ dataDir });
+    const library = createLibrary(rt.db, { name: "视频", root, domain: "video" });
+    rt.db.run("insert into media_files (path, library_id, number, size, mtime_ms) values (?, ?, null, 1, 1)", [
+      join(dir, "a.mp4"),
+      library.id,
+    ]);
+
+    const report = await recoverFromNfo(rt, { libraryId: library.id, apply: true });
+    expect(report.locals).toBe(0);
+    expect(report.noTmdbId.length).toBe(1);
+    expect(rt.db.get("select 1 from items")).toBeFalsy();
+    await rt.close();
   });
 });

@@ -723,11 +723,15 @@ function registerIpc(): void {
       buttons: ["恢复", "取消"],
       defaultId: 0,
       cancelId: 1,
-      message: `从 nfo 恢复 ${dry.shows} 个剧 + ${dry.movies} 部电影?`,
+      message: `从 nfo 恢复 ${dry.shows + dry.locals} 个剧 + ${dry.movies} 部电影?`,
       detail:
         `${dry.files} 个文件会绑定到条目上, 元数据取自盘上的 nfo, 只补库里还空着的字段 —— ` +
         `已经刮过的不动, 也不会联网。` +
-        (dry.noTmdbId.length ? `\n\n另有 ${dry.noTmdbId.length} 个 nfo 里没有 TMDB id, 跳过。` : ""),
+        (dry.locals > 0
+          ? `\n\n其中 ${dry.locals} 个 nfo 只有标题没有 TMDB id (本地内容, 比如 B站投稿/讲座), ` +
+            `会按标题加成本地条目 —— 之后可以随时改标题或删掉。`
+          : "") +
+        (dry.noTmdbId.length ? `\n\n另有 ${dry.noTmdbId.length} 个 nfo 连标题都没有, 跳过。` : ""),
     });
     if (answer.response !== 0) return { ...dry, confirmed: false };
     return { ...(await recoverFromNfo(rt, { libraryId: input.libraryId, apply: true })), confirmed: true };
