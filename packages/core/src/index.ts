@@ -78,6 +78,7 @@ export { PLOT_FALLBACK_SOURCES } from "./sources";
 export type { SearchCandidate } from "./sources/javbus";
 export type { DmmEnv, DmmItem, DmmResponse } from "./sources/dmm";
 export type { DefaultSourcesOptions, Registry, Source, SourceConfig, SourceContext } from "./sources";
+export { checkUpdate, compareVersion, UPDATE_REPO, type UpdateCheck } from "./update";
 export { HttpClient } from "./net/http";
 export type { FetchInit, FetchLike, HttpClientOptions, RequestOptions } from "./net/http";
 

@@ -53,6 +53,7 @@ import {
   organizeTask,
   repairIndexPaths,
   relocateLibrary,
+  checkUpdate,
   exportTvNfo,
   exportTvNfoTask,
   todoCounts,
@@ -555,6 +556,14 @@ function registerIpc(): void {
 
   // 顺带告诉界面"库根还在不在": 移动硬盘拔了/换了盘时, 侧栏能立刻显示出来,
   // 而不是等人点了扫描才看到"文件全消失"。
+  /**
+   * 检查更新: 只查 GitHub 的最新 release, 不下载、不安装。
+   *
+   * 产物未签名, 自动更新在 Windows 上体验很差(每次装都要点"仍要运行"), 所以这里只
+   * 回答问题"线上有没有比我新的", 下载由人点发布页。**只在用户点按钮时调用**。
+   */
+  ipcMain.handle("update:check", () => checkUpdate({ current: app.getVersion(), fetch: browserFetch }));
+
   ipcMain.handle("library:list", () =>
     listLibraries(mustRuntime().db).map((library) => ({ ...library, rootMissing: !existsSync(library.root) })),
   );

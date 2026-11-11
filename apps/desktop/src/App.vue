@@ -355,6 +355,16 @@ const nfoHint = ref(0);
 
 /* ---- 待办页 ---- */
 const todoCounts = ref<KuraTodoCounts | null>(null);
+/** 检查更新的结果; null = 还没点过。只在用户点按钮时才有值, 不做启动自动检查。 */
+const updateCheck = ref<{
+  current: string;
+  latest: string | null;
+  newer: boolean;
+  url: string | null;
+  publishedAt: string | null;
+  error: string | null;
+} | null>(null);
+const updateChecking = ref(false);
 const todoPlan = ref<KuraTodoPlans | null>(null);
 const todoLoading = ref(false);
 /** 快速切库时防止旧库的数字晚一步写回来。 */
@@ -2097,6 +2107,32 @@ async function apply(): Promise<void> {
 
 /* ---------- 设置 ---------- */
 
+/**
+ * 查一下有没有新版。
+ *
+ * 只查不下载: 产物未签名, 自动更新在 Windows 上每次都要点"仍要运行", 不如把人送到
+ * 发布页。失败也照常显示原因 —— 这条链路在部分地区经常不通, 得让人知道是网络问题,
+ * 而不是以为自己已经是最新版。
+ */
+async function checkForUpdate(): Promise<void> {
+  if (updateChecking.value) return;
+  updateChecking.value = true;
+  try {
+    updateCheck.value = await window.kura.checkUpdate();
+  } catch (err) {
+    updateCheck.value = {
+      current: info.value?.version ?? "",
+      latest: null,
+      newer: false,
+      url: null,
+      publishedAt: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    updateChecking.value = false;
+  }
+}
+
 async function saveConfig(): Promise<void> {
   const patch: {
     apiId?: string;
@@ -3326,6 +3362,27 @@ async function testDmm(): Promise<void> {
                 · 已翻译 {{ info.translation.translated }} 条 · 待翻译 {{ info.translation.pending }} 条
               </template>
             </span>
+          </div>
+
+          <h2>版本</h2>
+          <p class="muted">
+            当前 Kura v{{ info?.version ?? "?" }}。只查线上有没有更新的版本, 不会自动下载安装 ——
+            发布包没有代码签名, 自动更新在 Windows 上每次都要点「仍要运行」, 不如把你送到发布页。
+          </p>
+          <div class="row">
+            <button type="button" :disabled="updateChecking" @click="checkForUpdate">
+              {{ updateChecking ? "正在查…" : "检查更新" }}
+            </button>
+            <span v-if="updateCheck?.error" class="muted">查不到: {{ updateCheck.error }}</span>
+            <span v-else-if="updateCheck?.newer" class="note">
+              有新版本 v{{ updateCheck.latest }}
+              <template v-if="updateCheck.publishedAt">（{{ updateCheck.publishedAt.slice(0, 10) }} 发布）</template>
+            </span>
+            <span v-else-if="updateCheck" class="muted">已是最新 (v{{ updateCheck.latest ?? updateCheck.current }})</span>
+          </div>
+          <div v-if="updateCheck?.newer && updateCheck.url" class="row">
+            <!-- 走 window-open → 主进程 setWindowOpenHandler 转给系统浏览器 -->
+            <a :href="updateCheck.url" target="_blank" rel="noreferrer">打开发布页</a>
           </div>
 
           <h2>数据源</h2>

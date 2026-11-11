@@ -467,6 +467,18 @@ interface KuraBridge {
     apply?: boolean,
   ): Promise<{ applied: boolean; changes: { number: string; from: string; to: string; hasTitle: boolean }[] }>;
   openDataDir(): Promise<{ dir: string }>;
+  /**
+   * 查 GitHub 最新 release 看有没有新版。只查不下载 —— 产物未签名,
+   * 自动更新在 Windows 上每次都要点「仍要运行」, 所以下载交给人点发布页。
+   */
+  checkUpdate(): Promise<{
+    current: string;
+    latest: string | null;
+    newer: boolean;
+    url: string | null;
+    publishedAt: string | null;
+    error: string | null;
+  }>;
   tasks(limit?: number): Promise<KuraTask[]>;
   stopTask(id: number): Promise<{ stopped: boolean; reason: string | null }>;
   retryTask(id: number, onlyFailed?: boolean): Promise<{ taskId: number; type: string; count: number }>;
