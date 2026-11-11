@@ -76,6 +76,11 @@ export interface ScanReport {
      * 改它等于换一条来源线, 应该由人来决定。
      */
     retyped: number;
+    /**
+     * 读不了而被跳过的目录/文件(权限不足、delete-pending、被杀软锁住)。
+     * 有它就说明这次扫描**不完整** —— 别把"少了几个文件"当成"它们被删了"。
+     */
+    skippedDirs?: string[];
   };
   durationMs: number;
 }
@@ -120,11 +125,12 @@ async function scanAv(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
   assertLibraryMounted(library);
   const bound = bindVolume(rt.db, library);
 
-  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, auxiliary: 0, nfoPending: 0, retyped: 0, shows: 0 };
+  const counts: ScanReport["counts"] = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, auxiliary: 0, nfoPending: 0, retyped: 0, shows: 0 };
   const found: Found[] = [];
-  const auxiliary = { count: 0 };
+  const auxiliary: { count: number; skippedDirs?: string[] } = { count: 0 };
   await walk(library.root, found, auxiliary);
   counts.auxiliary = auxiliary.count;
+  if (auxiliary.skippedDirs?.length) counts.skippedDirs = auxiliary.skippedDirs;
 
   const known = new Map<string, MediaFileRow>();
   for (const row of rt.db.all<MediaFileRow>(
@@ -278,11 +284,12 @@ async function scanVideo(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
   assertLibraryMounted(library);
   bindVolume(rt.db, library);
 
-  const counts = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, auxiliary: 0, nfoPending: 0, retyped: 0, shows: 0 };
+  const counts: ScanReport["counts"] = { added: 0, updated: 0, unchanged: 0, removed: 0, unparsed: 0, auxiliary: 0, nfoPending: 0, retyped: 0, shows: 0 };
   const found: Found[] = [];
-  const auxiliary = { count: 0 };
+  const auxiliary: { count: number; skippedDirs?: string[] } = { count: 0 };
   await walk(library.root, found, auxiliary);
   counts.auxiliary = auxiliary.count;
+  if (auxiliary.skippedDirs?.length) counts.skippedDirs = auxiliary.skippedDirs;
 
   const known = new Map<string, MediaFileRow>();
   for (const row of rt.db.all<MediaFileRow>(
@@ -537,8 +544,27 @@ function parseFieldSources(raw: string | null | undefined): Record<string, strin
   }
 }
 
-async function walk(dir: string, out: Found[], auxiliary: { count: number }): Promise<void> {
-  const entries = await readdir(dir, { withFileTypes: true });
+/**
+ * 遍历库根, 收集影片文件。
+ *
+ * 单个子目录读不了不该让整库扫描失败: 权限不足、Windows 的 delete-pending 状态
+ * (删掉但句柄还没释放)、被杀软锁住的目录都是常态。真机事故: 一个 delete-pending 的
+ * `movie\2015-4-5` 让整个 `scan` 直接 INTERNAL, 用户看到的是"扫描坏了"。
+ * 跳过并计数, 扫完在报告里告诉人跳过几个。
+ */
+async function walk(dir: string, out: Found[], auxiliary: { count: number; skippedDirs?: string[] }): Promise<void> {
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // 目录刚好消失(ENOENT)是扫描的正常竞争, 不算"跳过"
+    if (code !== "ENOENT") {
+      auxiliary.skippedDirs ??= [];
+      auxiliary.skippedDirs.push(dir);
+    }
+    return;
+  }
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     const path = join(dir, entry.name);
@@ -552,7 +578,12 @@ async function walk(dir: string, out: Found[], auxiliary: { count: number }): Pr
         auxiliary.count++;
         continue;
       }
-      const info = await stat(path);
+      const info = await stat(path).catch(() => null);
+      if (!info) {
+        auxiliary.skippedDirs ??= [];
+        auxiliary.skippedDirs.push(path);
+        continue;
+      }
       out.push({ path, size: info.size, mtimeMs: Math.round(info.mtimeMs) });
     }
   }
