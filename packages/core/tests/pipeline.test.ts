@@ -485,3 +485,28 @@ describe("待刮削: 两个域对 nfo 来源的判断不同", () => {
     await rt.close();
   });
 });
+
+describe("扫描自愈: 解析器升级后 phase 也要跟着更新", () => {
+  test("文件没变(size/mtime 相同), 但 phase 变了 → 仍然写回", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "kura-phase-"));
+    const media = join(dataDir, "media");
+    await mkdir(media, { recursive: true });
+    const file = join(media, "你是我的命运CD2.mkv");
+    await writeFile(file, "x");
+
+    const rt = await openRuntime({ dataDir });
+    const library = createLibrary(rt.db, { name: "库", root: media, domain: "video" });
+    await scan(rt, { library });
+
+    // 模拟"旧解析器留下的 phase": cd 没认出来
+    rt.db.run("update media_files set phase = ? where path = ?", [JSON.stringify({ cd: null, part: null, hasSubtitle: false, mosaic: null, definition: null }), file]);
+    const before = rt.db.get<{ phase: string }>("select phase from media_files where path = ?", [file])!;
+    expect(JSON.parse(before.phase).cd).toBeNull();
+
+    // 再扫一次: 文件一个字节都没变, 但解析结果不同了
+    await scan(rt, { library });
+    const after = rt.db.get<{ phase: string }>("select phase from media_files where path = ?", [file])!;
+    expect(JSON.parse(after.phase).cd).toBe(2);
+    await rt.close();
+  });
+});

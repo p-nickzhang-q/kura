@@ -167,8 +167,13 @@ async function scanAv(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
         if (retypeUntouched(rt, number, detected)) counts.retyped++;
       }
 
+      // 解析结果也要跟着自愈: 解析器升级后(比如分碟标记以前认不出 `你是我的命运CD2.mkv`),
+      // 光看 size/mtime 会把这一行当"没变"跳过, phase 永远是旧的 —— 结果是整理计划
+      // 永远拿不到 cd 号。所以 phase 变了也算更新。
+      const phaseJson = stringify(phase);
+      const phaseChanged = (previous?.phase ?? null) !== phaseJson;
       const untouched = previous && previous.size === file.size && previous.mtime_ms === file.mtimeMs;
-      if (untouched && previous.number === number) {
+      if (untouched && previous.number === number && !phaseChanged) {
         counts.unchanged++;
         emit({ type: "file.unchanged", path: file.path, number });
         continue;
@@ -194,7 +199,7 @@ async function scanAv(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
            on conflict(path) do update set library_id = excluded.library_id, number = excluded.number,
              size = excluded.size, mtime_ms = excluded.mtime_ms, sha256 = excluded.sha256,
              phase = excluded.phase, seen_at = excluded.seen_at`,
-          [file.path, library.id, number, file.size, file.mtimeMs, sha256, stringify(phase)],
+          [file.path, library.id, number, file.size, file.mtimeMs, sha256, phaseJson],
         );
       }
       emit({ type, path: file.path, number });
@@ -370,12 +375,16 @@ async function scanVideo(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
         season = previous?.season ?? episodeInfo?.season ?? inferredInfo?.season ?? null;
         episode = parsedEpisode;
       }
+      // phase 也算"变了": 解析器升级后(分碟标记以前认不出 `你是我的命运CD2.mkv`),
+      // 文件本身一个字节都没变, 但 index 里的 phase 该更新 —— 否则整理计划永远拿不到 cd 号。
       const phase = parseFileInfo(file.path);
+      const phaseJson = stringify(phase);
 
       const untouched =
         previous &&
         previous.size === file.size &&
         previous.mtime_ms === file.mtimeMs &&
+        previous.phase === phaseJson &&
         (previous.season ?? null) === season &&
         (previous.episode ?? null) === episode;
       if (untouched) {
@@ -398,7 +407,7 @@ async function scanVideo(rt: Runtime, opts: ScanOptions): Promise<ScanReport> {
              number = coalesce(media_files.number, excluded.number),
              size = excluded.size, mtime_ms = excluded.mtime_ms, sha256 = excluded.sha256,
              phase = excluded.phase, season = excluded.season, episode = excluded.episode, seen_at = excluded.seen_at`,
-          [file.path, library.id, file.size, file.mtimeMs, previous?.sha256 ?? null, stringify(phase), season, episode],
+          [file.path, library.id, file.size, file.mtimeMs, previous?.sha256 ?? null, phaseJson, season, episode],
         );
       }
       emit({ type, path: file.path, number: null });
