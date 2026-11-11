@@ -93,8 +93,11 @@ interface KuraTodoCounts {
 interface KuraTodoPlans {
   organize: { move: number; writeNfo: number; copyImage: number; skip: number } | null;
   nfo: { created: number; written: number } | null;
-  /** 盘上的 nfo 能直接给出身份、但库里还没绑定 —— 换电脑/换盘时不用重新刮。 */
-  nfoRecover: { shows: number; movies: number; files: number } | null;
+  /**
+   * 盘上的 nfo 能直接给出身份、但库里还没绑定 —— 换电脑/换盘时不用重新刮。
+   * needsScan = 库里一条文件都还没登记, 数不出来(点恢复会先自动扫一遍)。
+   */
+  nfoRecover: { shows: number; movies: number; files: number; needsScan?: boolean } | null;
 }
 
 interface KuraUnrecognizedFile {
@@ -386,6 +389,9 @@ interface KuraBridge {
     shows: number;
     movies: number;
     files: number;
+    /** 库里没有索引时顺手扫进来的文件数。 */
+    scanned?: number;
+    needsScan?: boolean;
     confirmed: boolean;
     done: { kind: "tv" | "movie"; key: string; target: string; files: number; title: string | null; created: boolean; episodes: number }[];
     noTmdbId: string[];

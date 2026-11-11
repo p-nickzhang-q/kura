@@ -584,13 +584,17 @@ const todoRows = computed<TodoRow[]>(() => {
 
   // 盘上的 nfo 能直接给出身份时, 这条比什么都优先: 点一下就把"未识别"和"待刮削"一起消掉。
   const recover = plan?.nfoRecover ?? null;
-  if (video && recover && (recover.shows > 0 || recover.movies > 0)) {
+  const recoverable = recover ? recover.shows + recover.movies : 0;
+  if (video && recover && (recoverable > 0 || recover.needsScan)) {
     rows.push({
       key: "nfo-recover",
       step: "00",
       label: "从 NFO 恢复",
-      desc: "盘上的 nfo 带着 TMDB id —— 换电脑不用重新刮, 元数据直接读回来",
-      count: recover.shows + recover.movies,
+      desc: recoverable
+        ? "盘上的 nfo 带着 TMDB id —— 换电脑不用重新刮, 元数据直接读回来"
+        : "库里还没登记文件; 点一下会先扫一遍库, 再从 nfo 恢复",
+      // 还没扫过时数不出来, 显示「…」而不是 0 —— 0 会让人以为没得救
+      count: recoverable > 0 ? recoverable : null,
       unit: "条",
       // 只读盘上的 nfo + 只改库, 不联网也不动视频文件
       tag: "只读",

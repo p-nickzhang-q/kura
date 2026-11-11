@@ -2,11 +2,13 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 import type { Runtime } from "../runtime";
+import { scan } from "./scan";
 import type { Metadata } from "../domain/types";
 import { AppError, EXIT } from "../exit";
 import { metadataColumns, rowToMetadata, type ItemRow } from "../db/rows";
 import { setItemActors } from "../db/actors";
 import { nfoPathFor } from "../domain/nfo";
+import { showDirOf } from "../domain/episodes";
 import { parseTvNfo, type ParsedTvNfo } from "../domain/nfo-tv-read";
 import { parseTmdbKey } from "../sources/tmdb";
 
@@ -39,6 +41,10 @@ export interface NfoRecoverEntry {
 export interface NfoRecoverReport {
   libraryId: number;
   dryRun: boolean;
+  /** 库里还没有文件索引时顺手扫了一遍, 这是扫进来多少(否则 0)。 */
+  scanned: number;
+  /** 库里一条文件都没登记 —— 干跑时数不出来, 界面该提示"先扫一遍"。 */
+  needsScan: boolean;
   shows: number;
   movies: number;
   /** 会(或已经)绑定上的文件总数。 */
@@ -66,6 +72,23 @@ export async function recoverFromNfo(
   }
 
   const apply = options.apply === true;
+  let scanned = 0;
+
+  // 全新电脑上的第一步: 库里一条文件都还没登记, 恢复无从谈起(它读的是 media_files)。
+  // 与其让人先点一次扫描再点一次恢复, 不如在这里顺手扫 —— 扫描本身是幂等的只读动作。
+  if (apply && countRegistered(rt, library.id) === 0) {
+    const report = await scan(rt, {
+      library: {
+        id: library.id,
+        name: "",
+        root: library.root,
+        template: "",
+        domain: "video",
+        volumeId: null,
+      },
+    });
+    scanned = report.counts.added;
+  }
 
   const files = rt.db.all<{ path: string }>(
     "select path from media_files where library_id = ? and number is null order by path",
@@ -86,11 +109,13 @@ export async function recoverFromNfo(
   const movieFiles: Array<{ path: string; nfo: ParsedTvNfo }> = [];
   const noTmdbId = new Set<string>();
 
-  // 只在剧目录的最外层读 tvshow.nfo: 子目录(Season 01 之类)通常没有, 有也属于同一个剧。
+  // 剧目录是文件的**祖先**, 不一定是父目录: 整理之后文件在 `<剧>/Season 01/` 里,
+  // 而 tvshow.nfo 在 `<剧>/` 下。用 showDirOf 剥掉季目录 —— 这一点错了就一个都读不到
+  // (真机上 1,823 个整理好的文件, 干跑出来 0 个剧)。
   const tvshowByDir = new Map<string, ParsedTvNfo | null>();
   for (const file of files) {
     if (options.signal?.aborted) break;
-    const dir = parentOf(file.path);
+    const dir = showDirOf(file.path);
     if (!tvshowByDir.has(dir)) {
       const tvshowPath = join(dir, "tvshow.nfo");
       tvshowByDir.set(dir, existsSync(tvshowPath) ? await readCached(tvshowPath) : null);
@@ -122,6 +147,8 @@ export async function recoverFromNfo(
   const report: NfoRecoverReport = {
     libraryId: library.id,
     dryRun: !apply,
+    scanned,
+    needsScan: files.length === 0 && countRegistered(rt, library.id) === 0,
     shows: tvDirs.size,
     movies: movieFiles.length,
     files: [...tvDirs.values()].reduce((sum, group) => sum + group.paths.length, 0) + movieFiles.length,
@@ -294,6 +321,10 @@ async function readNfoFile(path: string): Promise<ParsedTvNfo | null> {
   } catch {
     return null;
   }
+}
+
+function countRegistered(rt: Runtime, libraryId: number): number {
+  return rt.db.get<{ n: number }>("select count(*) as n from media_files where library_id = ?", [libraryId])?.n ?? 0;
 }
 
 function parentOf(path: string): string {

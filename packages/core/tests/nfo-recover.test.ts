@@ -260,3 +260,60 @@ describe("从 nfo 恢复整库", () => {
     await rt.close();
   });
 });
+
+describe("整理之后的布局: tvshow.nfo 在剧目录, 文件在 Season 子目录", () => {
+  test("Season 目录里的文件能认回剧目录", async () => {
+    const dataDir = await scratch();
+    const root = join(dataDir, "视频");
+    const showDir = join(root, "死神 (2004)");
+    const seasonDir = join(showDir, "Season 01");
+    await mkdir(seasonDir, { recursive: true });
+    await writeFile(join(showDir, "tvshow.nfo"), TVSHOW);
+    await writeFile(join(seasonDir, "死神 - S01E01.mkv"), "x");
+    await writeFile(join(seasonDir, "死神 - S01E02.mkv"), "x");
+
+    const rt = await openRuntime({ dataDir });
+    const library = createLibrary(rt.db, { name: "视频", root, domain: "video" });
+    for (const [name, episode] of [["死神 - S01E01.mkv", 1], ["死神 - S01E02.mkv", 2]] as const) {
+      rt.db.run(
+        "insert into media_files (path, library_id, number, size, mtime_ms, season, episode) values (?, ?, null, 1, 1, 1, ?)",
+        [join(seasonDir, name), library.id, episode],
+      );
+    }
+
+    // 修复前: 只看父目录(Season 01), 找不到 tvshow.nfo → 0 个剧
+    const dry = await recoverFromNfo(rt, { libraryId: library.id });
+    expect(dry.shows).toBe(1);
+    expect(dry.files).toBe(2);
+    expect(dry.needsScan).toBe(false);
+
+    const applied = await recoverFromNfo(rt, { libraryId: library.id, apply: true });
+    expect(applied.done[0]!.key).toBe("tmdb:tv:46198");
+    expect(rt.db.get<{ n: number }>("select count(*) as n from media_files where number is null")!.n).toBe(0);
+    await rt.close();
+  });
+
+  test("库里一条文件都没登记时, apply 会先自动扫一遍", async () => {
+    const dataDir = await scratch();
+    const root = join(dataDir, "视频");
+    const showDir = join(root, "仁医 (2009)");
+    await mkdir(showDir, { recursive: true });
+    await writeFile(join(showDir, "tvshow.nfo"), TVSHOW);
+    await writeFile(join(showDir, "仁医 - S01E01.mkv"), "x");
+
+    const rt = await openRuntime({ dataDir });
+    const library = createLibrary(rt.db, { name: "视频", root, domain: "video" });
+
+    // 干跑: 数不出来, 但明确说"要先扫"
+    const dry = await recoverFromNfo(rt, { libraryId: library.id });
+    expect(dry.needsScan).toBe(true);
+    expect(dry.shows).toBe(0);
+
+    // apply: 顺手扫一遍, 再恢复
+    const applied = await recoverFromNfo(rt, { libraryId: library.id, apply: true });
+    expect(applied.scanned).toBe(1);
+    expect(applied.done.length).toBe(1);
+    expect(rt.db.get("select 1 from media_files where number = 'tmdb:tv:46198'")).toBeTruthy();
+    await rt.close();
+  });
+});
