@@ -18,6 +18,7 @@ Kura —— 番号制本地影片库管理器。Electron 桌面应用 + 面向 a
 | 改 CLI 参数或输出 | [docs/dev/cli-contract.md](docs/dev/cli-contract.md) |
 | 产品边界 / 为什么不做某功能 | [docs/ADR/0002](docs/ADR/0002-产品边界.md) |
 | 为什么接 AI、它凭什么只产搜索词 | [docs/ADR/0010](docs/ADR/0010-AI别名补搜.md) |
+| 为什么影视域也读 NFO, 又凭什么不碰播放状态 | [docs/ADR/0011](docs/ADR/0011-影视读取NFO.md) |
 | 换壳 / 换 runtime / 合并进程 | [docs/ADR/0001](docs/ADR/0001-栈选择.md) |
 | 打包 / 发版 | [docs/dev/packaging.md](docs/dev/packaging.md) · [docs/dev/release.md](docs/dev/release.md) |
 

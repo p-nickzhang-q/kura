@@ -137,6 +137,13 @@ export { openAliasEngine, createAliasEngine, parseAliasResponse, type AliasEngin
 export { todoCounts, todoPlans, type TodoCounts, type TodoPlans } from "./tasks/todo";
 export { repairIndexPaths, type PathRepair, type PathRepairReport } from "./tasks/repair";
 export {
+  recoverFromNfo,
+  tmdbKeyOf,
+  type NfoRecoverEntry,
+  type NfoRecoverReport,
+} from "./tasks/nfo-recover";
+export { parseTvNfo, type ParsedTvNfo, type TvNfoRootKind } from "./domain/nfo-tv-read";
+export {
   assertLibraryMounted,
   bindVolume,
   relocateLibrary,

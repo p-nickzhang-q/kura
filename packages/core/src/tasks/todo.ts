@@ -5,6 +5,7 @@ import { syncNfo } from "./nfo-sync";
 import { exportTvNfo } from "./nfo-tv";
 import { organize } from "./organize";
 import { organizeVideo } from "./organize-video";
+import { recoverFromNfo } from "./nfo-recover";
 import { countFiles } from "./scan";
 import { countPending } from "./scrape";
 import { countPendingTranslation } from "./translate";
@@ -34,6 +35,11 @@ export interface TodoPlans {
   organize: { move: number; writeNfo: number; copyImage: number; skip: number } | null;
   /** nfo 与库不一致的条数; 算不出来(异常)时为 null。 */
   nfo: { created: number; written: number } | null;
+  /**
+   * 盘上有带着 TMDB id 的 nfo、但库里还没绑定 —— 换电脑/换盘的典型状态。
+   * 非 0 说明"不用重新刮, 点一下就能恢复"。
+   */
+  nfoRecover: { shows: number; movies: number; files: number } | null;
 }
 
 /** 待办数字里的"库范围": 侧栏选中哪个库就只看哪个, 没选就是全部。 */
@@ -105,5 +111,24 @@ export async function todoPlans(rt: Runtime, options: { libraryId?: number } = {
     nfo = null;
   }
 
-  return { organize: libraries.length === 0 ? null : total, nfo };
+  // 影视库专有: 盘上的 nfo 能直接给出身份, 不用联网重新找。
+  // 番号制库不走这条路(它的 nfo 是逐条目的, 对应 nfo sync)。
+  let nfoRecover: TodoPlans["nfoRecover"] = null;
+  try {
+    let shows = 0;
+    let movies = 0;
+    let files = 0;
+    for (const library of scopeLibraries(rt, options.libraryId)) {
+      if (library.domain !== "video") continue;
+      const report = await recoverFromNfo(rt, { libraryId: library.id });
+      shows += report.shows;
+      movies += report.movies;
+      files += report.files;
+    }
+    nfoRecover = { shows, movies, files };
+  } catch {
+    nfoRecover = null;
+  }
+
+  return { organize: libraries.length === 0 ? null : total, nfo, nfoRecover };
 }

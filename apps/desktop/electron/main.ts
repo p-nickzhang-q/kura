@@ -53,6 +53,7 @@ import {
   organizeTask,
   repairIndexPaths,
   relocateLibrary,
+  recoverFromNfo,
   checkUpdate,
   exportTvNfo,
   exportTvNfoTask,
@@ -706,6 +707,32 @@ function registerIpc(): void {
    * 合成一个 handler 会让首页在移动硬盘上卡住几百毫秒等一个"可整理 94"——
    * 而人第一眼要的是"还有 258 个目录没认出来"。
    */
+  /**
+   * 从盘上的 nfo 恢复影视库（换电脑 / 换盘的第一件事）。
+   *
+   * 盘上每个剧目录都有 `tvshow.nfo`、每部电影旁边都有 `<片名>.nfo`，里面带着
+   * `<uniqueid type="tmdb">` —— 身份就在文件里。干跑先数，有东西可恢复才弹确认。
+   */
+  ipcMain.handle("nfo:recover", async (_event, input: { libraryId: number; apply?: boolean }) => {
+    const rt = mustRuntime();
+    const dry = await recoverFromNfo(rt, { libraryId: input.libraryId });
+    if (input.apply !== true) return { ...dry, confirmed: false };
+
+    const answer = await dialog.showMessageBox({
+      type: "question",
+      buttons: ["恢复", "取消"],
+      defaultId: 0,
+      cancelId: 1,
+      message: `从 nfo 恢复 ${dry.shows} 个剧 + ${dry.movies} 部电影?`,
+      detail:
+        `${dry.files} 个文件会绑定到条目上, 元数据取自盘上的 nfo, 只补库里还空着的字段 —— ` +
+        `已经刮过的不动, 也不会联网。` +
+        (dry.noTmdbId.length ? `\n\n另有 ${dry.noTmdbId.length} 个 nfo 里没有 TMDB id, 跳过。` : ""),
+    });
+    if (answer.response !== 0) return { ...dry, confirmed: false };
+    return { ...(await recoverFromNfo(rt, { libraryId: input.libraryId, apply: true })), confirmed: true };
+  });
+
   ipcMain.handle("todo:counts", (_event, input: { libraryId?: number } = {}) =>
     todoCounts(mustRuntime(), input?.libraryId === undefined ? {} : { libraryId: input.libraryId }),
   );

@@ -93,6 +93,8 @@ interface KuraTodoCounts {
 interface KuraTodoPlans {
   organize: { move: number; writeNfo: number; copyImage: number; skip: number } | null;
   nfo: { created: number; written: number } | null;
+  /** 盘上的 nfo 能直接给出身份、但库里还没绑定 —— 换电脑/换盘时不用重新刮。 */
+  nfoRecover: { shows: number; movies: number; files: number } | null;
 }
 
 interface KuraUnrecognizedFile {
@@ -371,6 +373,23 @@ interface KuraBridge {
   todoCounts(libraryId?: number): Promise<KuraTodoCounts>;
   /** 待办页的贵数字 (要读磁盘: 整理计划 / nfo 差异)。 */
   todoPlans(libraryId?: number): Promise<KuraTodoPlans>;
+  /**
+   * 从盘上的 nfo 恢复影视库: 建条目 + 绑文件 + 补空字段。
+   * 不带 apply 只干跑(数一数), 带 apply 时主进程会先弹确认。
+   */
+  recoverNfo(
+    libraryId: number,
+    apply?: boolean,
+  ): Promise<{
+    libraryId: number;
+    dryRun: boolean;
+    shows: number;
+    movies: number;
+    files: number;
+    confirmed: boolean;
+    done: { kind: "tv" | "movie"; key: string; target: string; files: number; title: string | null; created: boolean; episodes: number }[];
+    noTmdbId: string[];
+  }>;
   bindLocalDir(
     libraryId: number,
     dir: string,

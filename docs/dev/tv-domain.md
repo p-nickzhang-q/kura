@@ -199,7 +199,7 @@ kura file set-episode <路径> --episode 5 [--season 1]   # 绑了目录但文�
 | 域 | 谁写 | 根元素 | 方向 |
 |---|---|---|---|
 | `av` | `tasks/nfo-sync.ts` → `domain/nfo.ts` | `<movie>` / `<episodedetails>` + `<uniqueid type="kura">` | 双向(读旧库的 nfo 当种子) |
-| `video` | `tasks/nfo-tv.ts` → `domain/nfo-tv.ts` | 剧级 `<tvshow>` + 集级 `<episodedetails>` + `<uniqueid type="tmdb">` | **只写**(Emby 会写集级 nfo, 回读等于把播放器状态当元数据) |
+| `video` | `tasks/nfo-tv.ts` → `domain/nfo-tv.ts` | 剧级 `<tvshow>` + 集级 `<episodedetails>` + `<uniqueid type="tmdb">` | **写 + 按白名单读**(见下节; ADR 0011 修订了 0008 §6) |
 
 以前两边都不过滤域: GUI 的「同步 NFO」拿 av 那套把影视文件写成 `<movie>/<num>/<uniqueid type="kura">`,
 下一次「整理」再用影视那套覆盖回去 —— 两个写手打架, 待办里的"待回写"永远清不掉。

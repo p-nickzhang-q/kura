@@ -32,6 +32,7 @@ import {
   exportTvNfo,
   repairIndexPaths,
   relocateLibrary,
+  recoverFromNfo,
   findLibrary,
   findResource,
   getItem,
@@ -630,10 +631,10 @@ export const COMMANDS: Command[] = [
 
   {
     name: "nfo",
-    summary: "NFO 同步: sync [库|番号] —— 没数据的读 nfo 入库, 有数据的把库写回 nfo (默认 dry-run)",
+    summary: "NFO: sync [库|番号] 双向 (默认 dry-run) | recover <影视库> [--apply] 按盘上 nfo 的 TMDB id 建条目绑文件",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "sync (双向) | write (只写) | import (只读)", positional: true, default: "sync" },
+      { name: "action", type: "string", description: "sync (双向) | write (只写) | import (只读) | recover (影视: 从 nfo 恢复)", positional: true, default: "sync" },
       { name: "target", type: "string", description: "库名/id, 或番号 (省略 = 所有库)", positional: true },
       { name: "apply", type: "boolean", description: "真的写文件 (默认只列清单)", default: false },
       { name: "include-unscraped", type: "boolean", description: "连没联网刮过 (只有 nfo/manual 来源) 的条目也写", default: false },
@@ -646,6 +647,15 @@ export const COMMANDS: Command[] = [
         includeUnscraped: Boolean(args.options["include-unscraped"]),
         limit: Number(args.options.limit ?? 5000),
       } as { libraryId?: number; number?: string; apply: boolean; includeUnscraped: boolean; limit: number };
+      // 从盘上的 nfo 恢复影视库(换电脑 / 换盘): 身份就在 nfo 的 <uniqueid type="tmdb"> 里,
+      // 不用联网重新找。干跑只数, --apply 才建条目 + 绑文件 + 补空字段。
+      if (args.positionals.action === "recover") {
+        if (!target) throw new AppError("用法: nfo recover <影视库> [--apply]", EXIT.USAGE);
+        const library = findLibrary(ctx.rt!.db, target);
+        if (!library) throw new AppError(`媒体库不存在: ${target}`, EXIT.NOT_FOUND, { library: target });
+        return { library: library.name, domain: library.domain, ...(await recoverFromNfo(ctx.rt!, { libraryId: library.id, apply: options.apply })) };
+      }
+
       if (target) {
         // 先当库名找, 找不到再当番号 —— 番号不会是库名, 两个命名空间撞不了。
         const library = findLibrary(ctx.rt!.db, target);
@@ -743,6 +753,35 @@ export const COMMANDS: Command[] = [
       entries: { number: string; nfoPath: string; status?: string; action?: string; reason?: string; changed: string[]; error?: string }[];
       [key: string]: unknown;
     }) {
+      // recover 走的是另一份形状(没有 entries/scanned), 单独渲染 ——
+      // 否则会掉到下面那句"扫描 0 个文件", 看着像什么都没干。
+      const recovered = data as unknown as {
+        shows?: number;
+        movies?: number;
+        files?: number;
+        done?: { kind: "tv" | "movie"; key: string; target: string; files: number; title: string | null; created: boolean; episodes: number }[];
+        noTmdbId?: string[];
+      };
+      if (recovered.done) {
+        const lines = [
+          `${data.dryRun ? "可以恢复" : "已恢复"} ${recovered.shows ?? 0} 个剧 + ${recovered.movies ?? 0} 部电影 · ` +
+            `${recovered.files ?? 0} 个文件 (元数据取自盘上的 nfo, 只补空字段, 不联网)`,
+        ];
+        for (const entry of recovered.done.slice(0, 20)) {
+          lines.push(
+            `  ${entry.key}  ${entry.kind === "tv" ? "剧" : "电影"}  ${entry.title ?? ""}  ${entry.files} 个文件` +
+              `${entry.episodes ? ` · ${entry.episodes} 集` : ""}${entry.created ? "" : " (已有条目, 只补空字段)"}`,
+          );
+        }
+        if (recovered.done.length > 20) lines.push(`  … 还有 ${recovered.done.length - 20} 条`);
+        if (recovered.noTmdbId?.length) {
+          lines.push(`${recovered.noTmdbId.length} 个 nfo 里没有 TMDB id, 没动 (这些只能走「找建议」):`);
+          for (const path of recovered.noTmdbId.slice(0, 5)) lines.push(`  ${path}`);
+        }
+        if (data.dryRun) lines.push("(dry-run, 没改库; 加 --apply 执行)");
+        return lines.join("\n");
+      }
+
       const statusOf = (entry: { status?: string; action?: string }): string => entry.action ?? entry.status ?? "skip";
       const written = data.written ?? data.updated ?? 0;
       const imported = data.imported ?? 0;

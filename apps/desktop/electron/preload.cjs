@@ -98,6 +98,7 @@ contextBridge.exposeInMainWorld("kura", {
   retypeDetect: (apply = false) => ipcRenderer.invoke("item:retype-detect", { apply }),
   openDataDir: () => ipcRenderer.invoke("data:open"),
   checkUpdate: () => ipcRenderer.invoke("update:check"),
+  recoverNfo: (libraryId, apply) => ipcRenderer.invoke("nfo:recover", { libraryId, apply }),
   syncNfo: (input) => ipcRenderer.invoke("nfo:sync", input),
   onNfoProgress: (callback) => {
     const listener = (_event, progress) => callback(progress);

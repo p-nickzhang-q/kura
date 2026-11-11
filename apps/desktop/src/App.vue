@@ -582,6 +582,25 @@ const todoRows = computed<TodoRow[]>(() => {
   const video = isVideoMode.value;
   const rows: TodoRow[] = [];
 
+  // 盘上的 nfo 能直接给出身份时, 这条比什么都优先: 点一下就把"未识别"和"待刮削"一起消掉。
+  const recover = plan?.nfoRecover ?? null;
+  if (video && recover && (recover.shows > 0 || recover.movies > 0)) {
+    rows.push({
+      key: "nfo-recover",
+      step: "00",
+      label: "从 NFO 恢复",
+      desc: "盘上的 nfo 带着 TMDB id —— 换电脑不用重新刮, 元数据直接读回来",
+      count: recover.shows + recover.movies,
+      unit: "条",
+      // 只读盘上的 nfo + 只改库, 不联网也不动视频文件
+      tag: "只读",
+      action: "恢复",
+      disabled: false,
+      next: false,
+      go: recoverNfo,
+    });
+  }
+
   rows.push({
     key: "unparsed",
     step: "01",
@@ -712,6 +731,13 @@ const paletteActions = computed<PaletteAction[]>(() => {
     { id: "retype", title: "修正内容类型", hint: "按当前解析器重新判定, 先列清单", disabled: false, run: retypeDetect },
     { id: "nfo", title: "同步 NFO", hint: "先列清单, 确认后才写", disabled: !hasLibrary, run: () => writeNfoFiles() },
     { id: "cleanup", title: "清理空目录", hint: "先列清单, 确认后才删", disabled: !hasLibrary, run: cleanupDirs },
+    {
+      id: "nfo-recover",
+      title: "从 NFO 恢复",
+      hint: "换电脑/换盘: 按盘上 nfo 里的 TMDB id 建条目并绑文件, 不联网",
+      disabled: selected.value?.domain !== "video",
+      run: recoverNfo,
+    },
     {
       id: "relocate",
       title: "换库根目录",
@@ -1168,6 +1194,38 @@ async function repairPaths(): Promise<void> {
     await refreshAll();
   } catch (err) {
     errors.value.push(`修复路径: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * 从盘上的 nfo 恢复影视库（换电脑 / 换盘的第一件事）。
+ *
+ * 盘上每个剧目录都有 `tvshow.nfo`、每部电影旁边都有 `<片名>.nfo`，里面带着
+ * `<uniqueid type="tmdb">` —— 身份就在文件里，不用联网重新找。主进程干跑后弹确认。
+ */
+async function recoverNfo(): Promise<void> {
+  const library = selected.value;
+  if (!library || library.domain !== "video") {
+    note.value = "只有影视库能从 nfo 恢复";
+    return;
+  }
+  try {
+    const result = await window.kura.recoverNfo(library.id, true);
+    if (!result.confirmed) {
+      note.value = result.files
+        ? `已取消：能恢复 ${result.shows} 个剧 + ${result.movies} 部电影`
+        : "盘上没有带 TMDB id 的 nfo，没什么可恢复的";
+      return;
+    }
+    invalidateTodoPlan();
+    await refreshAll();
+    const episodes = result.done.reduce((sum, entry) => sum + entry.episodes, 0);
+    note.value =
+      `从 nfo 恢复了 ${result.shows} 个剧 + ${result.movies} 部电影 · ` +
+      `绑定 ${result.files} 个文件${episodes ? ` · 补回 ${episodes} 集名` : ""}` +
+      (result.noTmdbId.length ? ` · ${result.noTmdbId.length} 个 nfo 没带 TMDB id` : "");
+  } catch (err) {
+    errors.value.push(`从 nfo 恢复: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
