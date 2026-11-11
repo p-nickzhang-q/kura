@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { parsePhase } from "../db/rows";
 import { readdir, rmdir, unlink } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { isVideoFile } from "./scan";
@@ -91,6 +92,8 @@ interface ItemFilesRow {
   path: string;
   season: number | null;
   episode: number | null;
+  /** 扫描时从文件名解析出的相位(JSON), 里面有分碟号 `cd`。 */
+  phase: string | null;
 }
 
 interface EpisodeInfo {
@@ -156,7 +159,7 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
   const rows = rt.db.all<ItemFilesRow>(
     `select i.number, i.title, i.title_original, i.domain, i.release_date, i.plot, i.studio,
             i.duration_min, i.tags, i.actors,
-            m.path, m.season, m.episode
+            m.path, m.season, m.episode, m.phase
      from media_files m join items i on i.number = m.number
      where m.library_id = ? and i.domain in ('tv', 'movie') and i.content_type <> 'ugc'
      order by i.number, m.season, m.episode, m.path`,
@@ -215,11 +218,32 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
 
     if (head.domain === "movie") {
       const base = folder;
-      const extension = extname(files[0]!.path);
-      const target = resolve(join(dir, `${base}${extension}`));
-      const state = await targetState(files[0]!.path, target);
-      if (state === "free") push({ action: "move", from: files[0]!.path, to: target });
-      else push({ action: "skip", from: files[0]!.path, to: target, reason: skipReason(state) });
+      // 一部电影名下有多个文件时, 分两种情况, 以前一律按"多版本"处理:
+      //  - **分碟** (`cd` 标记): 同一次发行切成的几块, 都该搬进同一目录, 名字带 ` - cdN`
+      //  - **多版本** (没有 cd): 1080p / 720p 这类, 只整理第一个, 其余留在原地
+      // 以前两者都按后者处理, 结果 `神奇绿巨人-cd2.rmvb` 想出目标却发现目标已被
+      // 正片占着, 互相判"目标已存在", 永远整理不动。
+      const cdOf = (row: ItemFilesRow): number | null => parsePhase(row.phase)?.cd ?? null;
+      const discs = files.filter((row) => cdOf(row) !== null);
+      const plain = files.filter((row) => cdOf(row) === null);
+      // 正片: 优先没 cd 标记的第一个(完整版); 全是分碟时用 cd 最小的那个当"正片"位置?
+      // 不 —— 全分碟就直接都带 -cdN, 不额外造一个正片名, 免得磁盘上出现两份同样的内容。
+      const primary = plain[0] ?? null;
+      if (primary) {
+        const extension = extname(primary.path);
+        const target = resolve(join(dir, `${base}${extension}`));
+        const state = await targetState(primary.path, target);
+        if (state === "free") push({ action: "move", from: primary.path, to: target });
+        else push({ action: "skip", from: primary.path, to: target, reason: skipReason(state) });
+      }
+      for (const disc of discs) {
+        const cd = cdOf(disc);
+        const extension = extname(disc.path);
+        const target = resolve(join(dir, `${base} - cd${cd}${extension}`));
+        const state = await targetState(disc.path, target);
+        if (state === "free") push({ action: "move", from: disc.path, to: target });
+        else push({ action: "skip", from: disc.path, to: target, reason: skipReason(state) });
+      }
 
       push({
         action: "write-nfo",
@@ -238,9 +262,9 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
       });
 
       addImages(rt, key, head.title, dir, `${base}-poster`, "fanart", push, warnings);
-      // 电影只有一个文件, 其余(如果有)是同一部片的多版本/分盘: 不猜, 留在原地
-      for (const file of files.slice(1)) {
-        push({ action: "skip", from: file.path, reason: "同一部电影有多个文件, 只整理第一个" });
+      // 正片之外、又没有分碟标记的: 多版本(1080p / 720p)。不猜哪个"更好", 留在原地。
+      for (const file of plain.slice(1)) {
+        push({ action: "skip", from: file.path, reason: "同一部电影有多个版本, 只整理第一个" });
       }
       continue;
     }

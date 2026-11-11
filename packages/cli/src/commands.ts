@@ -30,6 +30,7 @@ import {
   downloadPoster,
   exitCodeName,
   exportTvNfo,
+  mergeItems,
   repairIndexPaths,
   relocateLibrary,
   recoverFromNfo,
@@ -1182,10 +1183,10 @@ export const COMMANDS: Command[] = [
 
   {
     name: "item",
-    summary: "条目: get <番号> | list [--type] [--actor] | set <番号> --title ... | lock/unlock <番号> 字段,字段 | retype <番号> <类型>",
+    summary: "条目: get <番号> | list [--type] [--actor] | set <番号> --title ... | lock/unlock <番号> 字段,字段 | retype <番号> <类型> | merge <from> --into <to>",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "get | list | set | lock | unlock | retype", positional: true, required: true },
+      { name: "action", type: "string", description: "get | list | set | lock | unlock | retype | merge", positional: true, required: true },
       { name: "number", type: "string", description: "番号 (get/set/lock/unlock)", positional: true },
       { name: "fields", type: "string", description: "lock/unlock 的字段, 逗号分隔; retype 时要写的类型", positional: true },
       { name: "type", type: "string", description: "按类型筛选 (list)" },
@@ -1215,9 +1216,20 @@ export const COMMANDS: Command[] = [
       { name: "directors", type: "string", description: "set: 导演, 逗号分隔" },
       { name: "tags", type: "string", description: "set: 标签, 逗号分隔" },
       { name: "pin", type: "boolean", description: "set 时同时锁定被改的字段", default: true },
+      { name: "into", type: "string", description: "merge: 并到哪个条目 (目标身份)" },
     ],
     async run(ctx, args) {
       const action = args.positionals.action;
+
+      // 同一部片被拆成两个条目(一个 tmdb 身份 + 一个手动加的 local 条目)时,
+      // 各自占一个文件, 整理时互相判"目标已存在", 谁都搬不动。合并才能成一条完整的片。
+      if (action === "merge") {
+        const from = args.positionals.number;
+        const into = typeof args.options.into === "string" ? args.options.into.trim() : "";
+        if (!from) throw new AppError("用法: item merge <from> --into <to>", EXIT.USAGE);
+        if (!into) throw new AppError("缺少 --into <目标身份>", EXIT.USAGE, { hint: "比如 --into tmdb:movie:422153" });
+        return { merge: mergeItems(ctx.rt!, { from, into }) };
+      }
 
       if (action === "get") {
         const number = args.positionals.number;
@@ -1341,7 +1353,12 @@ export const COMMANDS: Command[] = [
       number?: string;
       applied?: boolean;
       changes?: { number: string; from: string; to: string; hasTitle: boolean }[];
+      merge?: { from: string; into: string; moved: number; removed: boolean };
     }) {
+      if (data.merge) {
+        const { from, into, moved } = data.merge;
+        return `${from} 已并入 ${into}: 挪了 ${moved} 个文件, 原条目已删除。\n接下来跑 organize 就能把这块碟和正片一起整理到位。`;
+      }
       if (data.changes) {
         const changes = data.changes;
         if (changes.length === 0) return "没有判错的条目。";
@@ -1621,6 +1638,16 @@ export const COMMANDS: Command[] = [
       const paths = ctx.rt!.paths;
 
       if (action === "path") return { path: settingsPath(paths) };
+
+      // 同一部片被拆成两个条目(一个 tmdb 身份 + 一个手动加的 local 条目)时,
+      // 各自占一个文件, 整理时互相判"目标已存在", 谁都搬不动。合并才能成一条完整的片。
+      if (action === "merge") {
+        const from = args.positionals.number;
+        const into = typeof args.options.into === "string" ? args.options.into.trim() : "";
+        if (!from) throw new AppError("用法: item merge <from> --into <to>", EXIT.USAGE);
+        if (!into) throw new AppError("缺少 --into <目标身份>", EXIT.USAGE, { hint: "比如 --into tmdb:movie:422153" });
+        return { merge: mergeItems(ctx.rt!, { from, into }) };
+      }
 
       if (action === "get") {
         const dmm = resolveDmmEnv(ctx.rt!.settings);

@@ -440,6 +440,11 @@ interface KuraBridge {
   spreadSeasons(key: string, dir?: string): Promise<{ key: string; files: number; declared: number; mapped: number; unmapped: number; from: string; to: string }>;
   rebindItem(key: string, newKey: string): Promise<{ from: string; to: string; moved: number; scraped: { declared: number; bound: number; missing: number } | null }>;
   unbindItem(key: string): Promise<{ unbound: number }>;
+  /**
+   * 合并条目: 把 from 的文件并进 into, 然后删掉 from。
+   * 同一部片被拆成两个条目(一个 tmdb 身份 + 一个手动加的 local)时的收尾动作。只做电影。
+   */
+  mergeItem(from: string, into: string): Promise<{ from: string; into: string; moved: number; removed: boolean }>;
   scrapeShow(key: string): Promise<{ key: string; ok: boolean; fields: string[]; episodes: number; declared: number; bound: number; missing: number; error?: string }>;
   scan(libraryId: number, options?: { force?: boolean }): Promise<KuraScanReport>;
   removeLibrary(libraryId: number): Promise<{ library: KuraLibrary; removedFiles: number; orphanItems: number }>;

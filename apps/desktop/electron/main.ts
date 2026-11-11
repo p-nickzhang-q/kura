@@ -51,6 +51,7 @@ import {
   countPending,
   openAliasEngine,
   organizeTask,
+  mergeItems,
   repairIndexPaths,
   relocateLibrary,
   recoverFromNfo,
@@ -869,6 +870,14 @@ function registerIpc(): void {
   );
 
   // 解绑: 退回未识别, 之后可在未识别页重新选
+  /**
+   * 合并条目: 同一部片被拆成两个条目(一个 tmdb 身份 + 一个手动加的 local)时,
+   * 各自占一个文件, 整理时互相判"目标已存在", 谁都搬不动。只做电影。
+   */
+  ipcMain.handle("item:merge", (_event, input: { from: string; into: string }) =>
+    mergeItems(mustRuntime(), { from: input.from, into: input.into }),
+  );
+
   ipcMain.handle("item:unbind", (_event, input: { key: string }) => {
     const rt = mustRuntime();
     const files = rt.db.all<{ path: string; library_id: number }>(

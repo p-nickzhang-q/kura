@@ -1293,6 +1293,31 @@ async function relocateLibrary(): Promise<void> {
 }
 
 /**
+ * 合并条目: 同一部片被拆成两个条目时(一个 tmdb 身份 + 一个手动加的 local),
+ * 各自占一个文件, 整理时互相判"目标已存在", 谁都搬不动。
+ *
+ * 只做电影 —— 剧集合并要重排季集, 那边有自己的坑, 不做。
+ */
+async function mergeCurrent(): Promise<void> {
+  if (!detail.value) return;
+  const from = detail.value.key;
+  const into = window.prompt(
+    `把「${detail.value.title ?? from}」并到哪个条目?\n\n填目标身份, 比如 tmdb:movie:422153`,
+    from.startsWith("local:") ? "" : "",
+  );
+  if (!into || !into.trim()) return;
+  try {
+    const result = await window.kura.mergeItem(from, into.trim());
+    detail.value = null;
+    invalidateTodoPlan();
+    await refreshAll();
+    note.value = `已合并: ${result.moved} 个文件并到 ${result.into}，原条目已删除。跑一次整理就能把这块碟和正片放到一起`;
+  } catch (err) {
+    errors.value.push(`合并: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
  * 解绑: 退回未识别, 之后可以在未识别页重新选。
  *
  * 只清**这个条目**名下的文件 —— 同目录里别的条目不动。以前按目录清, 一个目录里绑了
@@ -2953,6 +2978,15 @@ async function testDmm(): Promise<void> {
                     摊到各季
                   </button>
                   <button type="button" :disabled="busy" @click="openRebindDialog">改绑</button>
+                  <button
+                    v-if="detail?.domain === 'movie' && detail?.key?.startsWith('local:')"
+                    type="button"
+                    :disabled="busy"
+                    title="同一部片被拆成两个条目(手动加的本地条目 + TMDB 条目)时, 把文件并过去; 只做电影"
+                    @click="mergeCurrent"
+                  >
+                    合并到…
+                  </button>
                   <template v-if="!unbindConfirm">
                     <button
                       type="button"

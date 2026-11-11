@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { createLibrary } from "../src/db/rows";
 import type { Library } from "../src/domain/materialize";
 import { openRuntime, type Runtime } from "../src/runtime";
@@ -362,5 +362,59 @@ describe("索引指着已删除的旧目录时, 整理自己会纠正", () => {
     )!;
     expect(after.path).not.toBe(ghost);
     expect(after.path).toContain("仁医 (2009)");
+  });
+});
+
+describe("分碟: 同一部电影切成几块, 都要搬进去", () => {
+  test("cd=2/3 的文件带 - cdN 后缀进同一目录; 没有 cd 的多版本仍然只搬第一个", async () => {
+    const library = await setupShow();
+    // 一部电影 + 两个分碟 + 一个多余版本(无 cd)
+    const movieDir = join(media, "电影");
+    await touch(join(movieDir, "[电影天堂].神奇绿巨人-cd2.rmvb"));
+    await touch(join(movieDir, "[电影天堂].神奇绿巨人-cd3.rmvb"));
+    await touch(join(movieDir, "[电影天堂].绿巨人-1080p.rmvb"));
+    await scan(rt, { library });
+    // 先建条目再绑文件: media_files.number 有外键指向 items
+    rt.db.run(
+      "insert or replace into items (number, content_type, domain, title, release_date) values ('tmdb:movie:1927', '', 'movie', '绿巨人浩克', '2003-06-19')",
+    );
+    for (const name of ["[电影天堂].神奇绿巨人-cd2.rmvb", "[电影天堂].神奇绿巨人-cd3.rmvb", "[电影天堂].绿巨人-1080p.rmvb"]) {
+      rt.db.run("update media_files set number = 'tmdb:movie:1927' where path = ?", [join(movieDir, name)]);
+    }
+
+    const report = await organizeVideo(rt, { library, apply: true });
+    const moves = report.plan.entries
+      .filter((entry) => entry.action === "move" && entry.from?.includes("绿巨人"))
+      .map((entry) => basename(entry.to!))
+      .sort();
+
+    // 两个分碟各自带 - cdN(以前它们想搬到同一个正片名上, 互相判"目标已存在", 永远不动)
+    expect(moves).toContain("绿巨人浩克 (2003) - cd2.rmvb");
+    expect(moves).toContain("绿巨人浩克 (2003) - cd3.rmvb");
+    // 无 cd 的那个当正片
+    expect(moves).toContain("绿巨人浩克 (2003).rmvb");
+    // 三个都在同一目录
+    expect(report.plan.entries.filter((entry) => entry.action === "move" && entry.from?.includes("绿巨人")).every((entry) => entry.to!.includes("绿巨人浩克 (2003)"))).toBe(true);
+  });
+
+  test("只有分碟、没有正片时, 不凭空造一个正片名", async () => {
+    const library = await setupShow();
+    const movieDir = join(media, "电影2");
+    await touch(join(movieDir, "你是我的命运CD2.mkv"));
+    await touch(join(movieDir, "你是我的命运CD3.mkv"));
+    await scan(rt, { library });
+    rt.db.run(
+      "insert or replace into items (number, content_type, domain, title, release_date) values ('tmdb:movie:112283', '', 'movie', '你是我的命运', '2005-09-23')",
+    );
+    for (const name of ["你是我的命运CD2.mkv", "你是我的命运CD3.mkv"]) {
+      rt.db.run("update media_files set number = 'tmdb:movie:112283' where path = ?", [join(movieDir, name)]);
+    }
+
+    const report = await organizeVideo(rt, { library, apply: true });
+    const names = report.plan.entries
+      .filter((entry) => entry.action === "move" && entry.from?.includes("CD"))
+      .map((entry) => basename(entry.to!))
+      .sort();
+    expect(names).toEqual(["你是我的命运 (2005) - cd2.mkv", "你是我的命运 (2005) - cd3.mkv"]);
   });
 });

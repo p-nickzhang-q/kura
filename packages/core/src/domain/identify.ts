@@ -152,8 +152,11 @@ export function identify(input: { text: string; site?: string; siteId?: string }
 export function parseFileInfo(fileName: string): FileInfo {
   const base = normalizeText(fileName.replace(/\.[^.]+$/, ""));
 
-  const cd = /(?:^|-)(?:CD|DISC)(\d{1,2})(?:\W|$)/.exec(base);
-  const part = /(?:^|-)(?:PT|PART)(\d{1,2})(?:\W|$)/.exec(base);
+  // `CD` 前面不一定是 `^` 或 `-`: 真机文件名是 `你是我的命运CD2.mkv`、`海扁王cd2.rmvb`、
+  // `Sex.is.Zero.CD2-CiMG.avi` —— 前面是汉字或点。以前只认 `^` / `-`, 于是这些分碟标记
+  // 全部漏掉, 10 个多文件电影里 5 个是这种情况。改成"前面不是字母"即可(数字紧邻 CD 就行)。
+  const cd = /(?:^|[^A-Za-z])(?:CD|DISC)[ ._-]?(\d{1,2})(?![0-9])/i.exec(base);
+  const part = /(?:^|[^A-Za-z])(?:PT|PART)[ ._-]?(\d{1,2})(?![0-9])/i.exec(base);
 
   // `-C` = 中字, `-U` = 无码, `-UC` = 无码 + 中字; `-CD1` 是分集, 不算中字。
   const hasSubtitle = /(?:^|-)(?:U?C)(?:\W|$)/.test(base);

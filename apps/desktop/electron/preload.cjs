@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld("kura", {
   itemEpisodes: (key) => ipcRenderer.invoke("item:episodes", { key }),
   rebindItem: (key, newKey) => ipcRenderer.invoke("item:rebind", { key, newKey }),
   unbindItem: (key) => ipcRenderer.invoke("item:unbind", { key }),
+  mergeItem: (from, into) => ipcRenderer.invoke("item:merge", { from, into }),
   scrapeShow: (key) => ipcRenderer.invoke("scrape:show", { key }),
   addLibrary: (domain) => ipcRenderer.invoke("library:add", domain ? { domain } : {}),
   scan: (libraryId, options = {}) => ipcRenderer.invoke("scan:start", { libraryId, force: options.force === true }),

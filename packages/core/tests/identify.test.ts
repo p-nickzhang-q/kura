@@ -131,3 +131,27 @@ describe("normalizeItemKey", () => {
     expect(normalizeItemKey("javdb:2X9K1")).toBe("javdb:2x9k1");
   });
 });
+
+describe("分碟标记: 中文紧邻、点分隔也要认出来", () => {
+  const cases: [string, number][] = [
+    ["你是我的命运CD2.mkv", 2],
+    ["bbs.ylxcc.com⊙夜来香社区⊙星星草⊙你是我的命运CD3.mkv", 3],
+    ["[色即是空].Sex.is.Zero.CD2-CiMG.avi", 2],
+    ["[电影天堂www.dy2018.net]海扁王cd2.rmvb", 2],
+    ["[迅雷下载www.99b.cc]逍遥法外DVD中英双字CD3.rmvb", 3],
+    ["[电影天堂www.dygod.com].神奇绿巨人-cd2.rmvb", 2],
+    ["某某-CD1.mp4", 1],
+    ["Title.DISC2.mkv", 2],
+  ];
+  for (const [name, expected] of cases) {
+    test(`${name} → cd=${expected}`, () => {
+      expect(parseFileInfo(name).cd).toBe(expected);
+    });
+  }
+
+  test("不含 CD 的不会被误判", () => {
+    expect(parseFileInfo("绿巨人与怪物 (2016).rmvb").cd).toBeNull();
+    expect(parseFileInfo("2001.A.Space.Odyssey.mkv").cd).toBeNull();
+    expect(parseFileInfo("死魂曲02.rmvb").cd).toBeNull();
+  });
+});
