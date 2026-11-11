@@ -232,3 +232,20 @@ describe("找建议的别名补搜开关", () => {
     expect(EMPTY_SETTINGS.suggestAliases).toBe(true);
   });
 });
+
+describe("运行时设置可以热更新", () => {
+  test("保存后写回 rt.settings, 所有读者立刻拿到新值", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "kura-settings-"));
+    const rt = await openRuntime({ dataDir });
+    expect(resolveTmdbEnv(rt.settings).apiKey).toBeFalsy();
+
+    // GUI 保存设置 = 落盘 + 写回两处内存。漏掉 rt.settings 就会出现
+    // "第一次填 TMDB key 不生效, 要重启才好"。
+    const saved = saveSettings(rt.paths, { tmdbApiKey: "abc123", saveImages: false });
+    rt.settings = saved;
+
+    expect(resolveTmdbEnv(rt.settings).apiKey).toBe("abc123");
+    expect(rt.settings.saveImages).toBe(false);
+    await rt.close();
+  });
+});

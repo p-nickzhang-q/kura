@@ -17,8 +17,14 @@ export interface Runtime {
   readonly db: Db;
   readonly dbInfo: DbInfo;
   readonly schemaVersion: number;
-  /** 启动时读一次; 改设置后重新 openRuntime 或直接用新值, 不做热更新。 */
-  readonly settings: Settings;
+  /**
+   * 当前设置。
+   *
+   * 启动时读一次, 但**可以就地换新**: GUI 保存设置后必须写回这里, 否则所有
+   * `rt.settings` 的读者(TMDB key、代理、存图开关)拿到的还是启动时那份 ——
+   * 真机症状: 第一次填 TMDB key 不生效, 要重启应用才行。
+   */
+  settings: Settings;
   close(): void;
 }
 

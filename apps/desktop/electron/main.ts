@@ -1380,7 +1380,9 @@ function registerIpc(): void {
       if (patch.llmBaseUrl !== undefined) llm.baseUrl = patch.llmBaseUrl;
       if (patch.llmApiKey !== undefined) llm.apiKey = patch.llmApiKey;
       if (patch.llmModel !== undefined) llm.model = patch.llmModel;
-      settings = saveSettings(rt.paths, {
+      // 先落盘, 再写回两处内存: 模块级 `settings`(本文件) 和 `rt.settings`(core 里所有
+      // `rt.settings` 的读者)。漏掉后者就会出现"填了 key 不生效, 重启才好"。
+      const saved = saveSettings(rt.paths, {
         dmm,
         proxy: patch.proxy,
         llm,
@@ -1389,7 +1391,9 @@ function registerIpc(): void {
         ...(patch.suggestAliases !== undefined ? { suggestAliases: patch.suggestAliases } : {}),
         ...(patch.tmdbApiKey !== undefined ? { tmdbApiKey: patch.tmdbApiKey.trim() } : {}),
       });
-    await applyProxy();
+      settings = saved;
+      rt.settings = saved;
+      await applyProxy();
     return {
       settings: maskSettings(settings),
       dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
