@@ -15,6 +15,7 @@ import {
   createDmmSource,
   defaultSources,
   downloadPoster,
+  refillArtworkUrls,
   placeImagesBesideVideo,
   updateItem,
   retypeItem,
@@ -1330,11 +1331,26 @@ function registerIpc(): void {
   ipcMain.handle("resource:fetch", (_event, input: { key: string }) =>
     exclusive("下载海报", async () => {
       const rt = mustRuntime();
-      const item = getItem(rt, input.key);
+      let item = getItem(rt, input.key);
       if (!item) throw new AppError(`条目不存在: ${input.key}`, EXIT.NOT_FOUND);
+
+      // 从 nfo 恢复的条目没有图片 URL(元数据来自盘上的 nfo), 但身份还在 ——
+      // 按 TMDB 身份现查一次, 把图地址补回库里, 再下载。以前这里直接报
+      // "该条目没有图片 URL", 于是换电脑恢复出来的条目永远补不上海报。
+      const client = await tmdbClient(rt);
+      if (client) await refillArtworkUrls(rt, client, input.key);
+      item = getItem(rt, input.key) ?? item;
+
       const result = await downloadPoster(rt, createHttp(), item);
       if (!result.poster && !result.thumb) {
-        throw new AppError(result.tried.length === 0 ? "该条目没有图片 URL" : "图片下载失败", EXIT.RETRYABLE);
+        throw new AppError(
+          result.tried.length === 0
+            ? client
+              ? "TMDB 那边也没给这张图 (可能这个条目在 TMDB 上没有海报)"
+              : "该条目没有图片 URL, 而且没配 TMDB key —— 在设置里填一个就能补"
+            : "图片下载失败",
+          EXIT.RETRYABLE,
+        );
       }
       const file = (resource: { path: string; size: number } | null) =>
         resource ? { path: resource.path, size: resource.size } : null;

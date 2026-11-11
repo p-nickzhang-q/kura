@@ -7,7 +7,7 @@ import { buildNfo, buildPlan } from "../src/domain/materialize";
 import type { Metadata } from "../src/domain/types";
 import { HttpClient } from "../src/net/http";
 import { openRuntime } from "../src/runtime";
-import { cachedPoster, cachedThumb, downloadPoster, downloadResource, findResource, findSidecarImages, refererFor, resourceDir } from "../src/tasks/resources";
+import { cachedPoster, cachedThumb, downloadPoster, downloadResource, findResource, findSidecarImages, refillArtworkUrls, refererFor, resourceDir } from "../src/tasks/resources";
 
 // 最小的"JPEG": 只要字节能落盘、扩展名按 content-type 推断即可。
 const FAKE_JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9]);
@@ -284,5 +284,48 @@ describe("盘上的图: 影视整理后的布局", () => {
     const found = findSidecarImages(join(root, "ABP-123.mp4"));
     expect(found.poster).toBe(join(root, "ABP-123-poster.jpg"));
     await rm(root, { recursive: true, force: true });
+  });
+});
+
+describe("从 nfo 恢复的条目也能补图", () => {
+  test("没有 poster_urls, 但身份是 tmdb —— 按身份现查再把 URL 写回", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "kura-refill-"));
+    const rt = await openRuntime({ dataDir });
+    // 从 nfo 恢复的条目: 有标题, 没图 URL
+    rt.db.run(
+      "insert into items (number, content_type, domain, title, plot) values ('tmdb:movie:1927', '', 'movie', '绿巨人浩克', '简介')",
+    );
+
+    const fakeTmdb = {
+      movie: async (id: number) =>
+        id === 1927
+          ? { fields: { poster_urls: ["https://image.tmdb.org/t/p/w500/abc.jpg"], thumb_urls: ["https://image.tmdb.org/t/p/w780/def.jpg"] } }
+          : null,
+      show: async () => null,
+    };
+
+    const filled = await refillArtworkUrls(rt, fakeTmdb, "tmdb:movie:1927");
+    expect(filled).toBe(true);
+    const row = rt.db.get<{ poster_urls: string; thumb_urls: string; field_sources: string }>(
+      "select poster_urls, thumb_urls, field_sources from items",
+    )!;
+    expect(JSON.parse(row.poster_urls)[0]).toContain("abc.jpg");
+    expect(JSON.parse(row.thumb_urls)[0]).toContain("def.jpg");
+    expect(JSON.parse(row.field_sources).poster_urls).toBe("tmdb");
+
+    // 已经有 URL 就不动(别的来源的镜像不能被覆盖)
+    const again = await refillArtworkUrls(rt, fakeTmdb, "tmdb:movie:1927");
+    expect(again).toBe(false);
+    await rt.close();
+  });
+
+  test("不是 tmdb 身份 / 条目不存在 → 返回 false, 不抛", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "kura-refill-"));
+    const rt = await openRuntime({ dataDir });
+    rt.db.run("insert into items (number, content_type, domain, title) values ('local:某片', 'ugc', 'movie', '某片')");
+    const fakeTmdb = { movie: async () => null, show: async () => null };
+    expect(await refillArtworkUrls(rt, fakeTmdb, "local:某片")).toBe(false);
+    expect(await refillArtworkUrls(rt, fakeTmdb, "tmdb:movie:404")).toBe(false);
+    await rt.close();
   });
 });

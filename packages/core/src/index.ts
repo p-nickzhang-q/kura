@@ -168,6 +168,7 @@ export {
   downloadResource,
   findResource,
   findSidecarImages,
+  refillArtworkUrls,
   placeImagesBesideVideo,
   refererFor,
   resourceDir,

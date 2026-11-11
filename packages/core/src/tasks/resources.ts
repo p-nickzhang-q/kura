@@ -3,10 +3,12 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { locateEpisode, showDirOf } from "../domain/episodes";
-import type { Metadata } from "../domain/types";
+import { parseTmdbKey } from "../sources/tmdb";
+import { metadataColumns, rowToMetadata, type ItemRow } from "../db/rows";
+import type { Runtime } from "../runtime";
+import type { Metadata, RawFields } from "../domain/types";
 import { HttpClient } from "../net/http";
 import { resolveProxyUrl } from "../config";
-import type { Runtime } from "../runtime";
 
 /**
  * 图片资源的本地缓存: URL → 文件。
@@ -141,6 +143,52 @@ export async function downloadPoster(
   const thumb = await firstOk(rt, http, thumbCandidates, failures);
 
   return { key: metadata.key, poster, thumb, tried: [...posterCandidates, ...thumbCandidates], failures };
+}
+
+/**
+ * 条目没有图片 URL 时, 按 TMDB 身份现查一次, 把 URL 写回库里。
+ *
+ * 为什么需要: 从 nfo 恢复的条目, 元数据是从盘上的 nfo 读回来的 —— nfo 里没有图片地址,
+ * 于是 `poster_urls` 是空的,「下载图片」直接报"该条目没有图片 URL"。但**身份还在**
+ * (`tmdb:movie:1927`), 图完全能重新要到。
+ *
+ * 只在"一条 URL 都没有"时动手: 已经有 URL 说明还有别的来源(av 站的多个镜像),
+ * 不该拿 TMDB 覆盖掉。
+ */
+export async function refillArtworkUrls(
+  rt: Runtime,
+  tmdb: { movie(id: number): Promise<{ fields: RawFields } | null>; show(id: number): Promise<{ fields: RawFields } | null> },
+  key: string,
+): Promise<boolean> {
+  const parsed = parseTmdbKey(key);
+  if (!parsed) return false;
+  const row = rt.db.get<ItemRow>("select * from items where number = ?", [key]);
+  if (!row) return false;
+
+  const current = rowToMetadata(row);
+  if ((current.poster_urls?.length ?? 0) > 0 || (current.thumb_urls?.length ?? 0) > 0) return false;
+
+  const found = parsed.kind === "tv" ? await tmdb.show(parsed.id) : await tmdb.movie(parsed.id);
+  const poster = found?.fields.poster_urls;
+  const thumb = found?.fields.thumb_urls;
+  if (!poster && !thumb) return false;
+
+  const sources = { ...current.fieldSources };
+  if (poster) sources.poster_urls = "tmdb";
+  if (thumb) sources.thumb_urls = "tmdb";
+  const patch: Metadata = {
+    ...current,
+    poster_urls: poster ?? current.poster_urls,
+    thumb_urls: thumb ?? current.thumb_urls,
+    fieldSources: sources,
+  };
+  const columns = metadataColumns(patch);
+  const entries = Object.entries(columns).filter(([column]) => column !== "number" && column !== "actors");
+  rt.db.run(`update items set ${entries.map(([column]) => `${column} = ?`).join(", ")}, updated_at = unixepoch() where number = ?`, [
+    ...entries.map(([, value]) => value),
+    key,
+  ]);
+  return true;
 }
 
 const SIDECAR_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
