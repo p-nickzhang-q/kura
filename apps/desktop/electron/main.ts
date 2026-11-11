@@ -59,6 +59,7 @@ import {
   exportTvNfoTask,
   todoCounts,
   todoPlans,
+  todoRecover,
   countExhausted,
   countPendingTranslation,
   translationStats,
@@ -736,6 +737,16 @@ function registerIpc(): void {
     if (answer.response !== 0) return { ...dry, confirmed: false };
     return { ...(await recoverFromNfo(rt, { libraryId: input.libraryId, apply: true })), confirmed: true };
   });
+
+  /**
+   * 待办页「从 NFO 恢复」那一行的数字。
+   *
+   * 单独一个 IPC 而不是并进 `todo:plans`: 后者要跑整理计划(遍历全部文件)+ nfo 比对,
+   * 移动硬盘上实测 11.9 秒 —— 而这一行是"换电脑第一眼要看的东西", 等它等于看不到。
+   */
+  ipcMain.handle("todo:recover", async (_event, input: { libraryId?: number } = {}) =>
+    todoRecover(mustRuntime(), input?.libraryId === undefined ? {} : { libraryId: input.libraryId }),
+  );
 
   ipcMain.handle("todo:counts", (_event, input: { libraryId?: number } = {}) =>
     todoCounts(mustRuntime(), input?.libraryId === undefined ? {} : { libraryId: input.libraryId }),

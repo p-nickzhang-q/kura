@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld("kura", {
   relocateLibrary: (libraryId, root) => ipcRenderer.invoke("library:relocate", { libraryId, root }),
   todoCounts: (libraryId) => ipcRenderer.invoke("todo:counts", { libraryId }),
   todoPlans: (libraryId) => ipcRenderer.invoke("todo:plans", { libraryId }),
+  todoRecover: (libraryId) => ipcRenderer.invoke("todo:recover", { libraryId }),
   bindLocalDir: (libraryId, dir, paths, title, type) =>
     ipcRenderer.invoke("file:bind-local", {
       libraryId,

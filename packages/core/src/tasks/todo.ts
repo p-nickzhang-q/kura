@@ -35,11 +35,36 @@ export interface TodoPlans {
   organize: { move: number; writeNfo: number; copyImage: number; skip: number } | null;
   /** nfo 与库不一致的条数; 算不出来(异常)时为 null。 */
   nfo: { created: number; written: number } | null;
-  /**
-   * 盘上有带着 TMDB id 的 nfo、但库里还没绑定 —— 换电脑/换盘的典型状态。
-   * 非 0 说明"不用重新刮, 点一下就能恢复"。
-   */
-  nfoRecover: { shows: number; movies: number; files: number; unbound: number; locals: number } | null;
+}
+
+/**
+ * "从 NFO 恢复"能恢复多少。
+ *
+ * 单独一个函数而不是塞进 `todoPlans`: 那边要跑整理计划(遍历全部文件)+ nfo 比对,
+ * 在移动硬盘上实测 **11.9 秒** —— 而这一行是"换电脑第一眼要看的东西", 压在后面
+ * 就等于看不到。这里只读未绑定文件旁边的 nfo, 一两秒。
+ */
+export async function todoRecover(
+  rt: Runtime,
+  options: { libraryId?: number } = {},
+): Promise<{ shows: number; movies: number; locals: number; files: number; unbound: number; needsScan: boolean }> {
+  let shows = 0;
+  let movies = 0;
+  let locals = 0;
+  let files = 0;
+  let unbound = 0;
+  let needsScan = false;
+  for (const library of scopeLibraries(rt, options.libraryId)) {
+    if (library.domain !== "video") continue;
+    const report = await recoverFromNfo(rt, { libraryId: library.id });
+    shows += report.shows;
+    movies += report.movies;
+    locals += report.locals;
+    files += report.files;
+    unbound += report.unbound;
+    needsScan = needsScan || report.needsScan;
+  }
+  return { shows, movies, locals, files, unbound: needsScan ? 0 : unbound, needsScan };
 }
 
 /** 待办数字里的"库范围": 侧栏选中哪个库就只看哪个, 没选就是全部。 */
@@ -111,30 +136,5 @@ export async function todoPlans(rt: Runtime, options: { libraryId?: number } = {
     nfo = null;
   }
 
-  // 影视库专有: 盘上的 nfo 能直接给出身份, 不用联网重新找。
-  // 番号制库不走这条路(它的 nfo 是逐条目的, 对应 nfo sync)。
-  let nfoRecover: TodoPlans["nfoRecover"] = null;
-  try {
-    let shows = 0;
-    let movies = 0;
-    let files = 0;
-    let unbound = 0;
-    let locals = 0;
-    let needsScan = false;
-    for (const library of scopeLibraries(rt, options.libraryId)) {
-      if (library.domain !== "video") continue;
-      const report = await recoverFromNfo(rt, { libraryId: library.id });
-      shows += report.shows;
-      movies += report.movies;
-      files += report.files;
-      unbound += report.unbound;
-      locals += report.locals;
-      needsScan = needsScan || report.needsScan;
-    }
-    nfoRecover = { shows, movies, files, locals, unbound: needsScan ? 0 : unbound };
-  } catch {
-    nfoRecover = null;
-  }
-
-  return { organize: libraries.length === 0 ? null : total, nfo, nfoRecover };
+  return { organize: libraries.length === 0 ? null : total, nfo };
 }

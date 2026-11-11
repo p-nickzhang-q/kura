@@ -383,6 +383,22 @@ function invalidateTodoPlan(): void {
   todoPlanStale = true;
 }
 
+/**
+ * 「从 NFO 恢复」的数字 —— 单独一路, 不等那个 12 秒的整理计划。
+ *
+ * 它只读未绑定文件旁边的 nfo(实测一两秒), 而 `todoPlans` 要遍历全部文件跑整理计划
+ * 再逐份比对 nfo。以前两者捆在一起, 结果是"换电脑第一眼要看的那行"排在 12 秒之后,
+ * 用户看到的就是"没有这个功能"。
+ */
+const todoRecoverData = ref<{
+  shows: number;
+  movies: number;
+  locals: number;
+  files: number;
+  unbound: number;
+  needsScan: boolean;
+} | null>(null);
+
 /* ---- 侧栏「⋯」与命令面板 ---- */
 const moreOpen = ref(false);
 const paletteOpen = ref(false);
@@ -524,6 +540,15 @@ async function refreshTodo(): Promise<void> {
   const seq = ++todoSeq;
   todoLoading.value = true;
   try {
+    // 这一路只读未绑定文件旁边的 nfo(一两秒), 和下面的整理计划并行跑 —— 别让它排队。
+    void window.kura
+      .todoRecover(selectedId.value ?? undefined)
+      .then((data) => {
+        if (seq === todoSeq) todoRecoverData.value = data;
+      })
+      .catch(() => {
+        if (seq === todoSeq) todoRecoverData.value = null;
+      });
     const counts = await window.kura.todoCounts(selectedId.value ?? undefined);
     if (seq === todoSeq) todoCounts.value = counts;
   } catch {
@@ -583,7 +608,7 @@ const todoRows = computed<TodoRow[]>(() => {
   const rows: TodoRow[] = [];
 
   // 盘上的 nfo 能直接给出身份时, 这条比什么都优先: 点一下就把"未识别"和"待刮削"一起消掉。
-  const recover = plan?.nfoRecover ?? null;
+  const recover = todoRecoverData.value;
   const recoverable = recover ? recover.shows + recover.movies + (recover.locals ?? 0) : 0;
   // 有未绑定文件就亮出这一行, 哪怕一条都恢复不了 —— 否则界面是空白,
   // 人分不清"盘上没有可用 nfo"和"这个功能坏了"。

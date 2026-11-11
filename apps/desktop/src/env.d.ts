@@ -97,15 +97,7 @@ interface KuraTodoPlans {
    * 盘上的 nfo 能直接给出身份、但库里还没绑定 —— 换电脑/换盘时不用重新刮。
    * needsScan = 库里一条文件都还没登记, 数不出来(点恢复会先自动扫一遍)。
    */
-  nfoRecover: {
-    shows: number;
-    movies: number;
-    files: number;
-    /** 其中按 nfo 标题加成本地条目(UGC)的目录数。 */
-    locals?: number;
-    unbound: number;
-    needsScan?: boolean;
-  } | null;
+
 }
 
 interface KuraUnrecognizedFile {
@@ -384,6 +376,19 @@ interface KuraBridge {
   todoCounts(libraryId?: number): Promise<KuraTodoCounts>;
   /** 待办页的贵数字 (要读磁盘: 整理计划 / nfo 差异)。 */
   todoPlans(libraryId?: number): Promise<KuraTodoPlans>;
+  /**
+   * 「从 NFO 恢复」那一行 —— 单独一个通道, 因为 todoPlans 在移动硬盘上要 12 秒,
+   * 而这一行是换电脑第一眼要看的东西。
+   */
+  todoRecover(libraryId?: number): Promise<{
+    shows: number;
+    movies: number;
+    /** 按 nfo 标题加成本地条目(UGC)的目录数。 */
+    locals: number;
+    files: number;
+    unbound: number;
+    needsScan: boolean;
+  }>;
   /**
    * 从盘上的 nfo 恢复影视库: 建条目 + 绑文件 + 补空字段。
    * 不带 apply 只干跑(数一数), 带 apply 时主进程会先弹确认。
