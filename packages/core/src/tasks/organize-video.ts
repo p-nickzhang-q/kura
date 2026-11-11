@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { parsePhase } from "../db/rows";
 import { readdir, rmdir, unlink } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
+import { findSidecarImages } from "./resources";
 import { isVideoFile } from "./scan";
 import {
   applyPlan,
@@ -261,7 +262,7 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
         }),
       });
 
-      addImages(rt, key, head.title, dir, `${base}-poster`, "fanart", push, warnings);
+      addImages(rt, key, head.title, dir, `${base}-poster`, "fanart", push, warnings, primary?.path ?? files[0]!.path);
       // 正片之外、又没有分碟标记的: 多版本(1080p / 720p)。不猜哪个"更好", 留在原地。
       for (const file of plain.slice(1)) {
         push({ action: "skip", from: file.path, reason: "同一部电影有多个版本, 只整理第一个" });
@@ -284,7 +285,7 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
         tmdbId,
       }),
     });
-    addImages(rt, key, head.title, dir, "poster", "fanart", push, warnings);
+    addImages(rt, key, head.title, dir, "poster", "fanart", push, warnings, files[0]!.path);
 
     const episodes = new Map<string, EpisodeInfo>();
     for (const row of rt.db.all<EpisodeInfo & { season: number; episode: number }>(
@@ -414,6 +415,7 @@ function addImages(
   fanartBase: string,
   push: (entry: PlanEntry) => void,
   warnings: string[],
+  sourcePath: string,
 ): void {
   const row = rt.db.get<{ poster_urls: string | null; cover_urls: string | null; thumb_urls: string | null }>(
     "select poster_urls, cover_urls, thumb_urls from items where number = ?",
@@ -424,15 +426,30 @@ function addImages(
   const thumbUrl = first(...parseList(row?.thumb_urls ?? null));
   const poster = findResource(rt, posterUrl ?? undefined);
   const thumb = findResource(rt, thumbUrl ?? undefined);
+  // 盘上已有的图: 从 nfo 恢复的条目没有 poster_urls, 但上次整理(或别的工具)已经把图放在
+  // 目录里了。只看缓存的话会警告"目录里不会有 xxx-poster.jpg" —— 而它就躺在那儿。
+  const sidecar = findSidecarImages(sourcePath);
 
   if (poster) {
     push({ action: "copy-image", from: poster.path, to: resolve(join(dir, `${posterBase}${extname(poster.path) || ".jpg"}`)) });
-  } else {
+  } else if (sidecar.poster) {
+    // 源目录有图: 搬到目标的规范名(整理时顺手, 不用先「下载图片」)
+    const target = resolve(join(dir, `${posterBase}${extname(sidecar.poster) || ".jpg"}`));
+    if (resolve(sidecar.poster) !== target) push({ action: "copy-image", from: sidecar.poster, to: target });
+  } else if (!onDisk(dir, posterBase)) {
     warnings.push(`${title}: 没有缓存的海报 (先「下载图片」), 目录里不会有 ${posterBase}.jpg`);
   }
   if (thumb) {
     push({ action: "copy-image", from: thumb.path, to: resolve(join(dir, `${fanartBase}${extname(thumb.path) || ".jpg"}`)) });
+  } else if (sidecar.thumb) {
+    const target = resolve(join(dir, `${fanartBase}${extname(sidecar.thumb) || ".jpg"}`));
+    if (resolve(sidecar.thumb) !== target) push({ action: "copy-image", from: sidecar.thumb, to: target });
   }
+}
+
+/** 目标目录里已经有这张图了吗(任意常见扩展名)。 */
+function onDisk(dir: string, base: string): boolean {
+  return [".jpg", ".jpeg", ".png", ".webp"].some((extension) => existsSync(join(dir, `${base}${extension}`)));
 }
 
 export interface CleanupReport {

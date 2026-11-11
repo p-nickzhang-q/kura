@@ -418,3 +418,42 @@ describe("分碟: 同一部电影切成几块, 都要搬进去", () => {
     expect(names).toEqual(["你是我的命运 (2005) - cd2.mkv", "你是我的命运 (2005) - cd3.mkv"]);
   });
 });
+
+describe("盘上已有海报时不该说「没有缓存的海报」", () => {
+  test("视频旁边的 poster.jpg 存在 → 不警告, 也不重复复制", async () => {
+    const library = await setupShow();
+    const movieDir = join(media, "电影x");
+    await touch(join(movieDir, "某片.mkv"));
+    await writeFile(join(movieDir, "某片-poster.jpg"), "p");
+    await writeFile(join(movieDir, "某片-fanart.jpg"), "f");
+    await scan(rt, { library });
+    rt.db.run("insert into items (number, content_type, domain, title, release_date) values ('tmdb:movie:777', '', 'movie', '某片', '2020-01-01')");
+    rt.db.run("update media_files set number = 'tmdb:movie:777' where path = ?", [join(movieDir, "某片.mkv")]);
+
+    const report = await organizeVideo(rt, { library, apply: true });
+    // 目标是 `<标题 (年)>/<标题 (年)>-poster.jpg`, 源图会被搬过去 —— 但绝不该警告
+    // 只看这条: setupShow 里的「仁医」本来就没图, 会有它自己的警告
+    expect(report.warnings.filter((line) => line.includes("某片") && line.includes("没有缓存的海报"))).toEqual([]);
+    const copied = report.plan.entries.filter((entry) => entry.action === "copy-image").map((entry) => basename(entry.to!));
+    expect(copied.some((name) => name.endsWith("-poster.jpg"))).toBe(true);
+  });
+
+  test("目标目录里已经有图(上次整理放的) → 完全不产生 copy-image", async () => {
+    const library = await setupShow();
+    const movieDir = join(media, "电影y");
+    await touch(join(movieDir, "另一片.mkv"));
+    await scan(rt, { library });
+    rt.db.run("insert into items (number, content_type, domain, title, release_date) values ('tmdb:movie:888', '', 'movie', '另一片', '2021-01-01')");
+    rt.db.run("update media_files set number = 'tmdb:movie:888' where path = ?", [join(movieDir, "另一片.mkv")]);
+
+    // 先整理一次把文件搬过去
+    await organizeVideo(rt, { library, apply: true });
+    // 手工放一张目标名的图(模拟"上次已经整理过")
+    const target = join(media, "另一片 (2021)");
+    await writeFile(join(target, "另一片 (2021)-poster.jpg"), "p");
+
+    const again = await organizeVideo(rt, { library, apply: true });
+    expect(again.warnings.filter((line) => line.includes("另一片") && line.includes("没有缓存的海报"))).toEqual([]);
+    expect(again.plan.entries.filter((entry) => entry.action === "copy-image" && entry.to!.endsWith("-poster.jpg")).length).toBe(0);
+  });
+});
