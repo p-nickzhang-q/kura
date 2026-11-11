@@ -64,7 +64,6 @@ export interface VideoOrganizeReport {
    * 它们的标题是人写的、文件名没有季集信息、也没有来源能补: 按模板改名只会把
    * "我自己起的名" 换成 "我认不出的名"。要整理就先 `item title` 定好名自己搬。
    */
-  skippedLocal?: number;
 }
 
 export interface VideoOrganizeOptions {
@@ -95,6 +94,8 @@ interface ItemFilesRow {
   episode: number | null;
   /** 扫描时从文件名解析出的相位(JSON), 里面有分碟号 `cd`。 */
   phase: string | null;
+  /** `ugc` = 本地条目(手动加入)。它们没有来源、没有季集, 文件名也是人起的。 */
+  content_type: string;
 }
 
 interface EpisodeInfo {
@@ -105,6 +106,11 @@ interface EpisodeInfo {
 }
 
 
+
+/** 只用于"是不是同一个目录"的比较: 折叠空白、忽略大小写。 */
+function normalizeForCompare(path: string): string {
+  return path.replace(/\s+/g, " ").trim().toLowerCase();
+}
 
 /** `剧名 (1985)`; 没有年份就不要空括号。 */
 export function folderName(title: string, year: string | null): string {
@@ -159,22 +165,15 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
 
   const rows = rt.db.all<ItemFilesRow>(
     `select i.number, i.title, i.title_original, i.domain, i.release_date, i.plot, i.studio,
-            i.duration_min, i.tags, i.actors,
+            i.duration_min, i.tags, i.actors, i.content_type,
             m.path, m.season, m.episode, m.phase
      from media_files m join items i on i.number = m.number
-     where m.library_id = ? and i.domain in ('tv', 'movie') and i.content_type <> 'ugc'
+     where m.library_id = ? and i.domain in ('tv', 'movie')
      order by i.number, m.season, m.episode, m.path`,
     [opts.library.id],
   );
 
   // 本地条目(手动加入的 UGC)一律不动: 没有来源、没有季集、标题也是人写的
-  const skippedLocal =
-    rt.db.get<{ n: number }>(
-      `select count(distinct m.number) as n
-       from media_files m join items i on i.number = m.number
-       where m.library_id = ? and i.content_type = 'ugc'`,
-      [opts.library.id],
-    )?.n ?? 0;
 
   const byItem = new Map<string, ItemFilesRow[]>();
   for (const row of rows) {
@@ -206,10 +205,28 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
 
     const year = yearOf(head.release_date);
     const folder = folderName(head.title, year);
-    const dir = resolve(join(root, folder));
+    let dir = resolve(join(root, folder));
+    // 目录名只差空白时别搬: `sanitizeName` 会合并连续空格, 于是
+    // `...字幕  1080P...` 与 `...字幕 1080P...` 被当成不同目录 —— 126 个文件为了
+    // 一个空格全搬一遍, 机械盘上要十几分钟, Emby 还得重扫。
+    const currentDir = dirname(files[0]!.path);
+    if (normalizeForCompare(currentDir) === normalizeForCompare(dir)) dir = currentDir;
     if (!insideRoot(root, dir)) {
       warnings.push(`${key}: 目标目录在库根之外, 跳过`);
       for (const file of files) push({ action: "skip", from: file.path, reason: "目标目录在库根之外" });
+      continue;
+    }
+
+    if (head.content_type === "ugc") {
+      // 本地条目(手动加入的 B站投稿 / 讲座 / 综艺): 没有来源、没有季集, 文件名是用户自己
+      // 起的 —— 所以只搬目录, 一个字节都不改名。以前这类条目完全不动, 结果它们永远
+      // 堆在 `movie\2014-12-9\` 这种旧目录里。
+      for (const file of files) {
+        const target = resolve(join(dir, basename(file.path)));
+        const state = await targetState(file.path, target);
+        if (state === "free") push({ action: "move", from: file.path, to: target });
+        else push({ action: "skip", from: file.path, to: target, reason: skipReason(state) });
+      }
       continue;
     }
 
@@ -383,16 +400,13 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
     }
   }
 
-  if (skippedLocal > 0) {
-    warnings.push(`本地条目 ${skippedLocal} 个没有整理: 手动加入的条目 (local:) 没有来源也没有季集, 要搬请自己来`);
-  }
+
 
   return {
     plan,
     applied,
     warnings,
     ...(prune ? { removedDirs: prune.removed, leftoverDirs: prune.leftover, removedFiles: prune.removedFiles } : {}),
-    ...(skippedLocal > 0 ? { skippedLocal } : {}),
   };
 }
 

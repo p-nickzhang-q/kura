@@ -321,22 +321,25 @@ describe("清理空壳目录", () => {
 });
 
 describe("本地条目 (手动加入的 UGC)", () => {
-  test("整理不碰它们, 并在报告里说明跳过了几个", async () => {
+  test("只搬目录, 文件名一个字节都不改", async () => {
     await touch(join(media, "bilibili", "115406106794717-黑熊精新歌", "成片-33241500011.mp4"));
     const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
     await scan(rt, { library });
 
-    bindLocalDirectory(rt, {
+    const bound = bindLocalDirectory(rt, {
       libraryId: library.id,
       dir: join(media, "bilibili", "115406106794717-黑熊精新歌"),
+      title: "黑熊精新歌",
     });
 
     const report = await organizeVideo(rt, { library, apply: true });
-    expect(report.skippedLocal).toBe(1);
-    expect(report.plan.summary.move).toBe(0);
-    // 文件原地不动
-    expect(await readdir(join(media, "bilibili", "115406106794717-黑熊精新歌"))).toEqual(["成片-33241500011.mp4"]);
-    expect(report.warnings.some((line) => line.includes("本地条目"))).toBe(true);
+    // 以前这类条目完全不动(堆在旧目录里); 现在搬进 `<标题>/`, 但名字是用户起的, 不改
+    const moved = report.plan.entries.find((entry) => entry.action === "move");
+    expect(moved).toBeTruthy();
+    expect(basename(moved!.to!)).toBe("成片-33241500011.mp4");
+    expect(moved!.to).toContain("黑熊精新歌");
+    expect(await readdir(join(media, "黑熊精新歌"))).toEqual(["成片-33241500011.mp4"]);
+    expect(bound.key.startsWith("local:")).toBe(true);
   });
 });
 
@@ -455,5 +458,21 @@ describe("盘上已有海报时不该说「没有缓存的海报」", () => {
     const again = await organizeVideo(rt, { library, apply: true });
     expect(again.warnings.filter((line) => line.includes("另一片") && line.includes("没有缓存的海报"))).toEqual([]);
     expect(again.plan.entries.filter((entry) => entry.action === "copy-image" && entry.to!.endsWith("-poster.jpg")).length).toBe(0);
+  });
+});
+
+describe("目录名只差空白时不要搬", () => {
+  test("本地条目的目录名与目标只差连续空格 → 不算移动", async () => {
+    // 真实情形: 条目 title 里有双空格, sanitizeName 合并成一个, 于是"目标目录"看起来不同
+    const dir = join(media, "某合集  第2季");
+    await touch(join(dir, "第一集.mp4"));
+    const library = createLibrary(rt.db, { name: "影视库", root: media, domain: "video" });
+    await scan(rt, { library });
+    bindLocalDirectory(rt, { libraryId: library.id, dir, title: "某合集 第2季", type: "tv" });
+
+    const report = await organizeVideo(rt, { library, apply: true });
+    // 只差空白 → 原地不动(以前会把整批文件搬一遍, 机械盘上白等十几分钟)
+    expect(report.plan.entries.filter((entry) => entry.action === "move")).toEqual([]);
+    expect(await readdir(dir)).toEqual(["第一集.mp4"]);
   });
 });
