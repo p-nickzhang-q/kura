@@ -494,3 +494,28 @@ describe("只有背景图不算有海报", () => {
     expect(warn).toContain("背景图");
   });
 });
+
+describe("同批两个文件抢同一个目标", () => {
+  test("两个同名本地条目不互相覆盖, 也不撞 UNIQUE", async () => {
+    const library = await setupShow();
+    // 真实情形: local:不期而爱 与 local:不期而爱-2 的 title 都是「不期而爱」
+    const a = join(media, "A目录");
+    const b = join(media, "B目录");
+    await touch(join(a, "01.mp4"));
+    await touch(join(b, "01.mp4"));
+    await scan(rt, { library });
+    bindLocalDirectory(rt, { libraryId: library.id, dir: a, title: "不期而爱", type: "tv" });
+    bindLocalDirectory(rt, { libraryId: library.id, dir: b, title: "不期而爱", type: "tv" });
+
+    const report = await organizeVideo(rt, { library, apply: true });
+    // 只看「不期而爱」(setupShow 里的仁医也有自己的 move)
+    const moves = report.plan.entries.filter((entry) => entry.action === "move" && entry.to?.includes("不期而爱"));
+    // 只搬一个 01.mp4, 另一个 skip —— 都搬会覆盖, 然后索引撞 UNIQUE
+    expect(moves.length).toBe(1);
+    expect(report.plan.entries.some((entry) => entry.reason?.includes("已经占了同一个文件名"))).toBe(true);
+    // 两个「不期而爱」的索引行都还在(一个在新位置, 一个留在原位置) —— 没被覆盖掉
+    expect(
+      rt.db.get<{ n: number }>("select count(*) as n from media_files where number like 'local:不期而爱%'")!.n,
+    ).toBe(2);
+  });
+});

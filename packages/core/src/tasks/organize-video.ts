@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { parsePhase } from "../db/rows";
+import { moveIndexPath, parsePhase } from "../db/rows";
 import { readdir, rmdir, unlink } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { findSidecarImages } from "./resources";
@@ -223,6 +223,14 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
       // 堆在 `movie\2014-12-9\` 这种旧目录里。
       for (const file of files) {
         const target = resolve(join(dir, basename(file.path)));
+        // 两个本地条目同名(真机: `local:不期而爱` 与 `local:不期而爱-2` 都叫「不期而爱」)
+        // 会搬进同一个目录, 同名文件必须让路, 否则第二个覆盖第一个。
+        if (claimed.has(target)) {
+          warnings.push(`${basename(file.path)}: 另一个条目已经占了同一个文件名, 跳过`);
+          push({ action: "skip", from: file.path, to: target, reason: "另一个条目已经占了同一个文件名" });
+          continue;
+        }
+        claimed.add(target);
         const state = await targetState(file.path, target);
         if (state === "free") push({ action: "move", from: file.path, to: target });
         else push({ action: "skip", from: file.path, to: target, reason: skipReason(state) });
@@ -247,20 +255,24 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
       // 正片: 优先没 cd 标记的第一个(完整版); 全是分碟时用 cd 最小的那个当"正片"位置?
       // 不 —— 全分碟就直接都带 -cdN, 不额外造一个正片名, 免得磁盘上出现两份同样的内容。
       const primary = plain[0] ?? null;
+      // 同一批计划里两个文件指向同一个目标时, 第二个必须让路 —— 否则执行时
+      // `rename` 会覆盖先搬的那个(Windows 上 rename 到已存在文件是覆盖), 索引再撞 UNIQUE。
+      const planMovieMove = async (from: string, target: string): Promise<void> => {
+        if (claimed.has(target)) {
+          warnings.push(`${basename(from)}: 同批另一个文件要搬到这里, 跳过`);
+          push({ action: "skip", from, to: target, reason: "同批另一个文件已经占了同一个目标" });
+          return;
+        }
+        claimed.add(target);
+        const state = await targetState(from, target);
+        if (state === "free") push({ action: "move", from, to: target });
+        else push({ action: "skip", from, to: target, reason: skipReason(state) });
+      };
       if (primary) {
-        const extension = extname(primary.path);
-        const target = resolve(join(dir, `${base}${extension}`));
-        const state = await targetState(primary.path, target);
-        if (state === "free") push({ action: "move", from: primary.path, to: target });
-        else push({ action: "skip", from: primary.path, to: target, reason: skipReason(state) });
+        await planMovieMove(primary.path, resolve(join(dir, `${base}${extname(primary.path)}`)));
       }
       for (const disc of discs) {
-        const cd = cdOf(disc);
-        const extension = extname(disc.path);
-        const target = resolve(join(dir, `${base} - cd${cd}${extension}`));
-        const state = await targetState(disc.path, target);
-        if (state === "free") push({ action: "move", from: disc.path, to: target });
-        else push({ action: "skip", from: disc.path, to: target, reason: skipReason(state) });
+        await planMovieMove(disc.path, resolve(join(dir, `${base} - cd${cdOf(disc)}${extname(disc.path)}`)));
       }
 
       push({
@@ -361,13 +373,13 @@ export async function organizeVideo(rt: Runtime, opts: VideoOrganizeOptions): Pr
       for (const result of applied) {
         if (!result.ok || !result.entry.from || !result.entry.to) continue;
         if (result.entry.action === "move") {
-          rt.db.run("update media_files set path = ? where path = ?", [result.entry.to, result.entry.from]);
+          moveIndexPath(rt.db, result.entry.from, result.entry.to);
           continue;
         }
         // 计划说"目标就是它", 而源文件已经不在了 —— 说明上一次整理搬了文件、索引没跟上。
         // 不纠正的话, 索引会一直指着空目录, nfo 同步往里写就是 ENOENT, 永远不收敛。
         if (result.entry.action === "skip" && !existsSync(result.entry.from) && existsSync(result.entry.to)) {
-          rt.db.run("update media_files set path = ? where path = ?", [result.entry.to, result.entry.from]);
+          moveIndexPath(rt.db, result.entry.from, result.entry.to);
         }
       }
       rt.db.exec("commit");

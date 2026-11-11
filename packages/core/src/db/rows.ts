@@ -99,6 +99,28 @@ export function metadataColumns(metadata: Metadata): Record<string, unknown> {
   };
 }
 
+/**
+ * 把索引从旧路径挪到新路径。目标已被占用时合并成一行, 不抛 UNIQUE。
+ *
+ * 为什么会占用: 同一份物理文件可能先后被登记过两条索引(旧路径 + 新路径), 或者同批
+ * 计划里两个源文件要搬到同一个目标。直接 `update path = to` 会撞
+ * `UNIQUE constraint failed: media_files.path` —— 真机上整批整理就此失败, 而且
+ * 文件已经搬走了, 索引停在半路。
+ */
+export function moveIndexPath(db: Db, from: string, to: string): void {
+  const target = db.get<{ number: string | null }>("select number from media_files where path = ?", [to]);
+  if (!target) {
+    db.run("update media_files set path = ? where path = ?", [to, from]);
+    return;
+  }
+  const source = db.get<{ number: string | null }>("select number from media_files where path = ?", [from]);
+  // 目标行没有绑定而源行有 → 保留绑定, 其余交给目标行自己的 size/mtime。
+  if (!target.number && source?.number) {
+    db.run("update media_files set number = ? where path = ?", [source.number, to]);
+  }
+  db.run("delete from media_files where path = ?", [from]);
+}
+
 export function parseJson<T>(value: string | null): T | undefined {
   if (!value) return undefined;
   try {
