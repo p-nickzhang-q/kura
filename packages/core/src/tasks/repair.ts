@@ -2,6 +2,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import { findLibrary, listLibraries } from "../db/rows";
 import { nfoPathFor } from "../domain/nfo";
 import type { Runtime } from "../runtime";
+import { moveIndexPath } from "../db/rows";
 import { organize } from "./organize";
 import { organizeVideo } from "./organize-video";
 
@@ -94,7 +95,9 @@ export async function repairIndexPaths(
       });
 
       if (apply) {
-        rt.db.run("update media_files set path = ? where path = ?", [entry.to, entry.from]);
+        // 目标可能已经被另一行占着(同一物理文件的两条索引): 硬 update 会撞 UNIQUE,
+        // 整个修复就中途失败 —— 真机上 68 条里有一条就够让它全废。
+        moveIndexPath(rt.db, entry.from, entry.to);
         // 旧位置只剩 Kura 自己写的 nfo: 影片已经搬走, 这份 nfo 没人会读, 留着只会骗人
         if (existsSync(orphanNfo)) unlinkSync(orphanNfo);
       }
