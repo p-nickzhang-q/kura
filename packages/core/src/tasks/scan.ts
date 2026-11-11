@@ -22,6 +22,9 @@ export const VIDEO_EXTENSIONS = new Set([
   ".m2ts",
   ".iso",
   ".rmvb",
+  // `.rm` 是 RealMedia: 老片子(尤其 2000 年代资源站转的)常见。以前漏了它,
+  // 于是 `[迅雷]禁闭岛.BD1024高清中英双字.rm` 这种文件扫都扫不到, 界面上完全不存在。
+  ".rm",
   ".flv",
   ".webm",
   ".m4v",

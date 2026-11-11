@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createLibrary, getItem, updateItem } from "../src/index";
 import { openRuntime } from "../src/runtime";
 import { createRegistry, defaultSources, fixtureSource, type Source } from "../src/sources";
-import { listFiles } from "../src/tasks/scan";
+import { isVideoFile, listFiles } from "../src/tasks/scan";
 import { countItems, countExhausted, countPending, listItems, MAX_SCRAPE_ATTEMPTS, pendingKeys } from "../src/tasks/scrape";
 import { countPendingTranslation, translatePending } from "../src/tasks/translate";
 import { scan } from "../src/tasks/scan";
@@ -508,5 +508,15 @@ describe("扫描自愈: 解析器升级后 phase 也要跟着更新", () => {
     const after = rt.db.get<{ phase: string }>("select phase from media_files where path = ?", [file])!;
     expect(JSON.parse(after.phase).cd).toBe(2);
     await rt.close();
+  });
+});
+
+describe("视频扩展名", () => {
+  test(".rm (RealMedia) 算影片 —— 老资源站转的片子常见这个后缀", () => {
+    expect(isVideoFile("[迅雷下载www.2tu.cc]禁闭岛.BD1024高清中英双字.rm")).toBe(true);
+    expect(isVideoFile("某片.RM")).toBe(true);
+    // 相邻的名字不能被顺带放进来
+    expect(isVideoFile("光盘镜像.rmd")).toBe(false);
+    expect(isVideoFile("readme.md")).toBe(false);
   });
 });
