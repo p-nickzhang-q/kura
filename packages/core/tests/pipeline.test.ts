@@ -463,3 +463,25 @@ describe("番号兜底只看库根以内", () => {
     }
   });
 });
+
+describe("待刮削: 两个域对 nfo 来源的判断不同", () => {
+  test("影视域从 nfo 恢复的条目(有标题有简介)不算待刮", async () => {
+    const rt = await openRuntime({ dataDir: await mkdtemp(join(tmpdir(), "kura-pending-")) });
+    // 影视域: field_sources 只有 nfo(从盘上的 nfo 恢复来的), 标题和简介都有
+    rt.db.run(
+      "insert into items (number, content_type, domain, title, plot, field_sources) values ('tmdb:tv:1', '', 'tv', '死神', '简介', '{\"title\":\"nfo\",\"plot\":\"nfo\"}')",
+    );
+    expect(countPending(rt)).toBe(0);
+
+    // 缺简介 → 仍然待刮
+    rt.db.run("update items set plot = null where number = 'tmdb:tv:1'");
+    expect(countPending(rt)).toBe(1);
+
+    // 番号制: 只有 nfo 来源 = 还没联网核对过, 仍然待刮(规则不变)
+    rt.db.run(
+      "insert into items (number, content_type, domain, title, plot, field_sources) values ('ABP-123', 'censored', 'av', '某片', '简介', '{\"title\":\"nfo\",\"plot\":\"nfo\"}')",
+    );
+    expect(countPending(rt)).toBe(2);
+    await rt.close();
+  });
+});

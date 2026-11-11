@@ -493,10 +493,20 @@ export async function scrapePending(
  * `field_sources` 里除了 `nfo` 再没有别的来源, 就算没刮过。
  */
 function pendingWhere(prefix = ""): string {
-  // 本地条目(ugc)永远不会有来源把它刮干净, 留在待刮清单里只会把批次卡在失败计数上
-  return `(${prefix}content_type <> 'ugc' and (${prefix}title is null or ${prefix}title = '' or not exists (
-    select 1 from json_each(${prefix}field_sources) where json_each.value <> 'nfo'
-  )))`;
+  // 本地条目(ugc)永远不会有来源把它刮干净, 留在待刮清单里只会把批次卡在失败计数上。
+  //
+  // "nfo 来源算不算刮过"两个域答案不同:
+  //  - av: nfo 是别的工具生成的旧库快照, 只能当种子, 得联网核对一次
+  //  - video: nfo 就是 Kura 自己写出去的 TMDB 快照 —— 换电脑从 nfo 恢复之后
+  //    field_sources 全是 nfo, 按 av 的规则会被判成"没刮过", 于是恢复完的条目永远
+  //    赖在待刮清单里(真机上 160 条全部如此)。影视域按"缺标题或缺简介"算。
+  return `(${prefix}content_type <> 'ugc' and (
+    ${prefix}title is null or ${prefix}title = ''
+    or (coalesce(${prefix}domain, 'av') = 'av' and not exists (
+      select 1 from json_each(${prefix}field_sources) where json_each.value <> 'nfo'
+    ))
+    or (coalesce(${prefix}domain, 'av') <> 'av' and (${prefix}plot is null or ${prefix}plot = ''))
+  ))`;
 }
 
 export function pendingKeys(
