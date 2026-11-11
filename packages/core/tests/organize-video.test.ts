@@ -344,15 +344,22 @@ describe("索引指着已删除的旧目录时, 整理自己会纠正", () => {
   test("源路径不存在、目标存在 → 索引改到目标, 不需要人工跑 repair", async () => {
     const library = await setupShow();
     await organizeVideo(rt, { library, apply: true });
-    // 造出"上次搬完但索引没跟上"的状态: 把索引改回一个已经不存在的源路径
-    const row = rt.db.get<{ path: string }>("select path from media_files where number = 'tmdb:tv:46198' limit 1")!;
-    const ghost = join(media, "旧目录", "仁医 - S01E01.mp4");
+    // 造出"上次搬完但索引没跟上"的状态: 把索引改回**整理前**的位置。
+    // 不能随便造一个陌生目录 —— 那样整理计划判"认不出集号", 连目标路径都没有,
+    // 纠正逻辑(靠 from 不在 + to 在)压根没机会跑。
+    const row = rt.db.get<{ path: string }>(
+      "select path from media_files where number = 'tmdb:tv:46198' and season = 1 and episode = 1",
+    )!;
+    const ghost = join(media, "仁医", "仁医 - 第1集.mp4");
     rt.db.run("update media_files set path = ? where path = ?", [ghost, row.path]);
     expect(await (await import("node:fs/promises")).access(ghost).then(() => true, () => false)).toBe(false);
 
     // 再整理一次: 计划里是 skip(目标已在), 但索引该被纠正回目标路径
     await organizeVideo(rt, { library, apply: true });
-    const after = rt.db.get<{ path: string }>("select path from media_files where number = 'tmdb:tv:46198' limit 1")!;
+    // 查**同一集**(不能 limit 1: 同一条目下还有"幕后花絮"这种没集号的文件)
+    const after = rt.db.get<{ path: string }>(
+      "select path from media_files where number = 'tmdb:tv:46198' and season = 1 and episode = 1",
+    )!;
     expect(after.path).not.toBe(ghost);
     expect(after.path).toContain("仁医 (2009)");
   });
