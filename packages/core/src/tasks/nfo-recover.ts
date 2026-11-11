@@ -45,6 +45,13 @@ export interface NfoRecoverReport {
   scanned: number;
   /** 库里一条文件都没登记 —— 干跑时数不出来, 界面该提示"先扫一遍"。 */
   needsScan: boolean;
+  /**
+   * 这个库里还有多少个未绑定的文件。
+   *
+   * 有它界面才敢在"一条都恢复不了"时也把这一行亮出来 —— 否则用户看到的是空白,
+   * 分不清"没有可恢复的"和"功能坏了"。
+   */
+  unbound: number;
   shows: number;
   movies: number;
   /** 会(或已经)绑定上的文件总数。 */
@@ -149,6 +156,7 @@ export async function recoverFromNfo(
     dryRun: !apply,
     scanned,
     needsScan: files.length === 0 && countRegistered(rt, library.id) === 0,
+    unbound: files.length,
     shows: tvDirs.size,
     movies: movieFiles.length,
     files: [...tvDirs.values()].reduce((sum, group) => sum + group.paths.length, 0) + movieFiles.length,

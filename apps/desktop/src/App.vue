@@ -585,20 +585,24 @@ const todoRows = computed<TodoRow[]>(() => {
   // 盘上的 nfo 能直接给出身份时, 这条比什么都优先: 点一下就把"未识别"和"待刮削"一起消掉。
   const recover = plan?.nfoRecover ?? null;
   const recoverable = recover ? recover.shows + recover.movies : 0;
-  if (video && recover && (recoverable > 0 || recover.needsScan)) {
+  // 有未绑定文件就亮出这一行, 哪怕一条都恢复不了 —— 否则界面是空白,
+  // 人分不清"盘上没有可用 nfo"和"这个功能坏了"。
+  if (video && recover && (recoverable > 0 || recover.needsScan || recover.unbound > 0)) {
     rows.push({
       key: "nfo-recover",
       step: "00",
       label: "从 NFO 恢复",
       desc: recoverable
         ? "盘上的 nfo 带着 TMDB id —— 换电脑不用重新刮, 元数据直接读回来"
-        : "库里还没登记文件; 点一下会先扫一遍库, 再从 nfo 恢复",
+        : recover.needsScan
+          ? "库里还没登记文件; 点一下会先扫一遍库, 再从 nfo 恢复"
+          : `${recover.unbound} 个文件还没绑定, 但它们旁边没有带 TMDB id 的 nfo —— 只能走「找建议」`,
       // 还没扫过时数不出来, 显示「…」而不是 0 —— 0 会让人以为没得救
       count: recoverable > 0 ? recoverable : null,
       unit: "条",
       // 只读盘上的 nfo + 只改库, 不联网也不动视频文件
       tag: "只读",
-      action: "恢复",
+      action: recoverable > 0 || recover.needsScan ? "恢复" : "再看看",
       disabled: false,
       next: false,
       go: recoverNfo,

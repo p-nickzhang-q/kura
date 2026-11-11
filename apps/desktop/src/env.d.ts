@@ -97,7 +97,7 @@ interface KuraTodoPlans {
    * 盘上的 nfo 能直接给出身份、但库里还没绑定 —— 换电脑/换盘时不用重新刮。
    * needsScan = 库里一条文件都还没登记, 数不出来(点恢复会先自动扫一遍)。
    */
-  nfoRecover: { shows: number; movies: number; files: number; needsScan?: boolean } | null;
+  nfoRecover: { shows: number; movies: number; files: number; unbound: number; needsScan?: boolean } | null;
 }
 
 interface KuraUnrecognizedFile {
