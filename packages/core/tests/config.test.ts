@@ -20,6 +20,7 @@ import {
   normalizeProxyUrl,
 } from "../src/config";
 import { openRuntime } from "../src/runtime";
+import { resolvePaths } from "../src/paths";
 import type { Paths } from "../src/paths";
 
 let root: string;
@@ -247,5 +248,24 @@ describe("运行时设置可以热更新", () => {
     expect(resolveTmdbEnv(rt.settings).apiKey).toBe("abc123");
     expect(rt.settings.saveImages).toBe(false);
     await rt.close();
+  });
+});
+
+describe("脱敏值不许写回配置", () => {
+  test("把界面回读的 ••••abcd 当 key 存, 不会覆盖真 key", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "kura-mask-"));
+    const paths = resolvePaths({ ...process.env, KURA_DATA_DIR: dataDir } as NodeJS.ProcessEnv);
+    saveSettings(paths, { tmdbApiKey: "real-key-abcdef" });
+
+    // 界面拿到的是脱敏值, 如果有人原样写回来
+    saveSettings(paths, { tmdbApiKey: "••••cdef" });
+    expect(loadSettings(paths).tmdbApiKey).toBe("real-key-abcdef");
+
+    saveSettings(paths, { tmdbApiKey: "****cdef" });
+    expect(loadSettings(paths).tmdbApiKey).toBe("real-key-abcdef");
+
+    // 真值照常写入
+    saveSettings(paths, { tmdbApiKey: "another-real-key" });
+    expect(loadSettings(paths).tmdbApiKey).toBe("another-real-key");
   });
 });

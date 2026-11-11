@@ -102,10 +102,12 @@ export function saveSettings(
 ): Settings {
   const current = loadSettings(paths);
   const next: Settings = {
-    dmm: { ...current.dmm, ...(patch.dmm ?? {}) },
+    dmm: { ...current.dmm, ...withoutMasked(patch.dmm) },
     proxy: patch.proxy !== undefined ? patch.proxy : current.proxy,
-    tmdbApiKey: patch.tmdbApiKey !== undefined ? patch.tmdbApiKey : current.tmdbApiKey,
-    llm: { ...current.llm, ...(patch.llm ?? {}) },
+    // 脱敏值('••••89b5' / '****89b5')不是真 key。收到这种就当成"没改" ——
+    // 有人把界面回读的值原样写回来时, 绝不能把真 key 覆盖成一行星号。
+    tmdbApiKey: isMasked(patch.tmdbApiKey) ? current.tmdbApiKey : patch.tmdbApiKey !== undefined ? patch.tmdbApiKey : current.tmdbApiKey,
+    llm: { ...current.llm, ...withoutMasked(patch.llm) },
     translate: patch.translate !== undefined ? patch.translate : current.translate,
     saveImages: patch.saveImages !== undefined ? patch.saveImages : (current.saveImages ?? true),
     suggestAliases: patch.suggestAliases !== undefined ? patch.suggestAliases : (current.suggestAliases ?? true),
@@ -115,6 +117,29 @@ export function saveSettings(
   // 0600: 里面有 API 密钥。
   writeFileSync(settingsPath(paths), `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   return next;
+}
+
+/**
+ * 值是不是脱敏后的样子。
+ *
+ * `maskSettings` 会把密钥显示成 `••••abcd` / `****abcd`。这种值一旦被写回配置,
+ * 真密钥就永久丢了 —— 所以写入前拦一道, 当成"没改"。
+ */
+export function isMasked(value: string | undefined): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  return trimmed.startsWith("•") || trimmed.startsWith("*");
+}
+
+/** 补丁里的对象逐字段过滤掉脱敏值(密钥字段)。 */
+function withoutMasked<T extends Record<string, string | undefined>>(patch: T | undefined): Partial<T> {
+  if (!patch) return {};
+  const out: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    out[key] = isMasked(value) ? undefined : value;
+  }
+  return out as Partial<T>;
 }
 
 /** TMDB key: 环境变量 > 配置文件。 */
