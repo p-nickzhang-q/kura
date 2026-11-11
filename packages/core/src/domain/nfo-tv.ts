@@ -26,6 +26,13 @@ export interface TvShowNfoFields {
   actors?: string[];
   /** `tmdb:tv:1399` → 写 `<uniqueid type="tmdb">1399</uniqueid>`。 */
   tmdbId?: string | null;
+  /**
+   * 本地条目(UGC)的身份, 形如 `local:食贫道充电视频`。
+   *
+   * 它没有 TMDB id, 所以以前写 nfo 时一个身份标识都不写 —— 换电脑之后那些 nfo 就成了
+   * "有标题但没有身份"的孤儿, 只能重新手动绑一遍(真机: 19 个 UGC 目录、612 个文件)。
+   */
+  kuraId?: string | null;
 }
 
 /** 电影: 根 `<movie>`, 与剧不是同一份词表(没有 `<season>`, 有 `<runtime>`)。 */
@@ -39,6 +46,8 @@ export interface MovieNfoFields {
   genres?: string[];
   actors?: string[];
   tmdbId?: string | null;
+  /** 见 TvShowNfoFields.kuraId。 */
+  kuraId?: string | null;
 }
 
 export interface EpisodeNfoFields {
@@ -60,7 +69,7 @@ export function renderTvShowNfo(fields: TvShowNfoFields): string {
   push(lines, "premiered", fields.premiered);
   push(lines, "studio", fields.studio);
   for (const genre of dedupe(fields.genres ?? [])) push(lines, "genre", genre);
-  pushUniqueId(lines, fields.tmdbId);
+  pushUniqueId(lines, fields.tmdbId, fields.kuraId);
   for (const actor of dedupe(fields.actors ?? [])) lines.push("  <actor>", `    <name>${escapeXml(actor)}</name>`, "  </actor>");
   lines.push("</tvshow>");
   return `${lines.join("\n")}\n`;
@@ -76,7 +85,7 @@ export function renderMovieNfo(fields: MovieNfoFields): string {
   push(lines, "studio", fields.studio);
   if (fields.runtimeMin && fields.runtimeMin > 0) push(lines, "runtime", String(fields.runtimeMin));
   for (const genre of dedupe(fields.genres ?? [])) push(lines, "genre", genre);
-  pushUniqueId(lines, fields.tmdbId);
+  pushUniqueId(lines, fields.tmdbId, fields.kuraId);
   for (const actor of dedupe(fields.actors ?? [])) lines.push("  <actor>", `    <name>${escapeXml(actor)}</name>`, "  </actor>");
   lines.push("</movie>");
   return `${lines.join("\n")}\n`;
@@ -159,7 +168,13 @@ export function mergeTvNfo(original: string, expected: TvNfoRoot, fields: TvShow
     if (duplicates > 0) changed.push(`${label} 去掉重复 ${duplicates} 个`);
   };
 
-  mergeUniqueId($, root, changed, "tmdbId" in fields ? fields.tmdbId : null);
+  mergeUniqueId(
+    $,
+    root,
+    changed,
+    "tmdbId" in fields ? fields.tmdbId : null,
+    "kuraId" in fields ? fields.kuraId : null,
+  );
 
   if (expected === "tvshow") {
     const show = fields as TvShowNfoFields;
@@ -202,17 +217,36 @@ type Cheerio = ReturnType<typeof load>;
 type Node = ReturnType<Cheerio>;
 
 /** `<uniqueid type="tmdb">` 就地改值;没有就追加。 */
-function mergeUniqueId($: Cheerio, root: Node, changed: string[], tmdbId: string | null | undefined): void {
-  if (!tmdbId) return;
-  const ids = root.children("uniqueid").filter((_index, element) => ($(element).attr("type") ?? "").toLowerCase() === "tmdb");
+function mergeUniqueId(
+  $: Cheerio,
+  root: Node,
+  changed: string[],
+  tmdbId: string | null | undefined,
+  kuraId?: string | null,
+): void {
+  writeUniqueId($, root, changed, "tmdb", tmdbId, "TMDB id");
+  // 本地条目没有 TMDB id, 但同样需要一个身份 —— 否则换电脑后这些 nfo 认不回来。
+  writeUniqueId($, root, changed, "kura", kuraId, "本地 id");
+}
+
+function writeUniqueId(
+  $: Cheerio,
+  root: Node,
+  changed: string[],
+  type: string,
+  value: string | null | undefined,
+  label: string,
+): void {
+  if (!value) return;
+  const ids = root.children("uniqueid").filter((_index, element) => ($(element).attr("type") ?? "").toLowerCase() === type);
   if (ids.length === 0) {
-    root.append($('<uniqueid type="tmdb"/>').text(escapeXml(tmdbId)));
-    changed.push(`TMDB id 新增 ${tmdbId}`);
+    root.append($(`<uniqueid type="${type}"/>`).text(escapeXml(value)));
+    changed.push(`${label} 新增 ${value}`);
     return;
   }
-  if (ids.first().text().trim() === tmdbId) return;
-  ids.first().text(escapeXml(tmdbId));
-  changed.push(`TMDB id → ${tmdbId}`);
+  if (ids.first().text().trim() === value) return;
+  ids.first().text(escapeXml(value));
+  changed.push(`${label} → ${value}`);
 }
 
 /** 演员按序号就地改名, 保住 `<role>` `<thumb>` 这些 Kura 不认识的子元素。 */
@@ -241,13 +275,17 @@ function push(lines: string[], tag: string, value: string | null | undefined): v
   lines.push(`  <${tag}>${escapeXml(value)}</${tag}>`);
 }
 
-function pushUniqueId(lines: string[], tmdbId: string | null | undefined): void {
-  if (!tmdbId) return;
-  const id = escapeXml(tmdbId);
-  // 两种写法都给: Emby / Jellyfin 认 `uniqueid`(要 default="true" 才当主 id),
-  // Kodi 老版本只认 `<tmdbid>`。少写一个, 对方的刮削器就会自作主张按文件名重搜。
-  lines.push(`  <tmdbid>${id}</tmdbid>`);
-  lines.push(`  <uniqueid type="tmdb" default="true">${id}</uniqueid>`);
+function pushUniqueId(lines: string[], tmdbId: string | null | undefined, kuraId?: string | null): void {
+  if (tmdbId) {
+    const id = escapeXml(tmdbId);
+    // 两种写法都给: Emby / Jellyfin 认 `uniqueid`(要 default="true" 才当主 id),
+    // Kodi 老版本只认 `<tmdbid>`。少写一个, 对方的刮削器就会自作主张按文件名重搜。
+    lines.push(`  <tmdbid>${id}</tmdbid>`);
+    lines.push(`  <uniqueid type="tmdb" default="true">${id}</uniqueid>`);
+  }
+  // 本地条目(UGC)没有 TMDB id, 但也要留下身份 —— 否则换电脑后这些 nfo 就成了
+  // "有标题但没有身份"的孤儿, 只能重新手动绑一遍。
+  if (kuraId) lines.push(`  <uniqueid type="kura">${escapeXml(kuraId)}</uniqueid>`);
 }
 
 function dedupe(values: string[]): string[] {

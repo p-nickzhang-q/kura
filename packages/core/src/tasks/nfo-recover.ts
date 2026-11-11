@@ -57,7 +57,11 @@ export interface NfoRecoverReport {
   /** 会(或已经)绑定上的文件总数。 */
   files: number;
   done: NfoRecoverEntry[];
-  /** 有 nfo 但读不出 TMDB id 的目录 —— 只能靠"找建议"猜片名, 这里明确列出来。 */
+  /**
+   * 有 nfo 但读不出身份(TMDB id 也没有本地 id)的目录。
+   *
+   * 只能靠"找建议"猜片名, 或者手动加成本地条目 —— 这里明确列出来。
+   */
   noTmdbId: string[];
 }
 
@@ -130,7 +134,7 @@ export async function recoverFromNfo(
     const dirNfo = tvshowByDir.get(dir) ?? null;
 
     if (dirNfo?.root === "tvshow") {
-      if (!dirNfo.tmdbId) {
+      if (!dirNfo.tmdbId && !dirNfo.kuraId) {
         noTmdbId.add(dir);
         continue;
       }
@@ -143,7 +147,7 @@ export async function recoverFromNfo(
     // 没有剧级 nfo: 看看这个文件旁边有没有自己的 movie nfo。
     const own = await readCached(nfoPathFor(file.path));
     if (own?.root === "movie") {
-      if (!own.tmdbId) {
+      if (!own.tmdbId && !own.kuraId) {
         noTmdbId.add(nfoPathFor(file.path));
         continue;
       }
@@ -172,7 +176,7 @@ export async function recoverFromNfo(
     for (const [dir, group] of tvDirs) {
       const entry = await bindOne(rt, {
         kind: "tv",
-        key: `tmdb:tv:${group.nfo.tmdbId}`,
+        key: keyOf(group.nfo, "tv"),
         target: dir,
         paths: group.paths,
         nfo: group.nfo,
@@ -182,7 +186,7 @@ export async function recoverFromNfo(
     for (const movie of movieFiles) {
       const entry = await bindOne(rt, {
         kind: "movie",
-        key: `tmdb:movie:${movie.nfo.tmdbId}`,
+        key: keyOf(movie.nfo, "movie"),
         target: movie.path,
         paths: [movie.path],
         nfo: movie.nfo,
@@ -210,7 +214,12 @@ async function bindOne(
 ): Promise<NfoRecoverEntry> {
   const existingBefore = rt.db.get<{ number: string }>("select number from items where number = ?", [input.key]);
   // content_type 对影视条目存空串(它是 av 域的概念, 列却是 NOT NULL); 类型来自身份键。
-  rt.db.run("insert or ignore into items (number, content_type, domain) values (?, '', ?)", [input.key, input.kind]);
+  // 但本地条目必须标 `ugc` —— 它没有来源可刮, 不标就会永远赖在"待刮削"里。
+  rt.db.run("insert or ignore into items (number, content_type, domain) values (?, ?, ?)", [
+    input.key,
+    input.key.startsWith("local:") ? "ugc" : "",
+    input.kind,
+  ]);
 
   // 季集: 优先用集级 nfo 自己声明的 (season, episode), 没有就保留扫描时解析出来的。
   let episodeCount = 0;
@@ -329,6 +338,17 @@ async function readNfoFile(path: string): Promise<ParsedTvNfo | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * nfo 里给出的身份: TMDB 优先, 没有再退回本地身份(`local:xxx`)。
+ *
+ * 本地条目(UGC)以前写 nfo 时不带任何 id, 于是换电脑后那些 nfo 只能算"未识别"。
+ * 现在至少新写的有 `<uniqueid type="kura">local:xxx</uniqueid>`, 能认回来。
+ */
+function keyOf(nfo: ParsedTvNfo, kind: "tv" | "movie"): string {
+  if (nfo.tmdbId) return `tmdb:${kind}:${nfo.tmdbId}`;
+  return nfo.kuraId!;
 }
 
 function countRegistered(rt: Runtime, libraryId: number): number {

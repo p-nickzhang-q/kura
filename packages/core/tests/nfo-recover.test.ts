@@ -317,3 +317,60 @@ describe("整理之后的布局: tvshow.nfo 在剧目录, 文件在 Season 子�
     await rt.close();
   });
 });
+
+describe("本地条目(UGC)的身份也要能读回来", () => {
+  const UGC_TVSHOW = `<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<tvshow>
+  <title>食贫道充电视频</title>
+  <plot>B站充电专属</plot>
+  <uniqueid type="kura">local:食贫道充电视频</uniqueid>
+</tvshow>
+`;
+
+  test("只带 <uniqueid type=kura> 的 nfo → 建成本地条目, 标 ugc", async () => {
+    const dataDir = await scratch();
+    const root = join(dataDir, "视频");
+    const dir = join(root, "B站");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "tvshow.nfo"), UGC_TVSHOW);
+    await writeFile(join(dir, "投稿01.mp4"), "x");
+    await writeFile(join(dir, "投稿02.mp4"), "x");
+
+    const rt = await openRuntime({ dataDir });
+    const library = createLibrary(rt.db, { name: "视频", root, domain: "video" });
+    for (const name of ["投稿01.mp4", "投稿02.mp4"]) {
+      rt.db.run(
+        "insert into media_files (path, library_id, number, size, mtime_ms, season, episode) values (?, ?, null, 1, 1, 1, null)",
+        [join(dir, name), library.id],
+      );
+    }
+
+    const dry = await recoverFromNfo(rt, { libraryId: library.id });
+    expect(dry.shows).toBe(1);
+    expect(dry.files).toBe(2);
+
+    await recoverFromNfo(rt, { libraryId: library.id, apply: true });
+    const row = rt.db.get<{ number: string; content_type: string; title: string; domain: string }>(
+      "select number, content_type, title, domain from items",
+    )!;
+    expect(row.number).toBe("local:食贫道充电视频");
+    expect(row.content_type).toBe("ugc");
+    expect(row.title).toBe("食贫道充电视频");
+    expect(row.domain).toBe("tv");
+    await rt.close();
+  });
+
+  test("写 nfo 时本地条目要带 kura 身份, TMDB 条目不带", async () => {
+    const { renderTvShowNfo, renderMovieNfo } = await import("../src/domain/nfo-tv");
+    const local = renderTvShowNfo({ title: "食贫道充电视频", kuraId: "local:食贫道充电视频" });
+    expect(local).toContain('<uniqueid type="kura">local:食贫道充电视频</uniqueid>');
+    expect(local).not.toContain('type="tmdb"');
+
+    const tmdb = renderTvShowNfo({ title: "仁医", tmdbId: "46198" });
+    expect(tmdb).toContain('<uniqueid type="tmdb" default="true">46198</uniqueid>');
+    expect(tmdb).not.toContain('type="kura"');
+
+    const movie = renderMovieNfo({ title: "本地片", kuraId: "local:本地片" });
+    expect(movie).toContain('<uniqueid type="kura">local:本地片</uniqueid>');
+  });
+});

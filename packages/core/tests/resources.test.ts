@@ -1,12 +1,13 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildNfo, buildPlan } from "../src/domain/materialize";
 import type { Metadata } from "../src/domain/types";
 import { HttpClient } from "../src/net/http";
 import { openRuntime } from "../src/runtime";
-import { cachedPoster, cachedThumb, downloadPoster, downloadResource, findResource, refererFor, resourceDir } from "../src/tasks/resources";
+import { cachedPoster, cachedThumb, downloadPoster, downloadResource, findResource, findSidecarImages, refererFor, resourceDir } from "../src/tasks/resources";
 
 // 最小的"JPEG": 只要字节能落盘、扩展名按 content-type 推断即可。
 const FAKE_JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9]);
@@ -255,5 +256,33 @@ describe("整理时的海报落地", () => {
     expect(plan.summary.copyImage).toBe(0);
     expect(plan.entries.some((entry) => entry.action === "copy-image")).toBe(false);
     expect(buildNfo(metadata)).not.toContain("<thumb>");
+  });
+});
+
+describe("盘上的图: 影视整理后的布局", () => {
+  test("视频在 Season 01 里, 图在剧目录 —— 也要找得到", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kura-sidecar-"));
+    const showDir = join(root, "乡村爱情 (2006)");
+    const seasonDir = join(showDir, "Season 01");
+    await mkdir(seasonDir, { recursive: true });
+    await writeFile(join(showDir, "poster.jpg"), "p");
+    await writeFile(join(showDir, "fanart.jpg"), "f");
+
+    const found = findSidecarImages(join(seasonDir, "乡村爱情 - S01E01.rmvb"));
+    // 修复前只查 Season 01, 返回全 null → 详情页说"未缓存 · 下载", 而盘上明明有图
+    expect(found.poster).toBe(join(showDir, "poster.jpg"));
+    expect(found.thumb).toBe(join(showDir, "fanart.jpg"));
+    await rm(root, { recursive: true, force: true });
+  });
+
+  test("同目录的图优先于剧目录 (番号制不受影响)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "kura-sidecar-"));
+    await writeFile(join(root, "ABP-123.mp4"), "v");
+    await writeFile(join(root, "ABP-123-poster.jpg"), "p");
+    await writeFile(join(root, "poster.jpg"), "p2");
+
+    const found = findSidecarImages(join(root, "ABP-123.mp4"));
+    expect(found.poster).toBe(join(root, "ABP-123-poster.jpg"));
+    await rm(root, { recursive: true, force: true });
   });
 });

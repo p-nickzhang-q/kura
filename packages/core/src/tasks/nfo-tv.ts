@@ -149,6 +149,8 @@ export async function exportTvNfo(rt: Runtime, options: TvNfoOptions): Promise<T
       genres: parseList(show.tags),
       actors: parseList(show.actors),
       tmdbId: tmdb ? String(tmdb.id) : null,
+      // 本地条目(UGC): 没有 TMDB id, 但必须留身份, 否则换电脑后这份 nfo 认不回来。
+      kuraId: tmdb ? null : show.number,
     };
 
     // 电影: <视频名>.nfo 根 <movie>。
@@ -165,6 +167,7 @@ export async function exportTvNfo(rt: Runtime, options: TvNfoOptions): Promise<T
         genres: parseList(show.tags),
         actors: parseList(show.actors),
         tmdbId: String(tmdb.id),
+        kuraId: null,
       };
       jobs.push({
         path: nfoPathFor(files[0]!.path),

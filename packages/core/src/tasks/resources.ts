@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
-import { locateEpisode } from "../domain/episodes";
+import { locateEpisode, showDirOf } from "../domain/episodes";
 import type { Metadata } from "../domain/types";
 import { HttpClient } from "../net/http";
 import { resolveProxyUrl } from "../config";
@@ -152,7 +152,18 @@ const SIDECAR_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp"];
  * 既浪费流量又可能存成两张不同的图。有就地用, 没有才下载。
  */
 export function findSidecarImages(videoPath: string): { poster: string | null; thumb: string | null } {
-  const directory = dirname(videoPath);
+  // 影视整理之后视频在 `<剧>/Season 01/xxx.mkv` 里, 而图在**剧目录** —— 只查同目录会
+  // 一个都找不到。真机症状: 盘上明明有 poster.jpg / fanart.jpg, 详情页却说「未缓存 · 下载」。
+  const dir = dirname(videoPath);
+  const showDir = showDirOf(videoPath);
+  for (const directory of showDir === dir ? [dir] : [dir, showDir]) {
+    const found = findInDirectory(directory, videoPath);
+    if (found.poster || found.thumb) return found;
+  }
+  return { poster: null, thumb: null };
+}
+
+function findInDirectory(directory: string, videoPath: string): { poster: string | null; thumb: string | null } {
   const base = basename(videoPath, extname(videoPath));
 
   // 先列目录再按小写比对: 用户那边可能是 POSTER.JPG / Fanart.PNG,

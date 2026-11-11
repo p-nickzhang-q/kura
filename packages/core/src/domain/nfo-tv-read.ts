@@ -19,6 +19,8 @@ export interface ParsedTvNfo {
   root: TvNfoRootKind | null;
   /** 纯数字的 TMDB id; 没有就是 null(那是"旁边的 nfo 不是 Kura/Emby 生成的"这种情况)。 */
   tmdbId: string | null;
+  /** 本地条目(UGC)的身份, 形如 `local:食贫道充电视频`; 不是本地条目时为 null。 */
+  kuraId: string | null;
   title?: string;
   originalTitle?: string;
   plot?: string;
@@ -79,9 +81,20 @@ export function parseTvNfo(xml: string): ParsedTvNfo | null {
     if (/^\d+$/.test(legacy)) tmdbId = legacy;
   }
 
+  // 本地条目(UGC)没有 TMDB id —— 身份在 `<uniqueid type="kura">local:xxx</uniqueid>` 里。
+  // 只认 `local:` 前缀: av 域的 `type="kura"` 存的是番号, 走的是另一套恢复路径。
+  let kuraId: string | null = null;
+  node.find("uniqueid").each((_index, element) => {
+    if (kuraId) return;
+    const type = ($(element).attr("type") ?? "").toLowerCase();
+    const value = $(element).text().trim();
+    if (type === "kura" && value.toLowerCase().startsWith("local:")) kuraId = value;
+  });
+
   const parsed: ParsedTvNfo = {
     root,
     tmdbId,
+    kuraId,
     title: first("title"),
     originalTitle: first("originaltitle"),
     plot: first("plot"),
