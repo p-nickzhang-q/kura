@@ -476,3 +476,21 @@ describe("目录名只差空白时不要搬", () => {
     expect(await readdir(dir)).toEqual(["第一集.mp4"]);
   });
 });
+
+describe("只有背景图不算有海报", () => {
+  test("有 fanart.jpg 但没有 -poster.jpg → 警告要说清缺的是竖版海报", async () => {
+    const library = await setupShow();
+    const movieDir = join(media, "电影z");
+    await touch(join(movieDir, "另一部.mkv"));
+    await writeFile(join(movieDir, "另一部-fanart.jpg"), "f");
+    await scan(rt, { library });
+    rt.db.run("insert into items (number, content_type, domain, title, release_date) values ('tmdb:movie:999', '', 'movie', '另一部', '2022-01-01')");
+    rt.db.run("update media_files set number = 'tmdb:movie:999' where path = ?", [join(movieDir, "另一部.mkv")]);
+
+    const report = await organizeVideo(rt, { library, apply: true });
+    const warn = report.warnings.find((line) => line.includes("另一部") && line.includes("竖版海报"));
+    expect(warn).toBeTruthy();
+    // 文案要点出"只有背景图", 否则人看到目录里有图会以为程序瞎了
+    expect(warn).toContain("背景图");
+  });
+});

@@ -451,7 +451,13 @@ function addImages(
     const target = resolve(join(dir, `${posterBase}${extname(sidecar.poster) || ".jpg"}`));
     if (resolve(sidecar.poster) !== target) push({ action: "copy-image", from: sidecar.poster, to: target });
   } else if (!onDisk(dir, posterBase)) {
-    warnings.push(`${title}: 没有缓存的海报 (先「下载图片」), 目录里不会有 ${posterBase}.jpg`);
+    // 只有 fanart.jpg(横版背景图)不等于有海报 —— 竖版封面是另一个东西, 说清楚,
+    // 否则用户看到目录里"明明有图"却被告知没有, 只会觉得程序瞎了。
+    warnings.push(
+      sidecar.thumb
+        ? `${title}: 缺竖版海报 (目录里只有背景图 ${basename(sidecar.thumb)}), 不会有 ${posterBase}.jpg —— 点「下载图片」补`
+        : `${title}: 缺竖版海报 (先「下载图片」), 不会有 ${posterBase}.jpg`,
+    );
   }
   if (thumb) {
     push({ action: "copy-image", from: thumb.path, to: resolve(join(dir, `${fanartBase}${extname(thumb.path) || ".jpg"}`)) });
