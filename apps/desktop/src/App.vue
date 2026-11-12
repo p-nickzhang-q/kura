@@ -535,10 +535,18 @@ async function refreshAll(): Promise<void> {
   await step("读取未识别文件", () => refreshUnparsed());
   await step("读取待办", () => refreshTodo());
   tasks.value = (await step("读取任务", () => window.kura.tasks(20))) ?? tasks.value;
-  // 把当前模板反查成维度, 让下拉框显示"现在是什么"
+  // 把当前模板反查成维度, 让下拉框显示"现在是什么"。
+  // 不能只做精确比对: 默认建的番号库模板是 `{content_type}/{studio}/{number}`,
+  // 而"按类型"这个维度的模板是 `{content_type}/{number}` —— 精确比对不上, 下拉框
+  // 就永远是空的(界面显示"当前模板: ..."但选不中任何一项)。
   const current = libraries.value.find((library) => library.id === selectedId.value);
-  const matched = info.value?.dimensions.find((item) => item.template === current?.template);
-  dimension.value = matched?.id ?? "";
+  const dimensions = info.value?.dimensions ?? [];
+  const exact = dimensions.find((item) => item.template === current?.template);
+  const firstPlaceholder = current?.template.match(/\{(\w+)\}/)?.[1];
+  const byFirstPlaceholder = firstPlaceholder
+    ? dimensions.find((item) => item.template.replace(/\/?\{number\}$/, "") === `{${firstPlaceholder}}`)
+    : undefined;
+  dimension.value = (exact ?? byFirstPlaceholder)?.id ?? "";
   // 选中项里可能有已经被删掉的条目
   picked.value = picked.value.filter((key) => items.value.some((item) => item.key === key));
   if (detail.value) detail.value = await window.kura.item(detail.value.key);
@@ -6000,6 +6008,7 @@ td.pick {
 
 .lib-config {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 12px;
@@ -6008,6 +6017,23 @@ td.pick {
   background: var(--panel);
   margin-bottom: 8px;
   font-size: var(--fs-body);
+}
+
+/* 这一行挤了 6 个控件: 1280 窗口下不换行会把「切换」压成竖排、下拉框压成一个字宽。
+   靠 flex-wrap + 一个字都不许断, 窄了就换行而不是压字。 */
+.lib-config > * {
+  flex-shrink: 0;
+}
+
+.lib-config > span,
+.lib-config > label,
+.lib-config > button {
+  white-space: nowrap;
+}
+
+.lib-config select {
+  flex: 1 1 220px;
+  min-width: 180px;
 }
 
 .lib-config select {

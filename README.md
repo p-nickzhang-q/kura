@@ -1,196 +1,271 @@
-# Kura
+<p align="center"><img src="assets/icon.png" width="112" alt="Kura"></p>
 
-番号制本地影片库管理器。**Electron 桌面应用 + 面向 agent 的 CLI**,共享一份 TypeScript core 和一个 SQLite 文件。
+<h1 align="center">Kura</h1>
 
-- 没有服务端、没有常驻进程:打开软件才运行,关了就退出。
-- CLI 是单文件二进制,冷启动 ~40ms,零依赖。
-- GUI 与 CLI 不通过端口通信,只共享同一个库文件。
+<p align="center">本地影片库管理器。<b>番号制</b>与<b>影视</b>（电影 / 剧集 / 动画 / 综艺）两种库。<br>
+Electron 桌面应用 + 面向 agent 的 CLI，共享一份 TypeScript core 和一个 SQLite 文件。</p>
 
-领域词汇见 [CONTEXT.md](CONTEXT.md),产品边界见 [ADR 0002](docs/ADR/0002-产品边界.md),技术选型见 [ADR 0001](docs/ADR/0001-栈选择.md)。
+<p align="center">
+  <a href="https://github.com/p-nickzhang-q/kura/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/p-nickzhang-q/kura?color=blue"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green"></a>
+</p>
 
-> **适用范围**: Kura 是一个**元数据与文件整理工具**, 不提供、不托管、不下载任何内容。
-> 它只读你本地已有的文件, 并为它们抓取公开可查的公开信息(标题、发行日期、演员等)。
-> 请只用于你自己合法持有的内容, 并遵守所在地法律与服务条款。仓库里的截图全部来自
-> `scripts/make-demo-data.mjs` 生成的假数据。
+---
+
+- **没有服务端、没有常驻进程**：打开软件才运行，关了就退出。
+- **CLI 是单文件二进制**，冷启动 ~40ms，零依赖。
+- GUI 与 CLI 不通过端口通信，只共享同一个库文件。
+- **三个动作互不触发**：`scan`（只读磁盘）→ `scrape`（只读网络）→ `organize`（默认 dry-run）。
+
+领域词汇见 [CONTEXT.md](CONTEXT.md)，产品边界见 [ADR 0002](docs/ADR/0002-产品边界.md)，技术选型见 [ADR 0001](docs/ADR/0001-栈选择.md)。
+
+> **适用范围**：Kura 是**元数据与文件整理工具**，不提供、不托管、不下载任何内容。
+> 它只读你本地已有的文件，并为它们抓取公开可查的信息（标题、发行日期、演员等）。
+> 请只用于你自己合法持有的内容，并遵守所在地法律与服务条款。
+>
+> 番号库那几张截图来自 `scripts/make-demo-data.mjs` 生成的假数据；影视库那几张来自真实库，
+> 只显示公开影片名与你自己的目录名，不含任何影片内容。
+
+## 截图
+
+**待办** —— 打开就知道还剩什么，点一行就做：
+
+![待办](docs/images/todo.png)
+
+**影视库**（条目 / 详情）：身份是 TMDB id，集数会显示 `盘上/声明`：
+
+![影视条目](docs/images/items-video.png)
+
+![影视详情](docs/images/detail-video.png)
+
+**番号库**（条目 / 详情）：字段按来源分别记录，可逐字段锁定：
+
+![番号条目](docs/images/items-av.png)
+
+![番号详情](docs/images/detail-av.png)
+
+**整理预览** —— 默认只出计划，看清楚了才动磁盘：
+
+![整理预览](docs/images/organize.png)
+
+**设置** —— 数据目录、来源凭据、翻译端点、代理、检查更新：
+
+![设置](docs/images/settings.png)
 
 ## 下载
 
-最新版: **[Releases](https://github.com/p-nickzhang-q/kura/releases/latest)**
+最新版：**[Releases](https://github.com/p-nickzhang-q/kura/releases/latest)**
 
 | 产物 | 说明 |
 |---|---|
-| `Kura-x.y.z-setup.exe` | Windows 安装包(选目录、桌面/开始菜单快捷方式、卸载器) |
-| `Kura-x.y.z-portable.exe` | 免安装,双击即用 |
-| `kura-x.y.z-win-x64.exe` | 命令行工具,给人和 agent 用 |
+| `Kura-x.y.z-setup.exe` | Windows 安装包（选目录、桌面/开始菜单快捷方式、卸载器） |
+| `Kura-x.y.z-portable.exe` | 免安装，双击即用 |
+| `kura-x.y.z-win-x64.exe` | 命令行工具，给人和 agent 用 |
 
-> 均**未签名**,Windows 会提示"未知发布者",点「更多信息 → 仍要运行」。
-> 卸载**不会删除** `%APPDATA%\kura`(媒体库索引与配置)。
+> 均**未签名**，Windows 会提示「未知发布者」，点「更多信息 → 仍要运行」。
+> 卸载**不会删除** `%APPDATA%\kura`（媒体库索引与配置）。
 
-## 三个动作
+## CLI 命令
 
-| 动作 | 命令 | 碰什么 |
-|---|---|---|
-| REFRESH 扫描 | `kura scan <库>` | 只读磁盘:登记文件、解析番号、建条目占位 |
-| SCRAPE 刮削 | `kura scrape <番号>` | 只读网络:各源取字段、逐字段择优、落库 + 存快照 |
-| ORGANIZE 整理 | `kura organize <库>` | 默认只出计划;`--apply` 才移动文件并写 NFO |
-| NFO 同步 | `kura nfo sync [库\|番号]` | 默认只出清单;`--apply` 才把库与视频旁的 `.nfo` 对齐 |
+`kura --help` 看概览，`kura schema --json` 拿机器可读的完整清单（**参数解析、`--help`、`schema`
+共用同一份声明**，所以它们永远不会不同步）。
 
-三个动作**互不触发**。没有"扫完自动刮""刮完自动整理"。
+**全局参数**：`--json`（机器通道，非 TTY 时自动开启）· `--stream`（JSONL 流式事件）·
+`--data-dir <路径>`（覆盖数据目录）· `--yes`
 
-`nfo sync` 是**双向**的一次过:
+### 媒体库
 
-- 库里没有网络来源 → 读 nfo 补空字段(换电脑、换硬盘就是这个场景);
-- 库里有网络来源 → 把库的值写回 nfo, 只改 Kura 认识的字段(标题/演员/片商/标签…),
-  别的工具写的 `<outline>` `<sorttitle>` `<poster>` 等**原样保留**;视频不动、不改名;
-- 视频旁边没有 nfo → 新建一份 Emby 能读的。
-
-`scan` **不读 nfo**(读入是 sync 的活), 但它会报「有 N 个条目的 .nfo 还没读进来」, 免得你不知道下一步。
-
-nfo 只是**种子**: 它填的每个字段都标来源 `nfo`, 网络来源随时覆盖它; 网络这次没给的字段
-再用 nfo 兜底, 所以重刮不会把 nfo 里对得上的演员抹掉。只有 nfo、从没联网刮过的条目, 仍算「未刮削」。
-- **跳过 Emby 的辅助媒体**: `backdrops/theme_video.mp4`、`trailers/trailer.mp4`、`extras/` 这类文件不是影片,
-  不登记也不会被同步 NFO 碰到 —— 否则会去改写 Emby 自己的元数据。
-- **删除安全阀**: 一次扫描要移除超过 30% 的已登记文件时**中止**(退出码 4), 防止"网络盘没挂全"把索引清空。确认目录完整后重试, 确实要删就加 `--force`。
-
-## 快速上手
-
-```bash
-kura library add 主库 ~/Videos
-kura scan 主库
-kura scrape ABC-123 --json
-kura scrape --pending            # 批量: 逐条进度打到 stderr, Ctrl-C 可中断
-kura scrape --pending --retry-failed   # 失败 3 次后不再自动重试, 用这个再试一轮
-kura organize 主库              # 只看计划
-kura organize 主库 --apply      # 真的移动
-
-kura file list --unparsed       # 扫到了但认不出番号的文件(不会进刮削)
-kura item list --limit 20 --offset 40   # 分页
-kura item list --state unscraped        # 只看还没元数据的
-kura item list --sort title --desc      # 按标题倒序; 空值永远排最后
-kura file reveal ABC-123                # 这个番号在磁盘上的路径
-```
-
-## 整理维度
-
-一个库选**一个**维度,决定第一层目录;模板负责其余层级。
-
-| 预设 | 模板 |
+| 命令 | 说明 |
 |---|---|
-| 按番号 / 按演员 / 按演员(全部) | `{number}` / `{actor}/{number}` / `{actors}/{number}` |
-| 按片商 / 按厂牌 / 按系列 / 按类型 / 按年份 | `{studio}/{number}` … |
+| `library list` | 列出所有库（名称 / 根目录 / 域 / 文件数 / 是否允许整理） |
+| `library add <名称> <根目录> [--domain av\|video] [--no-organize]` | 建库。**域建库时落定，之后不可改** |
+| `library rename <库> --to <新名>` | 改名（撞名直接报错，不自动加序号） |
+| `library relocate <库> <新根> [--apply]` | 换盘/搬家后只改索引，不搬文件 |
+| `library set-template <库> --dimension <维度>` | 按预设维度切模板 |
+| `library set-template <库> --template '<模板>'` | 自定义模板，如 `'{actor}/{year}/{number}'` |
+| `library set-organize <库> --no-organize` | 设为「只索引」：永不移动 / 改名 / 建目录 |
+| `library repair-paths [库] [--apply]` | 修「文件搬走了、索引没跟上」的陈旧路径 |
+| `library remove <库>` | 删库。**只删索引，磁盘不动，条目保留** |
 
-```bash
-kura library set-template 主库 --dimension actor     # 按演员
-kura library set-template 主库 --template '{actor}/{year}/{number}'
-```
+维度预设：`number` `actor` `actors` `studio` `label` `series` `content_type` `year`。
 
-多值与路径的规则: `{actor}` 取第一演员,`{actors}` 全拼(`演员甲、演员乙`);`{title}` 用原文保证路径稳定,`{title_zh}` 才用译文。
-目标已存在同名文件时**绝不覆盖**,计划里标 `skip`。
+### 扫描与刮削
 
-**旧成品库只索引(不整理)**: 允许扫描、搜索、刮削,永不移动、不改名、不建目录;
-旁路文件(`.nfo`)的内容可用 `kura nfo sync` 显式对齐, 但它不会自己跑。
+| 命令 | 说明 |
+|---|---|
+| `scan <库> [--dry-run] [--force]` | 只读磁盘：登记文件、解析番号、建条目占位。`--force` 才允许一次移除 >30% 已登记文件 |
+| `scrape <番号> [--source a,b] [--dry-run]` | 只读网络：多源取字段、逐字段择优、落库 + 存快照 |
+| `scrape <番号> --type <类型>` | 无番号条目必须显式给类型（`site:id` 形式） |
+| `scrape --pending [--limit N] [--retry-failed]` | 批量刮所有还没标题的条目 |
+| `scrape --library <影视库>` | 影视库按 TMDB 刮这个库里的剧 / 电影 |
 
-```bash
-kura library add 旧片库 /path/to/library --no-organize
-kura library set-organize 旧片库 --no-organize
-```
+### 整理与 NFO
+
+| 命令 | 说明 |
+|---|---|
+| `organize <库> [--apply]` | **默认 dry-run**：列出 move / write-nfo / copy-image / skip。`--apply` 才动磁盘 |
+| `nfo sync [库\|番号] [--apply] [--include-unscraped] [--limit N]` | **双向**：库里没网络来源 → 读 nfo 补空字段；有 → 写回 nfo（只改 Kura 认识的字段） |
+| `nfo write` / `nfo import` | 只写 / 只读 |
+| `nfo recover <影视库> [--apply]` | 按盘上 nfo 的 TMDB id 建条目、绑文件（换电脑/换盘用） |
+| `cleanup [库] [--apply]` | 删掉只剩海报 / nfo 的空壳目录 |
+
+### 条目
+
+| 命令 | 说明 |
+|---|---|
+| `item list [--library 库] [--state unscraped\|scraped\|exhausted] [--limit N] [--offset N]` | 分页列条目 |
+| `item list [--type] [--actor] [--studio] [--label] [--series] [--director] [--tag] [-q 关键词]` | 各种筛选，可组合 |
+| `item list --sort number\|title\|release\|studio\|duration\|updated [--desc]` | 排序，空值永远排最后 |
+| `item get <番号>` | 完整元数据 + 每个字段的来源 |
+| `item set <番号> --title … --plot … --actors a,b …` | 手动改字段，**默认自动锁定** |
+| `item lock <番号> title,plot` / `item unlock …` | 锁住的字段重新刮削不会被覆盖 |
+| `item retype <番号> <类型>` | 改内容类型（它决定刮削路由与 `{content_type}` 目录） |
+| `item retype --detect [--apply]` | 按当前解析器找出所有判错的条目 |
+| `item merge <from> --into <to>` | 同一部片被拆成两个条目时合并（只做电影） |
+
+### 影视库的文件绑定
+
+| 命令 | 说明 |
+|---|---|
+| `file list [--library 库] [--unparsed] [--limit N]` | 列出索引里的文件 |
+| `file reveal <番号>` | 这个番号在磁盘上的路径 |
+| `file dirs` | 列出待绑定的目录划分（每个目录几个文件、几个认得出集号） |
+| `file bind <目录> --tmdb tmdb:tv:1399 [--season N]` | 整目录绑到 TMDB 身份，顺手刮一次 |
+| `file bind <目录> --local [--title 名] [--type movie\|tv]` | **手动加入**：`local:` 身份，标 UGC，不连任何来源 |
+| `file unbind <目录>` | 解绑 |
+| `file set-season <目录> --season N` | 强制季号（同一部剧拆在多个目录时用） |
+| `file set-episode <路径> --episode N` / `file clear-episode <路径>` | 单集号纠错 |
+
+### 其他
+
+| 命令 | 说明 |
+|---|---|
+| `resource fetch <番号>` | 下载海报（竖版）+ 缩略图（横版）到本地缓存 |
+| `translate <番号>` / `translate --pending [--limit N]` | 日 → 中，只翻标题与简介 |
+| `translate --repair` | 只用本地缓存恢复「翻过但没记录」的条目（不发请求） |
+| `source list` | 各来源状态与缺失的配置 |
+| `source test <id> [--probe 番号]` | 一条命令验证凭据与解析 |
+| `task list [--limit N]` | 最近的任务 |
+| `task show <id>` / `task retry <id>` / `task cancel <id>` / `task delete <id>` | 任务详情、重跑、停止、删除 |
+| `config get` | 读配置（**密钥脱敏**） |
+| `config set --dmm-api-id … --dmm-affiliate-id …` | DMM 凭据 |
+| `config set --llm-base-url … --llm-api-key … --llm-model …` | 任何 OpenAI 兼容端点 |
+| `config set --tmdb-api-key …` | TMDB key（影视域唯一来源） |
+| `config set --translate / --no-translate` | 刮削后自动翻译 |
+| `config set --save-images / --no-save-images` | 图片是否复制一份到视频旁边（默认开） |
+| `config set --suggest-aliases / --no-suggest-aliases` | 找建议时是否让模型补别名（默认开） |
+| `config set --proxy auto\|http://…\|''` | 代理：`auto` 自动探测端口，空串跟随系统 |
+| `config test-llm` | 真发一次模型请求验端点 |
+| `config path` | 配置文件在哪 |
+| `doctor` | 自检：数据目录、数据库、驱动、schema 版本、库与条目数 |
+| `version` | 版本号 |
+| `schema` | 机器可读的命令清单 |
+
+### 退出码
+
+`0` 成功 · `2` 用法错 · `3` 可重试 · `4` 需要人 · `5` 不存在 · `10` 内部错误
+
+主信号是**退出码**，不是 stdout 的字符串。stdout 只放数据，日志走 stderr。
+
+## 两个域
+
+库只有两种，**建库时选，之后不可改**——它决定识别方式、来源、整理形状。
+
+| | 番号制（`av`） | 影视（`video`） |
+|---|---|---|
+| 身份 | 文件名里的番号 | **TMDB id** |
+| 来源 | DMM / JavBus / JavDB | TMDB |
+| 识别 | 正则 + 类型判据 | 目录 = 一部剧，文件名解析季集号；电影 = 目录里没有任何集号 |
+| 整理 | `{维度}/{番号}` | `剧名 (年)/Season 01/剧名 - S01E01.mkv` · `片名 (年)/片名 (年).mkv` |
+| 认不出时 | 进「未识别」页，改文件名重扫 | 进「未识别」树，**留给人绑**（不猜） |
+
+影视库里电影与剧集可以混着放——条目类型由 TMDB 身份决定，不需要提前分家。
+
+**影视域不猜。** 文件名的写法千奇百怪，认错了会让整季集名全错，所以识别只认有限的几种写法，
+其余一律留给人绑；TMDB 的搜索结果也永远由人挑（[ADR 0008](docs/ADR/0008-扩域-影视库.md)）。
+
+**影视域读 NFO，但只认白名单**——`ParsedTvNfo` 类型上就没有 `playcount` / `watched` / `resume`
+这些播放状态字段，实现层面不可能污染（[ADR 0011](docs/ADR/0011-影视读取NFO.md)）。
 
 ## 数据源
 
 | 来源 | 状态 | 说明 |
 |---|---|---|
-| `dmm` | **可用** | DMM/FANZA 官方 API,需 affiliate 凭据 |
-| `javbus` | **可用** | 网页解析(真实页面验证过) |
-| `javdb` | **可用** | 网页解析。注意它现在在 **Cloudflare 挑战**后面:机房 IP 大概率 403,换住宅节点可解;**无码条目需登录** |
-| `fixture` | 可用 | 从目录读离线样本,用于开发与测试 |
+| `dmm` | **可用** | DMM/FANZA 官方 API，需 affiliate 凭据 |
+| `javbus` | **可用** | 网页解析（真实页面验证过） |
+| `javdb` | **可用** | 网页解析。注意它在 **Cloudflare 挑战**后面：机房 IP 大概率 403，换住宅节点可解；**无码条目需登录** |
+| `tmdb` | **可用** | 影视域唯一来源，需免费 API key |
+| `fixture` | 可用 | 从目录读离线样本，用于开发与测试 |
 
 ```bash
-kura config set --dmm-api-id ... --dmm-affiliate-id ...   # https://affiliate.dmm.com/api/
-kura source test dmm                  # 一条命令验证凭据与解析
-kura source test javbus
-kura scrape ABC-123                   # 默认路由: dmm → javbus → javdb
-kura scrape ABC-123 --source javbus,javdb   # 双源逐字段择优
+kura config set --dmm-api-id … --dmm-affiliate-id …   # https://affiliate.dmm.com/api/
+kura config set --tmdb-api-key …
+kura source test dmm                                  # 一条命令验证凭据与解析
+kura scrape ABC-123                                   # 默认路由: dmm → javbus → javdb
+kura scrape ABC-123 --source javbus,javdb             # 双源逐字段择优
 ```
 
-缺凭据时退出码是 **4(NEEDS_INPUT)**,不会静默返回空条目。
+缺凭据时退出码是 **4（NEEDS_INPUT）**，不会静默返回空条目。
 
-## 海报
+## 海报与翻译
 
 ```bash
-kura resource fetch ABC-123   # 下载到本地缓存(带防盗链 Referer)
+kura resource fetch ABC-123   # 下载到本地缓存（带防盗链 Referer）
 ```
 
-下载后**同时复制一份到视频旁边**:`<视频名>-poster.jpg` / `<视频名>-thumb.jpg`,换播放器/换机器都认。
-不想要就 `kura config set --no-save-images`。库里有缓存图时,NFO 的 `<thumb>` 写的是相对文件名。
+下载后**同时复制一份到视频旁边**：`<视频名>-poster.jpg` / `<视频名>-thumb.jpg`，换播放器/换机器都认。
+不想要就 `kura config set --no-save-images`。库里有缓存图时，NFO 的 `<thumb>` 写的是相对文件名。
 
-## 翻译(日 → 中)
+**翻什么**：只有标题（`title`）和简介（`plot`）。演员、片商、系列、标签、导演一律不翻。
 
-**翻什么**:只有两样 —— 标题(`title`)和简介(`plot`)。演员、片商、系列、标签、导演一律不翻。
-
-**什么才翻**:含假名(平假名/片假名)的日文才翻。纯汉字的中文标题、英文标题原样不动 ——
-少一道无意义的模型调用,也免得"标题被翻译腔改坏"。演员不翻是因为人名音译没有唯一答案,
-而且会污染目录名。
+**什么才翻**：含假名（平假名/片假名）的日文才翻。纯汉字的中文标题、英文标题原样不动——
+少一道无意义的模型调用，也免得「标题被翻译腔改坏」。演员不翻是因为人名音译没有唯一答案。
 
 ```bash
-kura config set --llm-base-url https://api.deepseek.com/v1 --llm-api-key sk-... --llm-model deepseek-chat
+kura config set --llm-base-url https://api.deepseek.com/v1 --llm-api-key sk-… --llm-model deepseek-chat
 kura config set --translate          # 刮削后自动翻
 kura translate --pending             # 补历史条目
 ```
 
-任何 OpenAI 兼容端点都行(DeepSeek / 通义 / Ollama / LM Studio)。译文缓存独立在 `<数据目录>/translations.db`,删掉即重翻。
+任何 OpenAI 兼容端点都行（DeepSeek / 通义 / Ollama / LM Studio）。译文缓存独立在
+`<数据目录>/translations.db`，删掉即重翻。
+
+## 代理
+
+- **留空**：跟随系统代理——Clash 开系统代理或 TUN 即可，无需配置。
+- **`auto`**：启动时 TCP 探测 7890/7891/7897/1080/10808/20171，选第一个有人在听的；都没有才退回系统代理。
+- **显式地址**：`http://127.0.0.1:7890`。手写 `127.0.0.1:7890`（不带 scheme）会自动补 `http://`，`socks://` 统一成 `socks5://`。
+- 优先级：`KURA_PROXY` > 配置文件 > 系统代理/直连。
+
+设置页有「**测试代理**」，一次报出三个值：配置的是什么、实际在用的是什么、哪些常见端口在监听。
+
+两类错误要分清：`ERR_PROXY_CONNECTION_FAILED` 是「请求被送去代理但端口没人听」（代理软件没开）；
+`HTTP 403` 是「请求到了站点、站点拒绝」（地区限制 / Cloudflare 风控 / 要登录），后者退出码 4 并附具体建议。
+
+WSL 里指向宿主机 Clash 要用网关地址，`auto` 会自动探测。
+
+> CLI **不读** Windows 系统代理（那是 Electron 的能力）。不设 `KURA_PROXY` 或 `config.proxy` 时会直连并超时。
 
 ## 界面
 
-### 条目
+三个页签：**待办 / 条目 / 任务**。侧栏只有库列表和一个按状态推导的主按钮：
 
-![条目列表](docs/images/items.png)
+- 有待刮削 → `刮削 «库名» (N)`，否则有待翻译 → `翻译`，否则 → `扫描`
+- 其余动作（强制扫描、修复索引路径、清理空目录、修正内容类型、换库根目录…）收在「更多」里，
+  也都能用 <kbd>Ctrl K</kbd> 搜到
+- 库行可以**拖动排序**，顺序记在库里
+- 打开过的页面留在 tab 条上
 
-- **范围跟着左侧选中的库走**:列表、计数、扫描、未识别都只算这个库。顶上的「全部库」是伪条目,选中它范围回到全库,「扫描」会按顺序逐个扫。
-- 主按钮写清范围 —— `扫描 «电影库»` 和 `扫描全部 3 个库` 是两件事,不靠猜。
-- 列:番号(带类型徽标)、标题、片商、演员。标题列点表头排序(升 → 降 → 取消),空值永远排最后。
-- 搜索框输入即搜,匹配番号 / 标题 / 原名 / 片商 / 系列 / 导演 / 演员 / 标签。
+**待办**是默认页，动作按天然顺序排，每行的数字是「现在还剩多少」，不是历史累计。
+其中「可整理」「NFO 待回写」两行要读盘（遍历全库 + 读遍 nfo），算完存在数据库里——
+进页面先显示上次的数字并标注「算于 X 分钟前」，后台再算新的。
 
-![只看未刮削](docs/images/unscraped.png)
+**条目**的范围跟着左侧选中的库走：列表、计数、扫描、未识别都只算这个库。
+「未刮削 N」只筛还能自动重试的那批；试满 3 次的单独算「需手动重试 M」。
 
-「未刮削 N」只筛**还能自动重试**的那批;**试满 3 次的单独算「需手动重试 M」**(两个数字都能点,
-点进去的行数与数字一致)。只被 NFO 种过、从没联网刮过的条目也算在里面 —— 那批的演员/片商
-还是旧库的值,等网络来源来盖。想再试一次: 点「需手动重试」→ 勾选 → 「刮削选中」。
+**详情**面板按来源分别记录每个字段，鼠标悬停才显示来源与锁按钮。
 
-筛选条件以 chip 列在下方,点一下取消。
-
-### 详情
-
-![详情面板](docs/images/detail.png)
-
-- 每个字段按来源分别记录(`javbus` / `javdb` / `dmm`),鼠标悬停该行才显示来源与锁按钮;锁住的字段重新刮削不会被覆盖。
-- **类型**是下拉:解析器判错时人可以直接改,不用等扫描。
-- 「打开位置」在资源管理器里定位文件;图片字段没缓存时给「未缓存 · 下载」,缓存了就能点开看大图。
-
-### 未识别
-
-![未识别](docs/images/unidentified.png)
-
-扫到但认不出番号的文件单独一页,不会进入刮削。每行可复制路径或定位到文件夹 —— 认不出多半是命名问题,改完文件名再扫一次即可。
-
-### 设置
-
-![设置](docs/images/settings.png)
-
-数据目录(换机器后「没有数据」通常是这份文件不在预期位置)、DMM 凭据、翻译端点与开关、代理(带「测试代理」:一次报出配置值 / 实际生效 / 哪些端口在监听)、各来源状态。
-
-### 任务
-
-![任务](docs/images/tasks.png)
-
-刮削、翻译、同步 NFO 都会留下一条任务:跑到第几条、失败几条、什么时候结束。
-
-- **当前任务**:正在跑的那条在最上面,带进度条和「停止」
-- **失败详情**:点「失败 21」展开,逐条列出番号与原因(`EBUSY 文件被占用`、`路径超长`…)
-- **重跑失败**:只重跑上一条任务里失败的番号,不重扫整库;另一个按钮才是整批重跑
-
-扫描和「修正内容类型」不进任务 —— 前者只读磁盘、有自己的进度,后者是一次批量 SQL,秒级。
-
-五个页签:**条目 / 未识别 / 整理预览 / 任务 / 设置**。侧栏只有一个主按钮,按状态推导:有待刮削 → `刮削 «库名» (N)`,否则有待翻译 → 翻译,否则 → 扫描;其余动作收在「更多操作」(含「强制扫描」与「修正内容类型」)。界面在加载时给骨架屏、长任务给进度条,`prefers-reduced-motion` 下全部退化。
+界面在加载时给骨架屏、长任务给进度条，`prefers-reduced-motion` 下全部退化。
 
 ## 任务与日志
 
@@ -199,131 +274,77 @@ kura translate --pending             # 补历史条目
 ```bash
 kura task list              # 最近的任务
 kura task show 3            # 详情 + 日志文件路径
-kura task retry 3           # 重新入队（用 scrape --pending 继续）
+kura task retry 3           # 重新入队
 ```
 
 日志在 `<数据目录>/logs/tasks/*.jsonl`（JSONL，已脱敏），GUI 的「任务」页也能看并点重试。
 
-## 手动改字段与锁定
-
-```bash
-kura item set ABC-123 --title "我改的标题" --plot "我改的简介"   # 默认自动锁定
-kura item lock ABC-123 title,plot
-kura item unlock ABC-123 title
-```
-
-锁定的字段重新刮削不会被覆盖。
+扫描和「修正内容类型」不进任务——前者只读磁盘、有自己的进度，后者是一次批量 SQL，秒级。
 
 ## 内容类型判错了怎么修
 
-类型决定**刮削路由**(国产只走 javdb,有码走 dmm→javbus→javdb)和整理目录里的 `{content_type}`。
-它按设计"建条目时落定、之后不可改",但解析器有 bug 时历史数据必须能修:
+类型决定**刮削路由**（国产只走 javdb，有码走 dmm→javbus→javdb）和整理目录里的 `{content_type}`。
+它按设计「建条目时落定、之后不可改」，但解析器有 bug 时历史数据必须能修：
 
 ```bash
-kura item retype --detect            # 按当前解析器列出所有判错的条目(不动数据)
+kura item retype --detect            # 按当前解析器列出所有判错的条目（不动数据）
 kura item retype --detect --apply    # 确认后真的改
 kura item retype SSIS-915 censored   # 单条
 ```
 
-界面里同一个功能有两处:详情面板的「类型」下拉(单条),「更多操作 → 修正内容类型」(批量,会先弹清单让人确认)。
+界面里同一个功能有两处：详情面板的「类型」下拉（单条），「更多 → 修正内容类型」（批量，先弹清单确认）。
 
-扫描时也会自动修 —— 但**只动从没刮过网络的条目**(`field_sources` 为空)。已经刮到字段的留给人定,
-因为换类型等于换来源线,开着整理时还会按新类型挪目录。
-
-## 代理
-
-- **留空**: 跟随系统代理 —— Clash 开系统代理或 TUN 即可,无需配置。
-- **`auto`**: 启动时 TCP 探测 7890/7891/7897/1080/10808/20171,选第一个有人在听的;都没有才退回系统代理。GUI 与 CLI 都支持。
-- **显式地址**: `http://127.0.0.1:7890`。手写 `127.0.0.1:7890`(不带 scheme)会自动补 `http://`,`socks://` 统一成 `socks5://`。
-- 优先级: `KURA_PROXY` > 配置文件 > 系统代理/直连。
-
-设置页有「**测试代理**」,一次报出三个值:配置的是什么、实际在用的是什么、哪些常见端口在监听。
-
-两类错误要分清:`ERR_PROXY_CONNECTION_FAILED` 是"请求被送去代理但端口没人听"(代理软件没开);
-`HTTP 403` 是"请求到了站点、站点拒绝"(地区限制 / Cloudflare 风控 / 要登录),后者退出码 4 并附具体建议。
-
-WSL 里指向宿主机 Clash 要用网关地址,`auto` 会自动探测。
+扫描时也会自动修——但**只动从没刮过网络的条目**（`field_sources` 为空）。已经刮到字段的留给人定，
+因为换类型等于换来源线，开着整理时还会按新类型挪目录。
 
 ## 开发
 
-前置: [Bun](https://bun.sh) ≥ 1.1、[pnpm](https://pnpm.io) ≥ 9。网络受限时加
+前置：[Bun](https://bun.sh) ≥ 1.1、[pnpm](https://pnpm.io) ≥ 9。网络受限时加
 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`。
 
 ```bash
-# 造一批测试数据(假文件 + 离线样本), 不碰真实站点
+# 造一批测试数据（假文件 + 离线样本），不碰真实站点
 node scripts/make-demo-data.mjs --count 40 --out ./demo-data
 node scripts/make-demo-data.mjs --numbers "SSIS-001,MIDV-001" --out ./demo-real   # 假文件 + 真站点
 
 bun run cli --help               # 零 install 跑 CLI
 pnpm install && pnpm dev         # 桌面端
-bun test                         # 193 个用例, 全部离线
+bun test                         # 全部用例离线，不依赖网络
+pnpm typecheck
 bun run build:cli                # -> dist/kura
 bun run build:cli:win            # -> dist/kura.exe
-pnpm --filter @kura/desktop package:installer   # NSIS 安装包 (Linux 上需 wine)
-pnpm --filter @kura/desktop package:win         # portable (无需 wine)
+pnpm --filter @kura/desktop package:win         # Windows portable
+pnpm --filter @kura/desktop package:installer   # NSIS 安装包（Linux 上需 wine）
 ```
 
-打包细节(含无 sudo 时的 Windows 侧构建、离线缓存)见 [docs/dev/packaging.md](docs/dev/packaging.md);
+打包细节（含无 sudo 时的 Windows 侧构建、离线缓存）见 [docs/dev/packaging.md](docs/dev/packaging.md)；
 发版流程与产物核对见 [docs/dev/release.md](docs/dev/release.md)。
 
 ## 目录
 
 ```
-packages/core      业务逻辑 + SQLite (唯一有状态的一层)
-  domain/          纯函数: identify / aggregate / materialize / dimensions
-  sources/         来源接口、路由、javbus / javdb / dmm API、fixture
+packages/core      业务逻辑 + SQLite（唯一有状态的一层）
+  domain/          纯函数：identify / aggregate / materialize / dimensions / episodes
+  sources/         来源接口、路由、dmm / javbus / javdb / tmdb / fixture
   llm/             翻译客户端与缓存
-  tasks/           scan / scrape / organize / translate / resources
-  db/              schema 迁移、行映射、演员索引
-packages/cli       面向 agent 的 CLI (契约见 docs/dev/cli-contract.md)
+  tasks/           scan / scrape / organize / nfo / translate / resources / todo
+  db/              schema 迁移、行映射、演员索引、卷指纹
+packages/cli       面向 agent 的 CLI（契约见 docs/dev/cli-contract.md）
 apps/desktop       Electron 主进程 + Vue3 界面
 docs/dev           给 agent 的架构与契约
 ```
 
-## 退出码
+## 环境变量
 
-`0` 成功 · `2` 用法错 · `3` 可重试 · `4` 需要人 · `5` 不存在 · `10` 内部错误
-
-`kura schema --json` 输出机器可读的命令清单,与参数解析共用同一份声明。
+| 变量 | 作用 |
+|---|---|
+| `KURA_DATA_DIR` | 覆盖数据目录（默认 `%APPDATA%\kura`） |
+| `KURA_PROXY` | 覆盖代理配置 |
+| `KURA_DEBUG` | 打印异常栈到 stderr |
 
 ## 许可证
 
 [MIT](LICENSE)。
 
-## 影视库（电影 / 剧集 / 动画 / 综艺）
-
-除了番号制 AV，也可以把普通影视按**独立的库**管起来（一个库只属于一种类型，建库时选，之后不可改）：
-
-库只有两种：**番号制** 和 **影视**。影视库里电影与剧集可以混着放 —— 条目类型由 TMDB 身份决定，
-不需要你提前分家（先分开放也行，那就建两个影视库，根指向各自的子目录）。
-
-| 条目 | 怎么认 | 来源 |
-|---|---|---|
-| 番号制 | 文件名里的番号 | DMM / JavBus / JavDB |
-| 剧集 · 动画 · 综艺 | 目录 = 一部剧，文件名解析季集号 | TMDB |
-| 电影 | 一个文件一部（目录里没有任何集号） | TMDB |
-
-影视没有番号，所以身份是 **TMDB id**，要靠人确认一次：
-
-1. 扫库 → 「未识别」页列出**待绑定的目录**（各自多少文件、几个认得出集号）
-2. 点「绑定到 TMDB」→ 搜剧名 → 选对的那一部 → 整目录一次绑上，**并顺手刮一次**
-3. 列表里显示 `盘上/声明` 集数（`15/87` 就是缺 72 集），详情页按季展开每集
-4. 「同步 NFO」在影视库**只导出**：`tvshow.nfo` + 每集一个同名 nfo，Emby/Jellyfin 直接认
-
-**宗旨：不猜。** 影视文件名的写法千奇百怪，认错了会让整季集名全错，所以识别只认有限的几种写法，
-其余一律留给人绑；TMDB 的搜索结果也永远由人挑。
-
-需要自己申请一个免费的 TMDB API key（设置页填写）。TMDB 署名见文末。
-
-## 数据来源与署名
-
-- 番号制来源:DMM / JavBus / JavDB(见 `docs/dev/sources.md`)
-- 普通影视来源:**TMDB**
-
-> 本产品使用 TMDB API,但**不代表或受 TMDB 认可**。
-> This product uses the TMDB API but is not endorsed or certified by TMDB.
-
-## 致谢
-
-数据来源是各家公开站点与官方 API, 解析器与任务模型的设计参考了
-[Amane](https://github.com/sqzw-x/amane) 的思路(但范围收窄了很多)。
+影视元数据来自 [TMDB](https://www.themoviedb.org/)（本产品使用 TMDB API，但未获 TMDB 认可或认证）。
+番号制来源：DMM / JavBus / JavDB，见 [docs/dev/sources.md](docs/dev/sources.md)。
