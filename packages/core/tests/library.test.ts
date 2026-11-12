@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLibrary, deleteLibrary, findLibrary, listLibraries, renameLibrary, reorderLibraries, updateLibraryTemplate } from "../src/db/rows";
+import { createLibrary, deleteLibrary, findLibrary, listLibraries, pruneOrphanItems, renameLibrary, reorderLibraries, updateLibraryTemplate } from "../src/db/rows";
 import { openRuntime, type Runtime } from "../src/runtime";
 import { scan } from "../src/tasks/scan";
 import { countExhausted, countItems, countPending } from "../src/tasks/scrape";
@@ -190,7 +190,7 @@ describe("域 (ADR 0008 / 0009)", () => {
     expect(() => createLibrary(rt.db, { name: "番号库2", root: join(root, "a", "子目录") })).not.toThrow();
   });
 
-  test("删库只删索引: 库与文件没了, 磁盘文件与条目都还在", async () => {
+  test("删库只删索引: 库与文件没了, 磁盘文件还在, 孤儿条目一并删掉", async () => {
     // 造一个真目录真文件, 确认删库不碰磁盘
     const dir = join(root, "媒体");
     await mkdir(dir, { recursive: true });
@@ -206,14 +206,52 @@ describe("域 (ADR 0008 / 0009)", () => {
 
     expect(result.library.name).toBe("番号库");
     expect(result.removedFiles).toBe(2);
-    // 条目保留: 它是跨库的, 删库不该抹掉元数据
-    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(2);
+    // 条目一并删: 既没有库、也没有文件指向的条目没有任何用途
+    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(0);
     expect(rt.db.get<{ c: number }>("select count(*) c from libraries")?.c).toBe(0);
     expect(rt.db.get<{ c: number }>("select count(*) c from media_files")?.c).toBe(0);
     // 磁盘文件一个都没动
     expect(existsSync(join(dir, "SSIS-915.mp4"))).toBe(true);
     expect(existsSync(join(dir, "SSIS-916.mp4"))).toBe(true);
-    expect(result.orphanItems).toBe(2);
+    expect(result.removedItems).toBe(2);
+  });
+
+  test("删库不误删别的库还在用的条目 (跨库复用)", async () => {
+    const dirA = join(root, "库A");
+    const dirB = join(root, "库B");
+    await mkdir(dirA, { recursive: true });
+    await mkdir(dirB, { recursive: true });
+    // 同一部片在两个库里各有一份文件 —— 删 B 库时条目必须留住
+    await writeFile(join(dirA, "SSIS-900.mp4"), "x");
+    await writeFile(join(dirB, "SSIS-900.mp4"), "x");
+
+    const libA = createLibrary(rt.db, { name: "库A", root: dirA });
+    const libB = createLibrary(rt.db, { name: "库B", root: dirB });
+    await scan(rt, { library: libA });
+    await scan(rt, { library: libB });
+    expect(rt.db.get<{ c: number }>("select count(*) c from media_files")?.c).toBe(2);
+
+    const first = deleteLibrary(rt.db, libB.id);
+    expect(first.removedItems).toBe(0);
+    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(1);
+
+    const second = deleteLibrary(rt.db, libA.id);
+    expect(second.removedItems).toBe(1);
+    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(0);
+  });
+
+  test("pruneOrphanItems: 默认只报名单, apply 才删", async () => {
+    rt.db.run("insert into items (number, content_type, domain) values ('tmdb:tv:1', '', 'tv')");
+    rt.db.run("insert into items (number, content_type, domain) values ('tmdb:movie:2', '', 'movie')");
+
+    const dry = pruneOrphanItems(rt.db);
+    expect(dry.orphans.sort()).toEqual(["tmdb:movie:2", "tmdb:tv:1"]);
+    expect(dry.removed).toBe(0);
+    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(2);
+
+    const applied = pruneOrphanItems(rt.db, { apply: true });
+    expect(applied.removed).toBe(2);
+    expect(rt.db.get<{ c: number }>("select count(*) c from items")?.c).toBe(0);
   });
 
   test("删库不该影响别的库", async () => {

@@ -1802,7 +1802,7 @@ async function removeLibrary(library: KuraLibrary): Promise<void> {
     if (selectedId.value === library.id) selectedId.value = null;
     await refreshAll();
     note.value = `已删除库「${result.library.name}」: 索引里的 ${result.removedFiles} 个文件已移除, 磁盘上的文件一个都没动。${
-      result.orphanItems > 0 ? ` 库里还有 ${result.orphanItems} 个条目没有被任何文件指向。` : ""
+      result.removedItems > 0 ? ` 顺带删掉 ${result.removedItems} 个已经没有文件指向的条目。` : ""
     }`;
   } catch (err) {
     errors.value.push(`删除媒体库: ${err instanceof Error ? err.message : String(err)}`);

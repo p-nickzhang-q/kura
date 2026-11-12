@@ -83,7 +83,7 @@ export { checkUpdate, compareVersion, UPDATE_REPO, type UpdateCheck } from "./up
 export { HttpClient } from "./net/http";
 export type { FetchInit, FetchLike, HttpClientOptions, RequestOptions } from "./net/http";
 
-export { createLibrary, defaultTemplateFor, deleteLibrary, findLibrary, listLibraries, pinnedFields, renameLibrary, rowToMetadata, updateLibraryOrganize, updateLibraryTemplate } from "./db/rows";
+export { createLibrary, defaultTemplateFor, deleteLibrary, findLibrary, listLibraries, pinnedFields, pruneOrphanItems, renameLibrary, rowToMetadata, updateLibraryOrganize, updateLibraryTemplate } from "./db/rows";
 export { actorIndexDrift, setItemActors } from "./db/actors";
 export type { DeleteLibraryResult, ItemRow, MediaFileRow } from "./db/rows";
 

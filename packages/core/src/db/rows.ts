@@ -317,15 +317,48 @@ export interface DeleteLibraryResult {
   library: Library;
   /** 从索引里删掉的文件数 (磁盘上一个都没动)。 */
   removedFiles: number;
-  /** 删完没有任何文件指向的条目数 —— 条目本身**不删**, 只是不再出现在这个库里。 */
-  orphanItems: number;
+  /** 因这次删库失去最后一个文件引用的条目数 (元数据已一并删除)。 */
+  removedItems: number;
+}
+
+/** "没有任何文件指向的条目" —— 两个入口(删库 / 手动清理)共用同一条口径。 */
+const ORPHAN_ITEMS_SQL =
+  "select i.number from items i where not exists (select 1 from media_files mf where mf.number = i.number)";
+
+/** 删孤儿条目。调用方负责事务。 */
+function deleteOrphanItemRows(db: Db, numbers: string[]): void {
+  for (const number of numbers) db.run("delete from items where number = ?", [number]);
+}
+
+/**
+ * 清理历史遗留的孤儿条目 —— 库早就删了、条目还浮在 "全部库" 里的那种。
+ *
+ * 与删库时的自动清理是同一条口径, 只是这里能对存量数据补一刀。默认 dry-run:
+ * 返回名单但不删, 让调用方先给人看。
+ */
+export function pruneOrphanItems(
+  db: Db,
+  options: { apply?: boolean } = {},
+): { orphans: string[]; removed: number } {
+  const orphans = db.all<{ number: string }>(ORPHAN_ITEMS_SQL).map((r) => r.number);
+  if (!options.apply || orphans.length === 0) return { orphans, removed: 0 };
+  db.exec("begin");
+  try {
+    deleteOrphanItemRows(db, orphans);
+    db.exec("commit");
+  } catch (err) {
+    db.exec("rollback");
+    throw err;
+  }
+  return { orphans, removed: orphans.length };
 }
 
 /**
  * 删库: **只删索引, 不动磁盘**。
  *
- * `media_files` 随库级联删除, 但 `items` 保留 —— 条目是跨库的(同一部片可能在两个库里
- * 都有文件), 删库不该顺手把元数据抹了。删完没人指向的条目依然能被刮削/手动补文件。
+ * `media_files` 随库级联删除。`items` 是跨库的, 只有在**没有任何文件指向**时才删 ——
+ * 同一部片在别的库里还有文件的话, 元数据必须留住(那才是跨库复用的意义); 而一个既没有
+ * 库、也没有文件的条目没有任何用途, 留着只会在 "全部库" 里堆出删不掉的历史残留。
  */
 export function deleteLibrary(db: Db, libraryId: number): DeleteLibraryResult {
   const row = db.get<LibraryRow>(
@@ -339,19 +372,14 @@ export function deleteLibrary(db: Db, libraryId: number): DeleteLibraryResult {
   db.exec("begin");
   try {
     db.run("delete from libraries where id = ?", [libraryId]);
+    const orphans = db.all<{ number: string }>(ORPHAN_ITEMS_SQL).map((r) => r.number);
+    deleteOrphanItemRows(db, orphans);
     db.exec("commit");
+    return { library, removedFiles, removedItems: orphans.length };
   } catch (err) {
     db.exec("rollback");
     throw err;
   }
-
-  // 全局(跨库)没有任何文件指向的条目数 —— 只报数, 不删
-  const orphanItems =
-    db.get<{ n: number }>(
-      "select count(*) as n from items i where not exists (select 1 from media_files mf where mf.number = i.number)",
-    )?.n ?? 0;
-
-  return { library, removedFiles, orphanItems };
 }
 
 export function renameLibrary(db: Db, libraryId: number, name: string): Library {

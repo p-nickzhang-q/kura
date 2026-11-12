@@ -82,6 +82,10 @@ kura item retype --detect --json            # 只列, 不动数据
 kura item retype --detect --apply --json    # 真的改
 kura item retype SSIS-915 censored --json   # 单条
 
+# 清掉"没有文件指向的条目"(老版本删库留下的漂浮记录): 默认只报名单
+kura item prune --json                      # 只列
+kura item prune --apply --json              # 真的删
+
 # NFO 双向同步: 先看清单, 确认后写盘 (只改 Kura 认识的字段, 其它标签原样保留)
 kura nfo sync --json                  # 所有库, dry-run (番号制双向 + 影视只导出, 各自域各自的格式)
 kura nfo sync 电影库 --json              # 单个库
@@ -144,7 +148,7 @@ stdout 仍只有最后那一个结果信封。Ctrl-C 会中断在途请求并提
 
 ```bash
 kura library add 影视库 /media/video --domain video  # av | video, 默认 av
-kura library remove <库>                            # 删库: 只删索引, 磁盘文件一个都不动
+kura library remove <库>                            # 删库: 只删索引, 磁盘文件一个都不动; 失去最后一个文件引用的条目一并删除
 kura file dirs                                       # 影视: 待绑定目录 (文件数 / 已解析集数)
 kura file bind <目录> --tmdb tmdb:tv:1399            # 目录级绑定 (--dry-run 先看)
 kura file bind <目录> --local [--title 名] [--type movie|tv]  # 手动加入库: local: 身份, 标 ugc, 不连来源

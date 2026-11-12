@@ -59,6 +59,7 @@ import {
   pendingTranslationKeys,
   placeImagesBesideVideo,
   probeTranslator,
+  pruneOrphanItems,
   renameLibrary,
   repairTranslations,
   resolveDmmEnv,
@@ -350,7 +351,7 @@ export const COMMANDS: Command[] = [
     render(data: {
       libraries?: { name: string; root: string; template: string; organizeEnabled?: boolean }[];
       library?: { name: string; root: string; template: string; organizeEnabled?: boolean };
-      removed?: { library: { name: string; root: string }; removedFiles: number; orphanItems: number };
+      removed?: { library: { name: string; root: string }; removedFiles: number; removedItems: number };
       relocate?: {
         library: string;
         from: string;
@@ -370,11 +371,11 @@ export const COMMANDS: Command[] = [
       // remove 动作返回的是 {removed, note}, 不是 library —— 以前会走到底部那句
       // "还没有媒体库", 看着像整库都没了一样。
       if (data.removed) {
-        const { library, removedFiles, orphanItems } = data.removed;
+        const { library, removedFiles, removedItems } = data.removed;
         return [
           `已删除媒体库「${library.name}」(${library.root})`,
           `  磁盘上的文件一个都没动`,
-          `  清掉索引 ${removedFiles} 个文件${orphanItems ? ` · 保留 ${orphanItems} 个条目 (条目跨库, 元数据没删)` : ""}`,
+          `  清掉索引 ${removedFiles} 个文件${removedItems ? ` · 顺带删掉 ${removedItems} 个没有文件指向的条目` : ""}`,
         ].join("\n");
       }
       if (data.relocate) {
@@ -1183,10 +1184,10 @@ export const COMMANDS: Command[] = [
 
   {
     name: "item",
-    summary: "条目: get <番号> | list [--type] [--actor] | set <番号> --title ... | lock/unlock <番号> 字段,字段 | retype <番号> <类型> | merge <from> --into <to>",
+    summary: "条目: get <番号> | list [--type] [--actor] | set <番号> --title ... | lock/unlock <番号> 字段,字段 | retype <番号> <类型> | merge <from> --into <to> | prune (清掉没有文件指向的孤儿条目)",
     needsDb: true,
     args: [
-      { name: "action", type: "string", description: "get | list | set | lock | unlock | retype | merge", positional: true, required: true },
+      { name: "action", type: "string", description: "get | list | set | lock | unlock | retype | merge | prune", positional: true, required: true },
       { name: "number", type: "string", description: "番号 (get/set/lock/unlock)", positional: true },
       { name: "fields", type: "string", description: "lock/unlock 的字段, 逗号分隔; retype 时要写的类型", positional: true },
       { name: "type", type: "string", description: "按类型筛选 (list)" },
@@ -1229,6 +1230,14 @@ export const COMMANDS: Command[] = [
         if (!from) throw new AppError("用法: item merge <from> --into <to>", EXIT.USAGE);
         if (!into) throw new AppError("缺少 --into <目标身份>", EXIT.USAGE, { hint: "比如 --into tmdb:movie:422153" });
         return { merge: mergeItems(ctx.rt!, { from, into }) };
+      }
+
+      if (action === "prune") {
+        // 清掉"既没有库、也没有文件"的条目 —— 删库时已经会自动清, 这个入口是给
+        // 存量数据补刀用的(老版本删库留下的漂浮条目)。默认 dry-run。
+        const apply = args.options.apply === true;
+        const result = pruneOrphanItems(ctx.rt!.db, { apply });
+        return { prune: { ...result, applied: apply } };
       }
 
       if (action === "get") {
@@ -1354,7 +1363,20 @@ export const COMMANDS: Command[] = [
       applied?: boolean;
       changes?: { number: string; from: string; to: string; hasTitle: boolean }[];
       merge?: { from: string; into: string; moved: number; removed: boolean };
+      prune?: { orphans: string[]; removed: number; applied: boolean };
     }) {
+      if (data.prune) {
+        const { orphans, removed, applied } = data.prune;
+        if (orphans.length === 0) return "没有无文件指向的条目, 库是干净的。";
+        const head = applied
+          ? `已删掉 ${removed} 个没有文件指向的条目`
+          : `发现 ${orphans.length} 个没有文件指向的条目 (加 --apply 才删):`;
+        return [
+          head,
+          ...orphans.slice(0, 20).map((n) => `  ${n}`),
+          orphans.length > 20 ? `  …还有 ${orphans.length - 20} 个 (总数 ${orphans.length})` : "",
+        ].filter(Boolean).join("\n");
+      }
       if (data.merge) {
         const { from, into, moved } = data.merge;
         return `${from} 已并入 ${into}: 挪了 ${moved} 个文件, 原条目已删除。\n接下来跑 organize 就能把这块碟和正片一起整理到位。`;
