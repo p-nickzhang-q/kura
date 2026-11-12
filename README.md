@@ -10,6 +10,8 @@ Electron 桌面应用 + 面向 agent 的 CLI，共享一份 TypeScript core 和�
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green"></a>
 </p>
 
+<p align="center"><b>中文</b> · <a href="README.en.md">English</a></p>
+
 ---
 
 - **没有服务端、没有常驻进程**：打开软件才运行，关了就退出。
