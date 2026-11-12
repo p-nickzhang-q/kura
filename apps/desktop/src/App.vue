@@ -74,6 +74,8 @@ const selectedId = ref<number | null>(null);
  */
 const dragId = ref<number | null>(null);
 const dragOverId = ref<number | null>(null);
+/** 被拖那行相对原位置的位移 —— 有它整行才跟着鼠标走, 而不是只有一个半透明标记。 */
+const dragOffset = ref(0);
 let dragOrigin: { id: number; y: number; active: boolean } | null = null;
 const items = ref<KuraItem[]>([]);
 /**
@@ -1777,6 +1779,7 @@ function onLibPointerMove(event: PointerEvent): void {
     dragOrigin.active = true;
     dragId.value = dragOrigin.id;
   }
+  dragOffset.value = event.clientY - dragOrigin.y;
   // 鼠标下面那一行就是落点。用 elementFromPoint 而不是给每行绑 dragover:
   // 行里有表单/按钮, 事件会落在子元素上, 自己算反而更简单。
   const element = document.elementFromPoint(event.clientX, event.clientY);
@@ -1792,22 +1795,71 @@ async function onLibPointerUp(): Promise<void> {
   dragOrigin = null;
   const from = origin?.active ? libraries.value.findIndex((library) => library.id === origin.id) : -1;
   const to = libraries.value.findIndex((library) => library.id === dragOverId.value);
+  const active = dragId.value !== null;
   dragId.value = null;
   dragOverId.value = null;
-  if (from < 0 || to < 0 || from === to) return;
+  dragOffset.value = 0;
+  if (!active || from < 0 || to < 0 || from === to) return;
 
+  const rects = captureLibRects();
   const next = [...libraries.value];
   const [moved] = next.splice(from, 1);
   if (!moved) return;
   next.splice(to, 0, moved);
   // 先本地生效: 拖完手一松就该看到结果, 不该等 IPC 回来
   libraries.value = next;
+  await nextTick();
+  animateLibReflow(rects);
   try {
     const saved = await window.kura.reorderLibraries(next.map((library) => library.id));
     if (saved.length) libraries.value = saved;
   } catch (err) {
     error.value = `保存库顺序失败: ${err instanceof Error ? err.message : String(err)}`;
     libraries.value = (await window.kura.libraries()) ?? libraries.value;
+  }
+}
+
+/**
+ * 拖动时被拖那行的位置 —— 跟着鼠标走。
+ *
+ * 只动这一行, 不做"其他行让位": 让位要算每行高度 + gap, 行高又随内容(有没有路径行)
+ * 变化, 累起来会把行推出容器、甚至看不见。落点用那条主色线指示, 松手后统一做
+ * FLIP 动画归位 —— 简单、可预测。
+ */
+function libRowStyle(index: number): Record<string, string> {
+  if (dragId.value === null) return {};
+  const from = libraries.value.findIndex((library) => library.id === dragId.value);
+  if (index !== from) return {};
+  return { transform: `translateY(${dragOffset.value}px)`, zIndex: "5" };
+}
+
+/** 记下每行现在的位置, 重排后据此算"从哪儿滑过来"。 */
+function captureLibRects(): Map<number, number> {
+  const map = new Map<number, number>();
+  for (const row of document.querySelectorAll<HTMLElement>("[data-library-id]")) {
+    const id = Number(row.dataset.libraryId);
+    if (!Number.isNaN(id)) map.set(id, row.getBoundingClientRect().top);
+  }
+  return map;
+}
+
+/** FLIP: 先把行按"原来的位置"摆回去, 下一帧再放开 —— 浏览器就补出过渡。 */
+function animateLibReflow(before: Map<number, number>): void {
+  for (const row of document.querySelectorAll<HTMLElement>("[data-library-id]")) {
+    const id = Number(row.dataset.libraryId);
+    const oldTop = before.get(id);
+    if (oldTop === undefined) continue;
+    const delta = oldTop - row.getBoundingClientRect().top;
+    if (Math.abs(delta) < 1) continue;
+    row.style.transition = "none";
+    row.style.transform = `translateY(${delta}px)`;
+    // 读一次布局: 不强制回流的话, "设 transform"和"清 transform"会并进同一帧,
+    // 过渡根本不会触发
+    void row.offsetHeight;
+    requestAnimationFrame(() => {
+      row.style.transition = "";
+      row.style.transform = "";
+    });
   }
 }
 
@@ -2477,7 +2529,7 @@ async function testDmm(): Promise<void> {
             </button>
           </div>
         </div>
-        <ul class="libs">
+        <ul class="libs" :class="{ 'is-dragging': dragId !== null }">
           <!-- 「全部库」不是真库, 只是把范围放宽: 扫描会挨个跑 -->
           <li :class="{ active: selectedId === null }">
             <button type="button" class="lib" @click="selectedId = null; onScopeChange()">
@@ -2486,9 +2538,10 @@ async function testDmm(): Promise<void> {
             </button>
           </li>
           <li
-            v-for="library in libraries"
+            v-for="(library, index) in libraries"
             :key="library.id"
             :data-library-id="library.id"
+            :style="libRowStyle(index)"
             :class="{ active: library.id === selectedId, dragging: dragId === library.id, 'drop-here': dragId !== null && dragOverId === library.id && dragId !== library.id }"
             @pointerdown="onLibPointerDown($event, library.id)"
           >
@@ -4114,22 +4167,45 @@ h1 {
 
 /* 拖动排序: 整行是拖柄(不是某个图标), 但只有真的移动了才显示这三种状态 */
 .libs li {
+  position: relative;
   cursor: grab;
+  /* 让位的行平滑挪一格; 被拖那行在 .dragging 里把过渡关掉, 否则会"追不上"鼠标 */
+  transition: transform 160ms var(--ease);
 }
 
 .libs li.dragging {
-  opacity: 0.45;
+  z-index: 5;
   cursor: grabbing;
+  transition: none;
+  /* 关键: 被拖那行跟着鼠标走, 如果它还吃指针事件, `elementFromPoint` 永远返回它自己,
+     落点就永远是"原地不动" —— 表现就是"拖了但几乎换不了位置" */
+  pointer-events: none;
+  /* 被拿起来的观感: 抬高一点 + 投影, 而不是变半透明(半透明会让人以为它要消失) */
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 45%);
 }
 
-/* 落点用一条线而不是整块高亮: 高亮会盖住目标行的名字, 看不清要插到谁上面 */
+/* 拖动期间别选中文字 —— 否则拖过快时整列库名都被刷蓝 */
+.libs.is-dragging {
+  user-select: none;
+}
+
+/* 落点: 一条线 + 落点行极淡的底。只画线的话, 线在行与行之间只有 2px, 拖的时候
+   眼睛根本抓不住"现在到底插到谁那儿"。底色用 8% 主色, 不盖名字。 */
+.libs li.drop-here {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border-radius: var(--radius-sm);
+}
+
 .libs li.drop-here::after {
   content: "";
   position: absolute;
-  inset: -1px 8px auto;
-  height: 2px;
-  border-radius: 1px;
+  inset: -2px 4px auto;
+  height: 3px;
+  border-radius: 2px;
   background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
 }
 
 .lib-row .lib {
@@ -4470,7 +4546,9 @@ h1 {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  /* 让位位移要减去这个 gap, 所以必须是个变量 */
+  --lib-gap: 4px;
+  gap: var(--lib-gap);
 }
 
 .libs button {
