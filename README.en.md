@@ -3,7 +3,7 @@
 <h1 align="center">Kura</h1>
 
 <p align="center">A local media library manager for two kinds of libraries:<br>
-<b>numbered</b> (Japanese adult video) and <b>general video</b> (movies / TV / anime / variety).<br>
+<b>general video</b> (movies / TV / anime / variety) and <b>numbered</b> (Japanese adult video).<br>
 Windows desktop app + an agent-facing CLI, sharing one TypeScript core and one SQLite file.</p>
 
 <p align="center">
@@ -178,13 +178,13 @@ The exit code is the primary signal, not the text on stdout. stdout carries data
 One library belongs to exactly one domain, **chosen at creation and immutable** — it decides
 recognition, sources, and the organize shape.
 
-| | Numbered (`av`) | General video (`video`) |
+| | General video (`video`) | Numbered (`av`) |
 |---|---|---|
-| Identity | The number in the filename | **TMDB id** |
-| Sources | DMM / JavBus / JavDB | TMDB |
-| Recognition | Regex + content-type heuristics | Directory = one show, filename gives season/episode; a movie = no episode anywhere in the directory |
-| Organize shape | `{dimension}/{number}` | `Show (Year)/Season 01/Show - S01E01.mkv` · `Movie (Year)/Movie (Year).mkv` |
-| When it can't tell | Goes to the "unrecognized" page; rename and rescan | Goes to the "unrecognized" tree, **left for a human to bind** (never guessed) |
+| Identity | **TMDB id** | The number in the filename |
+| Sources | TMDB | DMM / JavBus / JavDB |
+| Recognition | Directory = one show, filename gives season/episode; a movie = no episode anywhere in the directory | Regex + content-type heuristics |
+| Organize shape | `Show (Year)/Season 01/Show - S01E01.mkv` · `Movie (Year)/Movie (Year).mkv` | `{dimension}/{number}` |
+| When it can't tell | Goes to the "unrecognized" tree, **left for a human to bind** (never guessed) | Goes to the "unrecognized" page; rename and rescan |
 
 **The video domain does not guess.** Filenames are written in too many ways, and a wrong guess
 renames a whole season. Recognition covers a small set of forms; everything else is left to you,
