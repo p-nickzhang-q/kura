@@ -65,6 +65,16 @@ const IMAGE_FIELDS = ["poster_urls", "cover_urls", "thumb_urls"];
 const info = ref<KuraAppInfo | null>(null);
 const libraries = ref<KuraLibrary[]>([]);
 const selectedId = ref<number | null>(null);
+/**
+ * 拖动排序的状态。
+ *
+ * 不用 HTML5 dragstart/drop: 库行本身就是 `<button>`, Chromium 里从按钮上按下拖动
+ * 不会触发父元素的 dragstart, 结果是"拖不动也没提示"。自己用 pointer 事件 + 6px 阈值
+ * 区分"点一下"和"拖一下", 点击语义完全不受影响。
+ */
+const dragId = ref<number | null>(null);
+const dragOverId = ref<number | null>(null);
+let dragOrigin: { id: number; y: number; active: boolean } | null = null;
 const items = ref<KuraItem[]>([]);
 /**
  * 默认落在「待办」而不是「条目」。
@@ -1752,6 +1762,55 @@ async function removeLibrary(library: KuraLibrary): Promise<void> {
 }
 
 /** 切换范围: 列表、未识别、计数都跟着变。 */
+/** 侧栏库行: 按下只记位置, 移动超过阈值才当成拖拽 —— 否则点一下也会触发重排。 */
+function onLibPointerDown(event: PointerEvent, id: number): void {
+  if (event.button !== 0) return;
+  dragOrigin = { id, y: event.clientY, active: false };
+  window.addEventListener("pointermove", onLibPointerMove);
+  window.addEventListener("pointerup", onLibPointerUp, { once: true });
+}
+
+function onLibPointerMove(event: PointerEvent): void {
+  if (!dragOrigin) return;
+  if (!dragOrigin.active) {
+    if (Math.abs(event.clientY - dragOrigin.y) < 6) return;
+    dragOrigin.active = true;
+    dragId.value = dragOrigin.id;
+  }
+  // 鼠标下面那一行就是落点。用 elementFromPoint 而不是给每行绑 dragover:
+  // 行里有表单/按钮, 事件会落在子元素上, 自己算反而更简单。
+  const element = document.elementFromPoint(event.clientX, event.clientY);
+  const row = element?.closest("[data-library-id]") as HTMLElement | null;
+  const id = row?.dataset.libraryId;
+  dragOverId.value = id ? Number(id) : dragOverId.value;
+  event.preventDefault();
+}
+
+async function onLibPointerUp(): Promise<void> {
+  window.removeEventListener("pointermove", onLibPointerMove);
+  const origin = dragOrigin;
+  dragOrigin = null;
+  const from = origin?.active ? libraries.value.findIndex((library) => library.id === origin.id) : -1;
+  const to = libraries.value.findIndex((library) => library.id === dragOverId.value);
+  dragId.value = null;
+  dragOverId.value = null;
+  if (from < 0 || to < 0 || from === to) return;
+
+  const next = [...libraries.value];
+  const [moved] = next.splice(from, 1);
+  if (!moved) return;
+  next.splice(to, 0, moved);
+  // 先本地生效: 拖完手一松就该看到结果, 不该等 IPC 回来
+  libraries.value = next;
+  try {
+    const saved = await window.kura.reorderLibraries(next.map((library) => library.id));
+    if (saved.length) libraries.value = saved;
+  } catch (err) {
+    error.value = `保存库顺序失败: ${err instanceof Error ? err.message : String(err)}`;
+    libraries.value = (await window.kura.libraries()) ?? libraries.value;
+  }
+}
+
 function selectLibrary(id: number | null): void {
   selectedId.value = id;
   page.value = 0;
@@ -2426,7 +2485,13 @@ async function testDmm(): Promise<void> {
               <small>{{ libraries.length }} 个媒体库 · {{ info?.items ?? 0 }} 条</small>
             </button>
           </li>
-          <li v-for="library in libraries" :key="library.id" :class="{ active: library.id === selectedId }">
+          <li
+            v-for="library in libraries"
+            :key="library.id"
+            :data-library-id="library.id"
+            :class="{ active: library.id === selectedId, dragging: dragId === library.id, 'drop-here': dragId !== null && dragOverId === library.id && dragId !== library.id }"
+            @pointerdown="onLibPointerDown($event, library.id)"
+          >
             <!-- 改名: 就地一条输入 + 显式的保存/取消。不用 blur 提交 ——
                  点保存时 blur 会先触发一次, 结果是"保存成功但界面报错" -->
             <form v-if="renamingId === library.id" class="lib-edit" @submit.prevent="commitRename(library)">
@@ -4045,6 +4110,26 @@ h1 {
   position: relative;
   display: flex;
   align-items: stretch;
+}
+
+/* 拖动排序: 整行是拖柄(不是某个图标), 但只有真的移动了才显示这三种状态 */
+.libs li {
+  cursor: grab;
+}
+
+.libs li.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+/* 落点用一条线而不是整块高亮: 高亮会盖住目标行的名字, 看不清要插到谁上面 */
+.libs li.drop-here::after {
+  content: "";
+  position: absolute;
+  inset: -1px 8px auto;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
 }
 
 .lib-row .lib {
@@ -5984,8 +6069,11 @@ td.pick {
 }
 
 /* ---------------------------------------------------------------- 待办 */
+/* 以前这里硬限 960px: 1920 的屏上整页只占左边一半, 卡片看起来"永远那么大"。
+   现在跟着窗口长, 但留一个上限 —— 4K 上整页拉满 3400px, 一行文字要横穿屏幕。
+   1600px 之后再宽就该分栏了, 而分栏会打断"从上往下点"的顺序。 */
 .todo-pane {
-  max-width: 960px;
+  max-width: min(100%, 1600px);
 }
 
 .pane-title {
@@ -6015,13 +6103,19 @@ td.pick {
   overflow: hidden;
 }
 
+/* 全部用 clamp(小屏值, 视口比例, 大屏值): 1280 窗口下还是原来那行, 2560 窗口下
+   行高和字号一起长 —— 以前只有宽度长, 大屏上看着像一张被拉开的表。 */
 .todo-row {
   position: relative;
   display: grid;
-  grid-template-columns: 40px 1fr 140px 140px;
+  grid-template-columns:
+    clamp(36px, 2.4vw, 52px)
+    minmax(0, 1fr)
+    clamp(110px, 10vw, 168px)
+    clamp(110px, 10vw, 168px);
   align-items: center;
-  gap: 16px;
-  padding: 16px 20px;
+  gap: clamp(12px, 1.3vw, 24px);
+  padding: clamp(14px, 1.4vw, 26px) clamp(16px, 1.7vw, 32px);
   border-bottom: 1px solid var(--line);
 }
 
@@ -6048,7 +6142,7 @@ td.pick {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: var(--fs-section);
+  font-size: clamp(var(--fs-section), 0.9vw + 6px, 21px);
   font-weight: 600;
 }
 
@@ -6056,8 +6150,8 @@ td.pick {
   display: block;
   margin-top: 4px;
   color: var(--muted);
-  font-size: var(--fs-body);
-  line-height: 18px;
+  font-size: clamp(var(--fs-body), 0.35vw + 10px, 16px);
+  line-height: 1.5;
 }
 
 .todo-tag {
@@ -6083,7 +6177,7 @@ td.pick {
 
 .todo-num {
   color: var(--text);
-  font-size: var(--fs-section);
+  font-size: clamp(var(--fs-section), 1.1vw + 6px, 26px);
   text-align: right;
 }
 
