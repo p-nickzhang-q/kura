@@ -12,6 +12,7 @@ import {
   cleanupEmptyDirs,
   deleteLibrary,
   renameLibrary,
+  reorderLibraries,
   createDmmSource,
   defaultSources,
   downloadPoster,
@@ -942,6 +943,11 @@ function registerIpc(): void {
     // 只删索引, 磁盘不动: 误删的代价是重扫一次, 不是丢文件
     return deleteLibrary(mustRuntime().db, input.libraryId);
   });
+
+  // 拖动排序: 传进来的 id 顺序就是新顺序。只改索引, 不碰磁盘。
+  ipcMain.handle("library:reorder", (_event, input: { ids: number[] }) =>
+    reorderLibraries(mustRuntime().db, input.ids),
+  );
 
   ipcMain.handle("library:rename", (_event, input: { libraryId: number; name: string }) => {
     mustLibrary(input.libraryId);

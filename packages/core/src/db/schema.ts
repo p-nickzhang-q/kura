@@ -190,6 +190,13 @@ const MIGRATIONS: string[] = [
   `
   alter table libraries add column volume_id text;
   `,
+
+  // v15 — 库在侧栏里的顺序由人拖出来, 不再按名字排。
+  // 排序以前是 `order by name`: 改了名就跳位置, 也没法把常用的库放最上面。
+  // 老库这一列为 NULL, 读的时候按名字兜底 —— 升级前后看到的顺序一样。
+  `
+  alter table libraries add column sort_order integer;
+  `,
 ];
 
 /**

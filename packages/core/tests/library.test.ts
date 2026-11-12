@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLibrary, deleteLibrary, findLibrary, renameLibrary, updateLibraryTemplate } from "../src/db/rows";
+import { createLibrary, deleteLibrary, findLibrary, listLibraries, renameLibrary, reorderLibraries, updateLibraryTemplate } from "../src/db/rows";
 import { openRuntime, type Runtime } from "../src/runtime";
 import { scan } from "../src/tasks/scan";
 import { countExhausted, countItems, countPending } from "../src/tasks/scrape";
@@ -242,5 +242,37 @@ describe("影视库没有整理维度", () => {
     const av = createLibrary(rt.db, { name: "番号库", root: join(root, "av"), domain: "av" });
     updateLibraryTemplate(rt.db, av.id, "{studio}/{number}");
     expect(findLibrary(rt.db, String(av.id))?.template).toBe("{studio}/{number}");
+  });
+});
+
+describe("库拖动排序", () => {
+  test("reorderLibraries: 传进来的顺序就是新顺序, 没传到的排后面", async () => {
+    const db = await openRuntime({ dataDir: await mkdtemp(join(tmpdir(), "kura-order-")) });
+    const a = createLibrary(db.db, { name: "A库", root: "/tmp/kura-order-a" });
+    const b = createLibrary(db.db, { name: "B库", root: "/tmp/kura-order-b" });
+    const c = createLibrary(db.db, { name: "C库", root: "/tmp/kura-order-c" });
+    // 新库默认排最后
+    expect(listLibraries(db.db).map((library) => library.name)).toEqual(["A库", "B库", "C库"]);
+
+    const after = reorderLibraries(db.db, [c.id, a.id]);
+    // 没传到的 B 不该消失, 只是排在后面
+    expect(after.map((library) => library.name)).toEqual(["C库", "A库", "B库"]);
+    expect(after.map((library) => library.sortOrder)).toEqual([0, 1, 2]);
+
+    // 再拖一次, 顺序按新的来(不是叠加)
+    const again = reorderLibraries(db.db, [b.id, c.id, a.id]);
+    expect(again.map((library) => library.name)).toEqual(["B库", "C库", "A库"]);
+    await db.close();
+  });
+
+  test("建库前就拖过 → 新库还是排最后, 不会插到中间", async () => {
+    const db = await openRuntime({ dataDir: await mkdtemp(join(tmpdir(), "kura-order-")) });
+    const a = createLibrary(db.db, { name: "A库", root: "/tmp/kura-order-a" });
+    reorderLibraries(db.db, [a.id]);
+    const b = createLibrary(db.db, { name: "0库", root: "/tmp/kura-order-b" });
+    // 名字以 0 开头也不该排到 A 前面 —— 有 sort_order 就按它
+    expect(listLibraries(db.db).map((library) => library.name)).toEqual(["A库", "0库"]);
+    expect(b.sortOrder).toBe(1);
+    await db.close();
   });
 });

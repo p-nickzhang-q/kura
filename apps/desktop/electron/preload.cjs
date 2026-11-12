@@ -66,6 +66,7 @@ contextBridge.exposeInMainWorld("kura", {
   // 清理空壳目录: 影片早就搬完、旧目录里只剩海报时用 (整理不会再触发清理)
   cleanupLibrary: (libraryId, apply) => ipcRenderer.invoke("library:cleanup", { libraryId, apply }),
   removeLibrary: (libraryId) => ipcRenderer.invoke("library:remove", { libraryId }),
+  reorderLibraries: (ids) => ipcRenderer.invoke("library:reorder", { ids }),
   renameLibrary: (libraryId, name) => ipcRenderer.invoke("library:rename", { libraryId, name }),
   setLibraryTemplate: (libraryId, dimension) => ipcRenderer.invoke("library:set-template", { libraryId, dimension }),
   setLibraryOrganize: (libraryId, enabled) => ipcRenderer.invoke("library:set-organize", { libraryId, enabled }),

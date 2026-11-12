@@ -6,6 +6,7 @@ export { AppError, EXIT, exitCodeName, isRetryable } from "./exit";
 export type { ExitCode } from "./exit";
 
 export { openRuntime, withRuntime } from "./runtime";
+export { reorderLibraries } from "./db/rows";
 export type { Runtime, RuntimeOptions } from "./runtime";
 export { resolvePaths } from "./paths";
 export { resolveLlm, resolveTmdbEnv, translateEnabled } from "./config";

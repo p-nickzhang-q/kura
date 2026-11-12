@@ -18,6 +18,8 @@ export interface Library {
    * 换盘时盘符会复用, 只有它能区分"原来那块盘"和"插错盘"。null = 老库还没绑定。
    */
   volumeId?: string | null;
+  /** 侧栏顺序。null = 还没被拖过, 按名字排。 */
+  sortOrder?: number | null;
 }
 
 export type PlanAction = "move" | "write-nfo" | "copy-image" | "skip";

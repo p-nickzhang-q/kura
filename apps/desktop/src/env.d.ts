@@ -448,6 +448,8 @@ interface KuraBridge {
   scrapeShow(key: string): Promise<{ key: string; ok: boolean; fields: string[]; episodes: number; declared: number; bound: number; missing: number; error?: string }>;
   scan(libraryId: number, options?: { force?: boolean }): Promise<KuraScanReport>;
   removeLibrary(libraryId: number): Promise<{ library: KuraLibrary; removedFiles: number; orphanItems: number }>;
+  /** 拖动排序后的 id 顺序就是新顺序。 */
+  reorderLibraries(ids: number[]): Promise<KuraLibrary[]>;
   renameLibrary(libraryId: number, name: string): Promise<KuraLibrary>;
   setLibraryTemplate(libraryId: number, dimension: string): Promise<KuraLibrary>;
   setLibraryOrganize(libraryId: number, enabled: boolean): Promise<KuraLibrary>;

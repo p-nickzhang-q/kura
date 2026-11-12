@@ -155,6 +155,7 @@ export interface LibraryRow {
   organize_enabled?: number;
   domain?: string | null;
   volume_id?: string | null;
+  sort_order?: number | null;
 }
 
 export function rowToLibrary(row: LibraryRow): Library {
@@ -169,11 +170,19 @@ export function rowToLibrary(row: LibraryRow): Library {
     domain: isLibraryDomain(row.domain) ? row.domain : "av",
     // v14 之前建的库没有卷指纹, 下次扫描时补记(见 db/volume.ts)
     volumeId: row.volume_id ?? null,
+    sortOrder: row.sort_order ?? null,
   };
 }
 
 export function listLibraries(db: Db): Library[] {
-  return db.all<LibraryRow>("select id, name, root, template, organize_enabled, domain, volume_id from libraries order by name").map(rowToLibrary);
+  // 拖过顺序的按 sort_order; 没拖过的排在后面按名字 —— 升级前后看到的顺序一致。
+  return db
+    .all<LibraryRow>(
+      `select id, name, root, template, organize_enabled, domain, volume_id, sort_order
+       from libraries
+       order by sort_order is null, sort_order, name`,
+    )
+    .map(rowToLibrary);
 }
 
 export function findLibrary(db: Db, ref: string): Library | undefined {
@@ -260,18 +269,47 @@ export function createLibrary(
 
   const name = uniqueLibraryName(db, input.name);
 
-  db.run("insert into libraries (name, root, template, organize_enabled, domain) values (?, ?, ?, ?, ?)", [
-    name,
-    input.root,
-    input.template ?? defaultTemplateFor(input.domain ?? "av"),
-    input.organizeEnabled === false ? 0 : 1,
-    input.domain ?? "av",
-  ]);
+  // 新库排最后: 拖过一次 sort_order 之后, max+1 才是"末尾"。
+  db.run(
+    `insert into libraries (name, root, template, organize_enabled, domain, sort_order)
+     values (?, ?, ?, ?, ?, (select coalesce(max(sort_order), -1) + 1 from libraries))`,
+    [
+      name,
+      input.root,
+      input.template ?? defaultTemplateFor(input.domain ?? "av"),
+      input.organizeEnabled === false ? 0 : 1,
+      input.domain ?? "av",
+    ],
+  );
   const row = db.get<LibraryRow>(
-    "select id, name, root, template, organize_enabled, domain, volume_id from libraries where name = ?",
+    "select id, name, root, template, organize_enabled, domain, volume_id, sort_order from libraries where name = ?",
     [name],
   )!;
   return rowToLibrary(row);
+}
+
+/**
+ * 重排库: 传进来的 id 顺序就是新顺序, 没传到的排在后面保持原样。
+ *
+ * 一个事务里写完 —— 拖一次要改所有行的 sort_order, 中途失败会留下重复序号,
+ * 下次 `order by` 的结果就取决于磁盘顺序了。
+ */
+export function reorderLibraries(db: Db, ids: number[]): Library[] {
+  const known = listLibraries(db).map((library) => library.id);
+  const ordered = ids.filter((id) => known.includes(id));
+  for (const id of known) if (!ordered.includes(id)) ordered.push(id);
+
+  db.run("begin");
+  try {
+    ordered.forEach((id, index) => {
+      db.run("update libraries set sort_order = ? where id = ?", [index, id]);
+    });
+    db.run("commit");
+  } catch (err) {
+    db.run("rollback");
+    throw err;
+  }
+  return listLibraries(db);
 }
 
 /** 改名: 显式给的名字撞名时报错, 不自动加序号 —— 人已经明确指定了, 静默改名字更奇怪。 */
