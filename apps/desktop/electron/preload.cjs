@@ -40,7 +40,7 @@ contextBridge.exposeInMainWorld("kura", {
   repairPaths: (libraryId) => ipcRenderer.invoke("library:repair-paths", { libraryId }),
   relocateLibrary: (libraryId, root) => ipcRenderer.invoke("library:relocate", { libraryId, root }),
   todoCounts: (libraryId) => ipcRenderer.invoke("todo:counts", { libraryId }),
-  todoPlans: (libraryId) => ipcRenderer.invoke("todo:plans", { libraryId }),
+  todoPlans: (libraryId, force) => ipcRenderer.invoke("todo:plans", { libraryId, force }),
   todoRecover: (libraryId) => ipcRenderer.invoke("todo:recover", { libraryId }),
   bindLocalDir: (libraryId, dir, paths, title, type) =>
     ipcRenderer.invoke("file:bind-local", {

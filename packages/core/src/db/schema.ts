@@ -197,6 +197,17 @@ const MIGRATIONS: string[] = [
   `
   alter table libraries add column sort_order integer;
   `,
+
+  // v16 — 待办页那两行贵数字(可整理 / NFO 待回写)算一次要遍历全库 + 读遍 nfo。
+  // 以前每次切库都重算, 移动硬盘上 12 秒。现在算完存一份, 进页面先拿旧的顶着,
+  // 后台再算新的。payload 是整个 TodoPlans 的 JSON —— 它只给界面看, 没有查询需求。
+  `
+  create table todo_cache (
+    key         text primary key,
+    payload     text not null,
+    computed_at integer not null
+  );
+  `,
 ];
 
 /**

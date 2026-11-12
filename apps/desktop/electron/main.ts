@@ -61,7 +61,7 @@ import {
   exportTvNfo,
   exportTvNfoTask,
   todoCounts,
-  todoPlans,
+  todoPlansCached,
   todoRecover,
   countExhausted,
   countPendingTranslation,
@@ -755,8 +755,13 @@ function registerIpc(): void {
     todoCounts(mustRuntime(), input?.libraryId === undefined ? {} : { libraryId: input.libraryId }),
   );
 
-  ipcMain.handle("todo:plans", async (_event, input: { libraryId?: number } = {}) =>
-    todoPlans(mustRuntime(), input?.libraryId === undefined ? {} : { libraryId: input.libraryId }),
+  // 默认**不读盘**: 只返回上次算出的数字(GUI 先拿它顶着)。带 `force` 才真算 ——
+  // 整理干跑 + nfo 比对在移动硬盘上要 12 秒, 点一下侧栏就重算一遍毫无道理。
+  ipcMain.handle("todo:plans", async (_event, input: { libraryId?: number; force?: boolean } = {}) =>
+    todoPlansCached(mustRuntime(), {
+      ...(input?.libraryId === undefined ? {} : { libraryId: input.libraryId }),
+      force: input?.force === true,
+    }),
   );
 
   /**

@@ -135,7 +135,16 @@ export { countExhausted, countItems, countPending, getItem, isItemSortField, lis
 export { organizeTask, type OrganizeTaskOptions } from "./tasks/organize-task";
 export { bindManyTask, type BindManyItem, type BindManyOptions, type BindManyResultItem } from "./tasks/bind-many";
 export { openAliasEngine, createAliasEngine, parseAliasResponse, type AliasEngine, type AliasGuess } from "./llm/ai-title";
-export { todoCounts, todoPlans, todoRecover, type TodoCounts, type TodoPlans } from "./tasks/todo";
+export {
+  todoCounts,
+  todoPlans,
+  todoPlansCached,
+  readTodoPlans,
+  todoRecover,
+  type CachedTodoPlans,
+  type TodoCounts,
+  type TodoPlans,
+} from "./tasks/todo";
 export { mergeItems, type MergeResult } from "./tasks/merge";
 export { repairIndexPaths, type PathRepair, type PathRepairReport } from "./tasks/repair";
 export {

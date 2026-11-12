@@ -375,7 +375,11 @@ interface KuraBridge {
   /** 待办页的便宜数字 (SQL 计数)。 */
   todoCounts(libraryId?: number): Promise<KuraTodoCounts>;
   /** 待办页的贵数字 (要读磁盘: 整理计划 / nfo 差异)。 */
-  todoPlans(libraryId?: number): Promise<KuraTodoPlans>;
+  /**
+   * 待办那两行贵数字。`force` = 真去读盘算一遍(12 秒); 不传 = 只回答上次算的。
+   * `stale` 为 true 时调用方应该在后台再要一次 force。
+   */
+  todoPlans(libraryId?: number, force?: boolean): Promise<{ plans: KuraTodoPlans | null; computedAt: number | null; stale: boolean }>;
   /**
    * 「从 NFO 恢复」那一行 —— 单独一个通道, 因为 todoPlans 在移动硬盘上要 12 秒,
    * 而这一行是换电脑第一眼要看的东西。

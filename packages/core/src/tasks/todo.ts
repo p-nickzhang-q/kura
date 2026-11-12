@@ -100,6 +100,76 @@ export function todoCounts(rt: Runtime, options: { libraryId?: number } = {}): T
   };
 }
 
+/**
+ * 待办缓存能活多久。
+ *
+ * 半小时是"够久, 又不至于在文件被外部搬走之后还骗人"的折中: 真正的失效靠
+ * `stamp`(库里数据比缓存新就重算), TTL 只兜"盘上被人手动动过"这种查不到的情况。
+ */
+const TODO_CACHE_TTL_SECONDS = 30 * 60;
+
+/** 缓存键: 一个作用域一份(`all` 或 `lib:3`)。 */
+function cacheKeyOf(libraryId?: number): string {
+  return libraryId === undefined ? "all" : `lib:${libraryId}`;
+}
+
+/**
+ * 库数据的"最新时刻" —— 比缓存新就说明该重算了。
+ *
+ * 用 `media_files.seen_at` + `items.updated_at`: 扫描、刮削、绑文件都会推它。
+ * 磁盘上被人手动挪走的文件查不到, 那是 TTL 兜的。
+ */
+function dataStamp(rt: Runtime): number {
+  const row = rt.db.get<{ stamp: number | null }>(
+    `select max(
+       (select coalesce(max(seen_at), 0) from media_files),
+       (select coalesce(max(updated_at), 0) from items)
+     ) as stamp`,
+  );
+  return row?.stamp ?? 0;
+}
+
+export interface CachedTodoPlans {
+  plans: TodoPlans | null;
+  /** 这份数字是什么时候算的(unix 秒)。null = 从没算过。 */
+  computedAt: number | null;
+  /** true = 需要用 `force` 再调一次。 */
+  stale: boolean;
+}
+
+/** 只读缓存, 绝不读盘。进页面第一帧用这个。 */
+export function readTodoPlans(rt: Runtime, options: { libraryId?: number } = {}): CachedTodoPlans {
+  const key = cacheKeyOf(options.libraryId);
+  const row = rt.db.get<{ payload: string; computed_at: number }>(
+    "select payload, computed_at from todo_cache where key = ?",
+    [key],
+  );
+  if (!row) return { plans: null, computedAt: null, stale: true };
+  let plans: TodoPlans;
+  try {
+    plans = JSON.parse(row.payload) as TodoPlans;
+  } catch {
+    // 缓存坏了就当没有 —— 绝不能因为一行坏 JSON 让待办页整页打不开
+    return { plans: null, computedAt: null, stale: true };
+  }
+  const age = Math.floor(Date.now() / 1000) - row.computed_at;
+  return { plans, computedAt: row.computed_at, stale: row.computed_at < dataStamp(rt) || age > TODO_CACHE_TTL_SECONDS };
+}
+
+/**
+ * 带缓存的一版: `force` 才真算, 否则只回答"有没有能用的旧数字"。
+ * 算完顺手写库, 下次进来直接有。
+ */
+export async function todoPlansCached(rt: Runtime, options: { libraryId?: number; force?: boolean } = {}): Promise<CachedTodoPlans> {
+  if (!options.force) return readTodoPlans(rt, options);
+  const plans = await todoPlans(rt, options);
+  rt.db.run(
+    "insert into todo_cache (key, payload, computed_at) values (?, ?, unixepoch()) on conflict(key) do update set payload = excluded.payload, computed_at = excluded.computed_at",
+    [cacheKeyOf(options.libraryId), JSON.stringify(plans)],
+  );
+  return { plans, computedAt: Math.floor(Date.now() / 1000), stale: false };
+}
+
 export async function todoPlans(rt: Runtime, options: { libraryId?: number } = {}): Promise<TodoPlans> {
   const libraries = scopeLibraries(rt, options.libraryId).filter((library) => library.organizeEnabled !== false);
 

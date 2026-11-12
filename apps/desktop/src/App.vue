@@ -382,14 +382,17 @@ const todoLoading = ref(false);
 /** 快速切库时防止旧库的数字晚一步写回来。 */
 let todoSeq = 0;
 /**
- * 贵的数字(整理计划 / nfo 差异)要读上千个 sidecar, 实测 1,845 个文件约 2 秒。
- * 所以: 只在「待办」页可见时算, 算完缓存 20 秒; 库一改(绑定/解绑/刮削/整理)就作废。
- * 以前每次 refreshAll 都重算 —— 绑一条重算一次, 页签在「条目」上也照算。
+ * 贵的数字(整理计划 / nfo 差异)要遍历全库再读遍 nfo, 移动硬盘上实测 12 秒。
+ * 所以: 只在「待办」页可见时算, 而且**算完存进数据库**(`todo_cache`)。
+ * 进页面先拿上次的数字顶着(标出算于几分钟前), 后台再算新的 —— 点一下侧栏不再等 12 秒。
  */
-let todoPlanAt = 0;
 let todoPlanKey = "";
 let todoPlanRunning = false;
 let todoPlanStale = true;
+/** 当前显示的这份数字是什么时候算的(unix 秒)。0 = 还没算过。 */
+const todoPlanAt = ref(0);
+/** 后台正在重算 —— 界面要能说"数字可能旧, 正在更新" */
+const todoPlanRefreshing = ref(false);
 
 function invalidateTodoPlan(): void {
   todoPlanStale = true;
@@ -569,17 +572,37 @@ async function refreshTodo(): Promise<void> {
 
   // 贵的两行: 页签不在「待办」上就先不算 —— 那两行根本没人看着
   const key = String(selectedId.value ?? "all");
-  const cached = !todoPlanStale && todoPlanKey === key && Date.now() - todoPlanAt < 20_000 && todoPlan.value !== null;
-  if (tab.value === "todo" && !cached && !todoPlanRunning) {
+  // 本地刚改过东西(扫描/刮削/整理…) → 缓存一定旧, 不用问
+  const localStale = todoPlanStale;
+  const sameKey = todoPlanKey === key && todoPlan.value !== null;
+  todoPlanStale = false;
+
+  if (tab.value === "todo" && !todoPlanRunning) {
     todoPlanRunning = true;
-    if (todoPlanKey !== key) todoPlan.value = null;
+    if (!sameKey) todoPlan.value = null;
     try {
-      const plans = await window.kura.todoPlans(selectedId.value ?? undefined);
-      if (seq === todoSeq) {
-        todoPlan.value = plans;
+      // ① 先拿缓存: 不读盘, 立刻就有数字(可能是上次的)
+      const cached = await window.kura.todoPlans(selectedId.value ?? undefined);
+      if (seq !== todoSeq) return;
+      if (cached.plans) {
+        todoPlan.value = cached.plans;
         todoPlanKey = key;
-        todoPlanAt = Date.now();
-        todoPlanStale = false;
+        todoPlanAt.value = cached.computedAt ?? 0;
+      }
+
+      // ② 缓存旧了才真算 —— 后台进行, 界面上那两行先显示旧数字
+      if (cached.stale || localStale || !cached.plans) {
+        todoPlanRefreshing.value = true;
+        try {
+          const fresh = await window.kura.todoPlans(selectedId.value ?? undefined, true);
+          if (seq === todoSeq && fresh.plans) {
+            todoPlan.value = fresh.plans;
+            todoPlanKey = key;
+            todoPlanAt.value = fresh.computedAt ?? 0;
+          }
+        } finally {
+          todoPlanRefreshing.value = false;
+        }
       }
     } catch {
       // 贵的数字算不出来就不显示, 待办页不能因为一个提示变红
@@ -588,6 +611,21 @@ async function refreshTodo(): Promise<void> {
     }
   }
   if (seq === todoSeq) todoLoading.value = false;
+}
+
+/** 「算于 3 分钟前」。不自动走表 —— 每次刷新待办都会重算, 够用了。 */
+const todoPlanAgo = computed(() => {
+  if (!todoPlanAt.value) return "";
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000) - todoPlanAt.value);
+  if (seconds < 60) return "刚刚";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
+  return `${Math.floor(seconds / 3600)} 小时前`;
+});
+
+/** 手动重算那两行(缓存不旧的时候也能点)。 */
+async function forceTodoPlans(): Promise<void> {
+  todoPlanStale = true;
+  await refreshTodo();
 }
 
 interface TodoRow {
@@ -2728,6 +2766,11 @@ async function testDmm(): Promise<void> {
             <span v-else class="muted">当前范围: 全部库</span>
           </p>
 
+          <p v-if="todoPlanAgo" class="muted todo-stamp">
+            「可整理」「NFO 待回写」两行算于 {{ todoPlanAgo }}
+            <template v-if="todoPlanRefreshing">· 正在重算…</template>
+            <template v-else>· <button type="button" class="link" @click="forceTodoPlans()">重算</button></template>
+          </p>
           <div v-if="!todoCounts" class="muted">正在数…</div>
           <ul v-else class="todo-list">
             <li v-for="row in todoRows" :key="row.key" class="todo-row" :class="{ next: row.next }">
@@ -6169,6 +6212,21 @@ td.pick {
   margin: 16px 0 0;
   font-size: var(--fs-label);
   line-height: 20px;
+}
+
+.todo-stamp {
+  margin: 0 0 8px;
+}
+
+.todo-stamp .link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
 }
 
 .todo-list {

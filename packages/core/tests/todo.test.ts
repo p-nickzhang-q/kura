@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createLibrary } from "../src/db/rows";
 import { openRuntime, type Runtime } from "../src/runtime";
 import { scan } from "../src/tasks/scan";
-import { todoCounts, todoPlans } from "../src/tasks/todo";
+import { readTodoPlans, todoCounts, todoPlans, todoPlansCached } from "../src/tasks/todo";
 
 let root: string;
 let rt: Runtime;
@@ -99,5 +99,49 @@ describe("待办数字", () => {
     const { existsSync } = await import("node:fs");
     expect(existsSync(join(media, "某部剧", "某部剧01.mkv"))).toBe(true);
     expect(existsSync(join(media, "某部剧", "某部剧01.nfo"))).toBe(false);
+  });
+});
+
+describe("待办两行贵数字的缓存", () => {
+  test("没算过 → plans 为 null 且 stale; 算完 → 有数字且不 stale", async () => {
+    const rt = await openRuntime({ dataDir: await mkdtemp(join(tmpdir(), "kura-todo-cache-")) });
+    // 一个没有库的库: 整理计划是空的, 但"算过"这件事本身要能被记住
+    expect(readTodoPlans(rt).plans).toBeNull();
+    expect(readTodoPlans(rt).stale).toBe(true);
+
+    const computed = await todoPlansCached(rt, { force: true });
+    expect(computed.stale).toBe(false);
+    expect(computed.plans).not.toBeNull();
+    expect(computed.computedAt).toBeGreaterThan(0);
+
+    // 不带 force = 只读缓存, 不再算
+    const cached = await todoPlansCached(rt);
+    expect(cached.plans).toEqual(computed.plans);
+    expect(cached.stale).toBe(false);
+    await rt.close();
+  });
+
+  test("库里的数据比缓存新 → stale(下次会重算)", async () => {
+    const rt = await openRuntime({ dataDir: await mkdtemp(join(tmpdir(), "kura-todo-cache-")) });
+    const library = createLibrary(rt.db, { name: "库", root: join(tmpdir(), "kura-todo-cache-root"), domain: "video" });
+    await todoPlansCached(rt, { libraryId: library.id, force: true });
+    expect(readTodoPlans(rt, { libraryId: library.id }).stale).toBe(false);
+
+    // 往索引里塞一行更"新"的文件记录, 等价于"扫描过了"
+    rt.db.run(
+      "insert into media_files (path, library_id, size, mtime_ms, seen_at) values (?, ?, 1, 1, unixepoch() + 60)",
+      [join(tmpdir(), "kura-todo-cache-root", "a.mp4"), library.id],
+    );
+    expect(readTodoPlans(rt, { libraryId: library.id }).stale).toBe(true);
+    await rt.close();
+  });
+
+  test("作用域分开存: 换了库拿到的是 null, 不是别的库的数字", async () => {
+    const rt = await openRuntime({ dataDir: await mkdtemp(join(tmpdir(), "kura-todo-cache-")) });
+    const a = createLibrary(rt.db, { name: "A", root: join(tmpdir(), "kura-todo-cache-a"), domain: "video" });
+    await todoPlansCached(rt, { libraryId: a.id, force: true });
+    expect(readTodoPlans(rt, { libraryId: a.id }).plans).not.toBeNull();
+    expect(readTodoPlans(rt, { libraryId: a.id + 99 }).plans).toBeNull();
+    await rt.close();
   });
 });
