@@ -46,6 +46,13 @@ Electron 桌面应用 + 面向 agent 的 CLI，共享一份 TypeScript core 和�
 
 ![影视详情](docs/images/detail-video.png)
 
+**海报墙** —— 条目页的另一种看法。列表看字段、做批量操作；海报墙用来找片：
+
+![海报墙](docs/images/wall.webp)
+
+图优先用 Kura 自己下载的缓存，没有就用库目录里现成的 `poster.jpg` / `folder.jpg`；
+两样都没有才画占位（标题首字），不是画个灰框说「加载失败」。
+
 **番号库**（条目 / 详情）：字段按来源分别记录，可逐字段锁定：
 
 ![番号条目](docs/images/items-av.png)

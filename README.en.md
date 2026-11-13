@@ -59,6 +59,15 @@ anything it can't identify stays exactly where it is:
 
 ![Video detail](docs/images/detail-video.png)
 
+**Poster wall** — the items page has a second view. The list is for reading fields and doing
+batch work; the wall is for finding something to watch:
+
+![Poster wall](docs/images/wall.webp)
+
+Artwork comes from Kura's own download cache first, then from an existing `poster.jpg` /
+`folder.jpg` already sitting in the library. Only when both are missing does it draw a
+placeholder (the first letter of the title) — not a grey box that looks like a load error.
+
 **Numbered library** (list / detail). Fields are tracked per source and can be locked individually:
 
 ![Numbered list](docs/images/items-av.png)
