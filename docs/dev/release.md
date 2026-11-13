@@ -45,6 +45,19 @@ cp apps/desktop/release/Kura-<ver>-portable.exe  /tmp/kura-release/
 cp dist/kura.exe /tmp/kura-release/kura-<ver>-win-x64.exe
 ```
 
+**必须先换成这三个名字再上传**。electron-builder 在 Windows 上产出的文件名带空格
+（`Kura 0.6.40.exe` / `Kura Setup 0.6.40.exe`），`gh` 上传时会把空格换成点
+（`Kura.0.6.40.exe`）；而 `dist/kura.exe` 根本不含版本号。两者都会让“按名字下载”的
+脚本断掉 —— 包括更新检查。
+
+| 资源 | 文件名 |
+|---|---|
+| 安装包 | `Kura-<ver>-setup.exe` |
+| 便携版 | `Kura-<ver>-portable.exe` |
+| CLI | `kura-<ver>-win-x64.exe` |
+
+已经传错了名字就 `gh release delete-asset` 删掉重传，不要留着两份。
+
 网络不稳定时，`git` 与 `gh` 分别试一次直连和代理再决定用哪个（两者打的是不同域名，
 可能一条通、一条不通）：
 
