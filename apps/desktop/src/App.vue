@@ -147,7 +147,20 @@ function bindRenameInput(el: unknown): void {
 }
 /** 页码输入框的草稿值: 输入过程中不立即跳页, 回车/失焦才跳。 */
 const pageInput = ref("1");
-const pageSize = 100;
+/**
+ * 条目页的两种呈现: 列表 (核对字段、批量操作) / 海报墙 (浏览、找片)。
+ *
+ * 存 localStorage 而不是配置: 这是**看的人**的习惯, 不是这台机器的设置 ——
+ * 写进 config.json 会跟着库一起同步, 换个人用同一份配置就被改了。
+ */
+const viewMode = ref<"list" | "wall">(localStorage.getItem("kura.view") === "wall" ? "wall" : "list");
+/**
+ * 一页多少条。海报墙一屏能站 30+ 张, 还用 100 条就白瞎了网格。
+ *
+ * 用 computed 而不是换页函数里各算一套: `pageCount` / `refreshItems` 都直接读它,
+ * 只要这里变了, 页码越界检查会自动跟上。
+ */
+const pageSize = computed(() => (viewMode.value === "wall" ? 60 : 100));
 const itemTotal = ref(0);
 /** 当前生效的筛选条件。空对象 = 不过滤。键名与 core 的 listItems 选项一致。 */
 type FilterKey = "q" | "actor" | "studio" | "label" | "series" | "director" | "tag" | "state";
@@ -258,7 +271,7 @@ const llmTest = ref<{ ok: boolean; model: string; endpoint: string; sample: stri
 const translateProgress = ref<{ index: number; total: number; key: string; error?: string } | null>(null);
 const pendingTotal = ref(0);
 const exhaustedTotal = ref(0);
-const pageCount = computed(() => Math.max(1, Math.ceil(itemTotal.value / pageSize)));
+const pageCount = computed(() => Math.max(1, Math.ceil(itemTotal.value / pageSize.value)));
 const detail = ref<KuraItem | null>(null);
 const dimension = ref("");
 const unparsedFiles = ref<{ path: string; size: number; libraryId: number }[]>([]);
@@ -1640,8 +1653,8 @@ async function refreshItems(): Promise<void> {
     // filters 里的值是 string 宽类型, 这里收窄回 IPC 契约上的枚举
     state: filters.value.state as "unscraped" | "scraped" | "exhausted" | undefined,
     sort: sort.value ? { ...sort.value } : undefined,
-    limit: pageSize,
-    offset: page.value * pageSize,
+    limit: pageSize.value,
+    offset: page.value * pageSize.value,
   });
   if (seq !== refreshSeq) return;
 
@@ -1682,6 +1695,19 @@ function displayTitle(item: KuraItem): string {
   const stripped = item.title.replace(new RegExp(`^${escaped}[\\s:：\\-–—|]*`, "i"), "");
   // 标题如果就是番号本身 (没刮到真标题), 别把它清成空
   return stripped || item.title;
+}
+
+/**
+ * 海报墙占位卡片上那个大字。
+ *
+ * 不能直接 `.slice(0, 1)`: 《黑神话：悟空》的第一"字"是「《」, 放到 44px 就是个孤零零的
+ * 书名号, 看着像渲染坏了。取第一个真正的字母 / 数字 / 汉字。
+ */
+function posterInitial(item: KuraItem): string {
+  const match = displayTitle(item).match(/[\p{L}\p{N}]/u);
+  if (match) return match[0].toUpperCase();
+  // 标题全是符号时退回番号的第一个字符, 再不行给个占位符 —— 占位卡不能空着
+  return item.number.trim().slice(0, 1).toUpperCase() || "?";
 }
 
 /** 侧栏库名与路径重复时不显示路径 (库里叫"电影库", 路径尾巴也是它)。 */
@@ -1736,6 +1762,19 @@ async function goPage(next: number): Promise<void> {
   page.value = Math.min(Math.max(next, 0), pageCount.value - 1);
   pageInput.value = String(page.value + 1);
   await refreshItems();
+}
+
+/**
+ * 切换列表 / 海报墙。
+ *
+ * 必须回第 1 页: 一页的条数跟着视图变 (100 ↔ 60), 留在第 4 页会直接越界
+ * —— 用户看到的是空列表, 会以为库空了。
+ */
+async function setViewMode(next: "list" | "wall"): Promise<void> {
+  if (viewMode.value === next) return;
+  viewMode.value = next;
+  localStorage.setItem("kura.view", next);
+  await goPage(0);
 }
 
 async function run<T>(label: string, fn: () => Promise<T>): Promise<T | null> {
@@ -2842,6 +2881,30 @@ async function testDmm(): Promise<void> {
                 @search="applySearch"
               />
               <button v-if="hasFilters" type="button" class="chip" @click="clearFilters">清空筛选 ✕</button>
+              <!--
+                视图切换放在筛选栏, 不放翻页行: 它决定的是「怎么看」,
+                跟「第几页 / 批量动作」不是一类东西。
+              -->
+              <div class="view-switch" role="group" aria-label="呈现方式">
+                <button
+                  type="button"
+                  :class="{ on: viewMode === 'list' }"
+                  :aria-pressed="viewMode === 'list'"
+                  title="列表: 看字段、批量操作"
+                  @click="setViewMode('list')"
+                >
+                  ☰<span>列表</span>
+                </button>
+                <button
+                  type="button"
+                  :class="{ on: viewMode === 'wall' }"
+                  :aria-pressed="viewMode === 'wall'"
+                  title="海报墙: 浏览、找片"
+                  @click="setViewMode('wall')"
+                >
+                  ▦<span>海报墙</span>
+                </button>
+              </div>
             </div>
 
             <div class="toolbar-row">
@@ -2917,7 +2980,55 @@ async function testDmm(): Promise<void> {
 
           <div class="split">
             <div class="list">
-              <table v-if="items.length > 0">
+              <!--
+                海报墙。图来自 coverUrl (kura-res:// 自己下载的 / kura-file:// 库里现成的),
+                两者都没有时才画占位 —— 占位不是「坏了」, 是「还没图」。
+              -->
+              <div v-if="viewMode === 'wall' && items.length > 0" class="poster-wall">
+                <article
+                  v-for="item in items"
+                  :key="item.key"
+                  class="poster-card"
+                  :class="{ active: detail?.key === item.key, picked: picked.includes(item.key) }"
+                >
+                  <button type="button" class="poster-open" :title="displayTitle(item)" @click="openDetail(item)">
+                    <img
+                      v-if="item.coverUrl"
+                      :src="item.coverUrl"
+                      :alt="displayTitle(item)"
+                      loading="lazy"
+                      decoding="async"
+                    />
+                    <!-- 没图: 拿标题首字当占位。画个灰框图标反而像出错 -->
+                    <span v-else class="poster-blank" aria-hidden="true">{{ posterInitial(item) }}</span>
+                    <span class="poster-shade" aria-hidden="true" />
+                    <span
+                      v-if="item.episodeStats"
+                      class="poster-ep badge"
+                      :class="{ warn: item.episodeStats.declared > 0 && item.episodeStats.bound < item.episodeStats.declared }"
+                      :title="item.episodeStats.declared > 0
+                        ? `盘上 ${item.episodeStats.bound} 集 / 声明 ${item.episodeStats.declared} 集`
+                        : `盘上 ${item.episodeStats.bound} 集（来源没声明集数）`"
+                    >
+                      {{ item.episodeStats.bound }}<template v-if="item.episodeStats.declared > 0">/{{ item.episodeStats.declared }}</template>
+                    </span>
+                    <span v-if="item.contentType" class="poster-type type-badge">
+                      {{ TYPE_LABEL[item.contentType] ?? item.contentType }}
+                    </span>
+                    <span v-if="item.pinned.length" class="poster-lock" aria-label="有锁定字段">🔒</span>
+                    <span class="poster-caption">
+                      <span class="poster-title">{{ displayTitle(item) }}</span>
+                      <span class="poster-sub mono">{{ item.number }}</span>
+                    </span>
+                  </button>
+                  <!-- 勾选只在 hover / 已选时出现: 常驻会把海报盖花, 而海报墙的主要动作是浏览 -->
+                  <label class="poster-pick" :title="`选中 ${displayTitle(item)}`">
+                    <input type="checkbox" :checked="picked.includes(item.key)" @change="toggle(item.key)" />
+                  </label>
+                </article>
+              </div>
+
+              <table v-if="viewMode === 'list' && items.length > 0">
                 <thead>
                   <tr>
                     <th class="pick" />
@@ -5548,6 +5659,251 @@ td.suggest-cell {
   flex: 1;
   min-width: 0;
   overflow: auto;
+}
+
+/* ── 视图切换: 两个 icon, 选中态只用颜色区分, 不抢筛选栏的注意力 ── */
+.view-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.view-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 0;
+  background: var(--panel-2);
+  color: var(--text-faint);
+  font-size: var(--fs-label);
+  line-height: 1.6;
+  cursor: pointer;
+  transition:
+    background 160ms var(--ease),
+    color 160ms var(--ease);
+}
+
+.view-switch button + button {
+  border-left: 1px solid var(--line-strong);
+}
+
+.view-switch button:hover {
+  color: var(--text);
+}
+
+.view-switch button.on {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel-2));
+  color: var(--accent);
+}
+
+/* 标签文字在窄窗口下先让位: 两个图标本身已经能认出是列表 / 网格 */
+@media (max-width: 1100px) {
+  .view-switch button span {
+    display: none;
+  }
+}
+
+/* ── 海报墙 ──
+   列宽 150px 是个折中: 再窄海报里的脸就糊了, 再宽 1280 窗口只能放 4 列。
+   1920 约 7 列 / 1280 约 5 列, 靠 auto-fill 自己算, 不堆断点。 */
+.poster-wall {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  align-content: start;
+  padding: 4px;
+}
+
+.poster-card {
+  position: relative;
+  border-radius: var(--radius-md);
+  transition:
+    transform 200ms var(--ease),
+    box-shadow 200ms var(--ease);
+}
+
+.poster-card:hover {
+  transform: translateY(-2px);
+}
+
+.poster-card.active .poster-open {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* 已勾选要能一眼看出来 —— 不然滑到第二屏就忘了自己选过哪几张 */
+.poster-card.picked .poster-open {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.poster-card.picked .poster-pick {
+  opacity: 1;
+}
+
+.poster-open {
+  position: relative;
+  display: block;
+  width: 100%;
+  /* 2:3 是电影 / 剧集海报的标准比例; 不硬定会让不同尺寸的图把网格撑错位 */
+  aspect-ratio: 2 / 3;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel-2);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 200ms var(--ease);
+}
+
+.poster-card:hover .poster-open {
+  border-color: var(--line-strong);
+}
+
+.poster-open img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* 库里现成的图尺寸不一, 给个底色免得加载中闪白 */
+  background: var(--panel-2);
+}
+
+/* 没图: 标题首字 + 面板色。刻意不画灰色占位图标 —— 那看起来像加载失败 */
+.poster-blank {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: clamp(28px, 9vw, 44px);
+  font-weight: 600;
+  color: var(--text-faint);
+  background: linear-gradient(160deg, var(--panel-3), var(--panel));
+}
+
+/* 底部渐变: 标题要能压在图上看清, 又不把整张海报罩暗 */
+.poster-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(15, 17, 21, 0.94) 0%, rgba(15, 17, 21, 0.55) 22%, transparent 52%);
+  pointer-events: none;
+}
+
+.poster-caption {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  pointer-events: none;
+}
+
+/* 标题最多两行: 一行截断会把系列名全砍掉, 三行又盖住大半张海报 */
+.poster-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--fs-label);
+  line-height: 1.35;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.poster-sub {
+  color: var(--text-faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.poster-ep,
+.poster-type,
+.poster-lock {
+  position: absolute;
+  top: 6px;
+  margin: 0;
+  padding: 2px 6px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  line-height: 1.4;
+  background: rgba(15, 17, 21, 0.78);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  pointer-events: none;
+}
+
+.poster-ep {
+  right: 6px;
+  color: var(--muted);
+}
+
+/* 集数对不上时它是唯一还能提醒人的地方 */
+.poster-ep.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+.poster-type {
+  left: 6px;
+  color: var(--text-faint);
+}
+
+/* 类型徽标与集数角标同在左上时让位: 影视库没有内容类型, 番号库没有集数, 很少撞 */
+.poster-lock {
+  left: 6px;
+  top: 32px;
+}
+
+.poster-card:has(.poster-type) .poster-lock {
+  top: 32px;
+}
+
+.poster-pick {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-xs);
+  background: rgba(15, 17, 21, 0.8);
+  border: 1px solid var(--line-strong);
+  opacity: 0;
+  transition: opacity 160ms var(--ease);
+  cursor: pointer;
+}
+
+.poster-card:hover .poster-pick,
+.poster-pick:focus-within {
+  opacity: 1;
+}
+
+.poster-pick input {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .poster-card,
+  .poster-open {
+    transition: none;
+  }
+  .poster-card:hover {
+    transform: none;
+  }
 }
 
 /* 进度条: 2px, 只在前景任务进行时出现, 不抢注意力 */
