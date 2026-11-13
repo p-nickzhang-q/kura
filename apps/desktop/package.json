@@ -1,6 +1,6 @@
 {
   "name": "@kura/desktop",
-  "version": "0.6.39",
+  "version": "0.6.40",
   "private": true,
   "type": "module",
   "main": "dist-electron/main.mjs",
