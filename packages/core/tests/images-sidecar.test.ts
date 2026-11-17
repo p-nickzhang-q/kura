@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { encode as encodeJpeg } from "jpeg-js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { updateItem } from "../src/tasks/item";
@@ -41,7 +42,9 @@ describe("图片复制到视频旁边", () => {
 
     expect(result.errors).toEqual([]);
     expect(existsSync(join(media, "SSIS-100-poster.jpg"))).toBe(true);
-    expect(existsSync(join(media, "SSIS-100-thumb.jpg"))).toBe(true);
+    // 横版图写 fanart, 不再写 -thumb —— Emby 的 thumb 位要的就是横图。
+    expect(existsSync(join(media, "SSIS-100-fanart.jpg"))).toBe(true);
+    expect(existsSync(join(media, "SSIS-100-thumb.jpg"))).toBe(false);
     expect(existsSync(join(media, "SSIS-100-cd2-poster.jpg"))).toBe(true);
 
     // 再复制一次: 大小相同就跳过, 不反复写盘
@@ -51,6 +54,67 @@ describe("图片复制到视频旁边", () => {
     expect(again.saved).toEqual([]);
     expect(again.skipped.length).toBe(2);
 
+    rt.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("展开图优先当 fanart, 竖版缩略图不占位", async () => {
+    const { dir, media } = setup();
+    const rt = await openRuntime({ dataDir: join(dir, "data") });
+    const library = createLibrary(rt.db, { name: "库", root: media });
+    await scan(rt, { library });
+
+    // 真 JPEG 才有尺寸可读 —— 假字节会被当成"读不懂", 保持旧行为。
+    const jpeg = (w: number, h: number) =>
+      encodeJpeg({ data: Buffer.alloc(w * h * 4, 128), width: w, height: h }, 80).data;
+    const posterPath = join(dir, "poster.jpg");
+    const panoramaPath = join(dir, "panorama.jpg");
+    const thumbPath = join(dir, "thumb.jpg");
+    writeFileSync(posterPath, jpeg(400, 537));
+    writeFileSync(panoramaPath, jpeg(800, 537));
+    writeFileSync(thumbPath, jpeg(147, 200));
+    // 旧版本写下的错文件: 竖版小图占着 -thumb 位 (真 JPEG, 才读得出尺寸)。
+    writeFileSync(join(media, "SSIS-100-thumb.jpg"), jpeg(147, 200));
+
+    const result = await placeImagesBesideVideo(rt, getItem(rt, "SSIS-100")!, {
+      poster: { url: "u1", path: posterPath, contentType: "image/jpeg", size: 1 },
+      thumb: { url: "u2", path: thumbPath, contentType: "image/jpeg", size: 1 },
+      panorama: { url: "u3", path: panoramaPath, contentType: "image/jpeg", size: 1 },
+    });
+
+    expect(result.errors).toEqual([]);
+    // 竖版海报进 poster 位
+    expect(existsSync(join(media, "SSIS-100-poster.jpg"))).toBe(true);
+    // 展开图进 fanart 位 —— 它才是横的
+    expect(existsSync(join(media, "SSIS-100-fanart.jpg"))).toBe(true);
+    // 旧的竖版 -thumb 被清掉, 不再有新写入
+    expect(existsSync(join(media, "SSIS-100-thumb.jpg"))).toBe(false);
+    expect(result.removed).toEqual([join(media, "SSIS-100-thumb.jpg")]);
+
+    rt.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("没有展开图时, 横版缩略图顶 fanart 位", async () => {
+    const { dir, media } = setup();
+    const rt = await openRuntime({ dataDir: join(dir, "data") });
+    const library = createLibrary(rt.db, { name: "库", root: media });
+    await scan(rt, { library });
+
+    const jpeg = (w: number, h: number) =>
+      encodeJpeg({ data: Buffer.alloc(w * h * 4, 120), width: w, height: h }, 80).data;
+    const posterPath = join(dir, "p.jpg");
+    const widePath = join(dir, "w.jpg");
+    writeFileSync(posterPath, jpeg(400, 537));
+    writeFileSync(widePath, jpeg(780, 439));
+
+    await placeImagesBesideVideo(rt, getItem(rt, "SSIS-100")!, {
+      poster: { url: "u1", path: posterPath, contentType: "image/jpeg", size: 1 },
+      thumb: { url: "u2", path: widePath, contentType: "image/jpeg", size: 1 },
+      panorama: null,
+    });
+
+    expect(existsSync(join(media, "SSIS-100-fanart.jpg"))).toBe(true);
     rt.close();
     rmSync(dir, { recursive: true, force: true });
   });

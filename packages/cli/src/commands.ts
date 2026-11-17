@@ -982,7 +982,7 @@ export const COMMANDS: Command[] = [
       // 只在设置没关掉时做; 只读盘上的失败不影响缓存。
       const placed =
         ctx.rt!.settings.saveImages !== false
-          ? await placeImagesBesideVideo(ctx.rt!, item, { poster: result.poster, thumb: result.thumb })
+          ? await placeImagesBesideVideo(ctx.rt!, item, { poster: result.poster, thumb: result.thumb, panorama: result.panorama })
           : { saved: [], skipped: [], removed: [], errors: [] };
       if (!result.poster) {
         throw new AppError(

@@ -280,29 +280,46 @@ async function buildTranslator() {
 }
 
 /**
+ * 本地图片一律不缓存。
+ *
+ * 这两个协议的 URL 只由**路径**决定: 整理/「下载图片」覆盖 `-poster.jpg` 之后
+ * URL 一个字符都没变, Chromium 于是拿旧图继续显示 —— 用户看到的是"改了没生效",
+ * 只有重启才能刷出来。文件都在本地, 重读一次是微秒级, 不值得为它省。
+ */
+function noStore(response: Response): Response {
+  return new Response(response.body, {
+    status: response.status,
+    headers: {
+      "content-type": response.headers.get("content-type") ?? "application/octet-stream",
+      "cache-control": "no-store",
+    },
+  });
+}
+
+/**
  * 自定义协议必须在 app ready **之后**注册: protocol.handle 内部会拿 defaultSession,
  * 在 ready 之前调用直接抛 "Session can only be received when app is ready"。
  * (registerSchemesAsPrivileged 相反, 必须在那之前 —— 见文件顶部。)
  */
 function registerProtocols(): void {
   // 库目录里的现成图片 (不是 Kura 下载的): 只允许读库根目录下的图片文件。
-  protocol.handle("kura-file", (request) => {
+  protocol.handle("kura-file", async (request) => {
     const raw = decodeURIComponent(new URL(request.url).pathname.replace(/^\//, ""));
     const target = resolve(raw);
     const roots = listLibraries(mustRuntime().db).map((library) => resolve(library.root));
     const inside = roots.some((root) => target === root || target.startsWith(root + sep));
     const isImage = /\.(jpe?g|png|webp|gif)$/i.test(target);
     if (!inside || !isImage) return new Response("forbidden", { status: 403 });
-    return net.fetch(pathToFileURL(target).href);
+    return noStore(await net.fetch(pathToFileURL(target).href));
   });
 
   // Kura 自己下载的图片缓存: 渲染进程没有 file:// 权限, 也不该有。
-  protocol.handle("kura-res", (request) => {
+  protocol.handle("kura-res", async (request) => {
     const name = decodeURIComponent(new URL(request.url).pathname.replace(/^\//, ""));
     if (!/^[a-f0-9]{8,64}\.(jpg|jpeg|png|webp|gif)$/i.test(name)) {
       return new Response("bad resource name", { status: 400 });
     }
-    return net.fetch(pathToFileURL(join(resourceDir(mustRuntime()), name)).href);
+    return noStore(await net.fetch(pathToFileURL(join(resourceDir(mustRuntime()), name)).href));
   });
 }
 
@@ -1376,7 +1393,7 @@ function registerIpc(): void {
       // 顺手把图放到视频旁边: 只在设置里没关掉时做, 只读盘上失败也不影响缓存。
       const placed =
         settings.saveImages !== false
-          ? await placeImagesBesideVideo(rt, item, { poster: result.poster, thumb: result.thumb })
+          ? await placeImagesBesideVideo(rt, item, { poster: result.poster, thumb: result.thumb, panorama: result.panorama })
           : { saved: [], skipped: [], removed: [], errors: [] };
       return {
         key: input.key,

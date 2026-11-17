@@ -170,10 +170,17 @@ async function cropCoverFromPanorama(
 
 export interface PosterDownloadResult {
   key: string;
-  /** 竖版海报 (Emby 的 poster 位)。 */
+  /** 竖版海报 (Emby 的 poster 位)。展开图会被裁成这个。 */
   poster: LocalResource | null;
-  /** 横版缩略图 (Emby 的 thumb 位)。没有就是一个 null —— 整理时退回用 poster。 */
+  /** 来源给的缩略图。AV 站给的是 147×200 竖版小图, 当缩略图位不合适, 只用来做裁切判据。 */
   thumb: LocalResource | null;
+  /**
+   * 裁切的**来源图**, 也就是包装展开图本身 (800×537 那种)。
+   *
+   * 它当封面是错的, 但当 fanart 正好 —— 1.49:1 的横图, 比 147×200 的竖版缩略图
+   * 强得多。裁完不该把它扔掉。
+   */
+  panorama: LocalResource | null;
   tried: string[];
   failures: { url: string; error: string }[];
 }
@@ -230,7 +237,10 @@ export async function downloadPoster(
     cover = cropped ?? (await portraitOnly(rt, thumb)) ?? poster;
   }
 
-  return { key: metadata.key, poster: cover, thumb, tried: [...posterCandidates, ...thumbCandidates], failures };
+  // 展开图只在这一份是横的时才留着当 fanart 用 —— 竖版海报本来就不该出现两次。
+  const panorama = poster && poster !== cover ? poster : null;
+
+  return { key: metadata.key, poster: cover, thumb, panorama, tried: [...posterCandidates, ...thumbCandidates], failures };
 }
 
 /**
@@ -450,7 +460,7 @@ async function landscapeOnly(image: LocalResource | null | undefined): Promise<L
 export async function placeImagesBesideVideo(
   rt: Runtime,
   metadata: Metadata,
-  images: { poster?: LocalResource | null; thumb?: LocalResource | null },
+  images: { poster?: LocalResource | null; thumb?: LocalResource | null; panorama?: LocalResource | null },
 ): Promise<{ saved: string[]; skipped: string[]; removed: string[]; errors: string[] }> {
   const saved: string[] = [];
   const skipped: string[] = [];
@@ -465,8 +475,9 @@ export async function placeImagesBesideVideo(
   // 剧集不逐集贴图: Emby / Jellyfin 要的是**目录级** `poster.jpg` + `fanart.jpg`,
   // 一部 165 集的剧逐集复制同一张海报 = 165 份冗余, 而且媒体服务器一张都不认。
   const domain = rt.db.get<{ domain: string }>("select domain from items where number = ?", [key])?.domain;
-  // 背景图必须是横的 —— 竖版小图当 fanart / -thumb 会被拉变形。
-  const background = await landscapeOnly(images.thumb);
+  // 背景图必须是横的 —— 竖版小图当 fanart 会被拉变形。
+  // 优先用包装展开图: 它是 800×537 的横图, 而来源给的 thumb 在 AV 站只有 147×200。
+  const background = (await landscapeOnly(images.panorama)) ?? (await landscapeOnly(images.thumb));
   if (domain === "tv") {
     const roots = new Map<number, string>();
     for (const row of rt.db.all<{ id: number; root: string }>("select id, root from libraries")) roots.set(row.id, row.root);
@@ -504,14 +515,16 @@ export async function placeImagesBesideVideo(
     if (!existsSync(video.path)) continue;
     const base = video.path.slice(0, video.path.length - extname(video.path).length);
 
-    // 来源确实给了 thumb、但它是**竖版** —— 这是旧版本写下的错文件 (把 147×200 的
-    // 封面缩略图当横版缩略图), Emby 会把它拉成一坑。海报位已经有正确的封面了,
-    // 这里把它删掉。只碰 `<番号>-thumb` 这个自己起的名字, 用户放的 poster.jpg /
-    // folder.jpg 一个都不动。
-    if (images.thumb && !background) {
+    // 旧版本把缩略图写成 `<番号>-thumb`; 现在横图走 `-fanart`, 这个后缀不再产出。
+    // 留下的只有旧版本写错的竖版小图 (147×200 当背景会被拉变形), 删掉。
+    //
+    // 判断的是**那个文件本身**是不是竖版, 而不是这次拿到的 thumb —— 用户可能自己
+    // 放了一张横版 `<番号>-thumb.jpg`, 那种是对的, 不该动。
+    if (images.thumb) {
       for (const ext of [".jpg", ".png", ".webp"]) {
         const stale = `${base}-thumb${ext}`;
         if (!existsSync(stale)) continue;
+        if (await landscapeOnly({ url: stale, path: stale, contentType: "", size: 0 })) continue;
         try {
           await rm(stale);
           removed.push(stale);
@@ -523,7 +536,7 @@ export async function placeImagesBesideVideo(
 
     for (const [suffix, image] of [
       ["-poster", images.poster],
-      ["-thumb", background],
+      ["-fanart", background],
     ] as const) {
       if (!image) continue;
       const target = `${base}${suffix}${extname(image.path) || ".jpg"}`;
