@@ -174,6 +174,7 @@ export type { RetypeCandidate, UpdateItemOptions } from "./tasks/item";
 export {
   cachedPoster,
   cachedThumb,
+  croppedCoverKey,
   downloadPoster,
   downloadResource,
   findResource,

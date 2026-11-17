@@ -17,6 +17,7 @@ import {
   defaultSources,
   downloadPoster,
   refillArtworkUrls,
+  croppedCoverKey,
   placeImagesBesideVideo,
   updateItem,
   retypeItem,
@@ -242,13 +243,20 @@ interface ItemListInput {
 
 /**
  * 条目封面 → 渲染进程能用的 URL。
- * 优先级: Kura 下载的缓存 → 视频旁边已有的图 (别的工具下的) → null (界面显示占位)。
+ * 优先级: 裁好的封面缓存 → 原图缓存 → 视频旁边已有的图 (别的工具下的) → null。
+ *
+ * 第一级不能省: DMM 系的 `poster_urls` 是 800×537 的包装展开图, 只有 `#cover`
+ * 那份是裁出来的竖版。跳过它就会把展开图塞进 2:3 的卡片, 显示成一堆小剧照。
  */
 function coverUrlFor(
   rt: Runtime,
   item: { key: string; poster_urls?: string[]; cover_urls?: string[]; thumb_urls?: string[] },
 ): string | null {
   const urls = [...(item.poster_urls ?? []), ...(item.cover_urls ?? []), ...(item.thumb_urls ?? [])];
+  for (const url of urls) {
+    const cropped = findResource(rt, croppedCoverKey(url));
+    if (cropped) return `kura-res://local/${basename(cropped.path)}`;
+  }
   for (const url of urls) {
     const found = findResource(rt, url);
     if (found) return `kura-res://local/${basename(found.path)}`;
