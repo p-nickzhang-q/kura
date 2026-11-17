@@ -83,6 +83,41 @@ grep -ciE "女優|素人|人妻" tests/fixtures/*.html
 
 拿到的是日语, 交给翻译管线(`translateMetadata` 只翻 title/plot)转成中文。
 
+## 图片：三个 URL 字段各是干什么的
+
+| 字段 | 是什么 | 谁用 |
+|---|---|---|
+| `poster_urls` | 竖版封面 | Emby 的 `<poster>`、整理时写成 `<番号>-poster.jpg` |
+| `cover_urls` | 同上的兜底 | 只当下一个候选, AV 站几乎不填 |
+| `thumb_urls` | **横版**缩略图 | Emby 的 `<thumb>` / `fanart` |
+
+### 站点给的大图其实是包装展开图
+
+DMM 系站点(`pics.dmm.co.jp`)能给的最大竖版图只有 **147×200**(`ps.jpg`)。
+它们的 `large` / `pl.jpg` 是 **panorama** —— 左封底 + 右封面平铺成 800×537,
+带条码和 DVD 标。JavBus 的 `/pics/cover/xxx_b.jpg` 是同一张(也是 800×537)。
+
+直接把它当海报, Emby 的 2:3 槽位会把两侧都裁掉, 只剩中间接缝 —— 用户看到的是
+"一堆小剧照拼出来的东西", Kura 和 Emby 两边都不对。`:p.jpg`(竖版大图)**不存在**,
+DMM 对这组 cid 直接 302 到 noimage。
+
+所以在 `downloadPoster` 里裁一刀, 但**不是写死右边**:
+
+1. 展开图切左右两半, 各自降采样成 24×32 灰度;
+2. 与 `thumb_urls` 那张小图算相关系数 —— 小图就是封面的缩略;
+3. 相关度高且差距够大才裁(`domain/crop.ts` 的 `COVER_SCORE`), 否则退回小图。
+
+实测 6 个样本 5 个在右、SONE-682 在左(0.24 vs -0.07), 而且展开图尺寸也不统一
+(800×537 与 800×600 都有) —— 所以必须动态判, 不能按位置写死。
+
+裁好的图以 `<原URL>#cover` 为 key 单独缓存(`croppedCoverKey`), **不顶替原图**:
+原图还可能是别人要用的素材, 也不该每次刮削都重解码一遍。
+
+### 竖版小图不能当 `<thumb>`
+
+`placeImagesBesideVideo` 在写 `-thumb` / `fanart` 前用 `landscapeOnly` 判一下横竖。
+AV 的 thumb 是 147×200 竖版, 塞进背景位会被拉变形; TMDB 的 backdrop 是 16:9, 能过。
+
 ## 字段取舍
 
 JavDB 的评分(`span.score-stars` 后面的文本)与剧照、预告片**不进域模型** —— 见 ADR 0002。

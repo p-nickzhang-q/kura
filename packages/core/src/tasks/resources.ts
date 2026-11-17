@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
+import { decode as decodeJpeg, encode as encodeJpeg } from "jpeg-js";
+import { cropHalf, guessCoverHalf } from "../domain/crop";
+import { isLandscape, parseImageSize } from "../domain/image";
 import { locateEpisode, showDirOf } from "../domain/episodes";
 import { parseTmdbKey } from "../sources/tmdb";
 import { metadataColumns, rowToMetadata, type ItemRow } from "../db/rows";
@@ -74,6 +77,16 @@ export async function downloadResource(rt: Runtime, http: HttpClient, url: strin
 
   const referer = refererFor(url);
   const { bytes, contentType } = await http.getBytes(url, referer ? { headers: { referer } } : {});
+  return storeResource(rt, url, bytes, contentType);
+}
+
+/** 把已经拿到的字节写进缓存。水裁好的图也走这里。 */
+async function storeResource(
+  rt: Runtime,
+  url: string,
+  bytes: Uint8Array,
+  contentType: string,
+): Promise<LocalResource> {
   const extension = pickExtension(contentType, url);
   const name = `${createHash("sha1").update(url).digest("hex")}${extension}`;
   const path = join(resourceDir(rt), name);
@@ -88,6 +101,71 @@ export async function downloadResource(rt: Runtime, http: HttpClient, url: strin
   );
 
   return { url, path, contentType, size: bytes.byteLength };
+}
+
+/**
+ * 裁切后的封面在缓存里用一个伪 URL 占位, 与原图区分开。
+ *
+ * 为什么不用原 URL 直接覆盖: 展开图本身还可能要当背景/存档, 而且覆盖后无法
+ * 区分"已经裁过"与"没裁过", 每次刮削都会重新解码 800×537 再做一次无用功。
+ * 尾缀用 `#` 而不是查询参数 —— `new URL()` 会把 fragment 当同一资源, 不影响
+ * referer 推断与扩展名判断。
+ */
+export function croppedCoverKey(url: string): string {
+  return `${url}#cover`;
+}
+
+/**
+ * 只有竖版图才配当封面。裁不出展开图时用它当退路。
+ *
+ * 读不出尺寸 (假字节 / 损坏文件) 时返回 null —— 这种图当封面没意义,
+ * 让调用方继续退回上一级。
+ */
+async function portraitOnly(rt: Runtime, image: LocalResource | null | undefined): Promise<LocalResource | null> {
+  if (!image) return null;
+  try {
+    const size = parseImageSize(await readFile(image.path));
+    return size && !isLandscape(size) ? image : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 从「包装展开图 + 竖版缩略图」里裁出真正的封面。
+ *
+ * 返回 null 表示不裁 (不是失败) —— 原图本来就是竖版、不是 JPEG、或证据不足以
+ * 判定哪半是封面。调用方拿到 null 就用原图, 宁可糊一点也不要裁错。
+ */
+async function cropCoverFromPanorama(
+  rt: Runtime,
+  panorama: LocalResource,
+  thumb: LocalResource | null,
+): Promise<LocalResource | null> {
+  if (!thumb) return null;
+
+  const key = croppedCoverKey(panorama.url);
+  const cached = findResource(rt, key);
+  if (cached) return cached;
+
+  // jpeg-js 只认 JPEG。WebP/PNG 的展开图在这里直接放过。
+  if (![panorama.contentType, thumb.contentType].every((type) => type.includes("jpeg") || type.includes("jpg"))) {
+    return null;
+  }
+
+  const [panoramaBytes, thumbBytes] = await Promise.all([readFile(panorama.path), readFile(thumb.path)]);
+  const panoramaSize = parseImageSize(panoramaBytes);
+  if (!panoramaSize || !isLandscape(panoramaSize)) return null;
+  if (!parseImageSize(thumbBytes)) return null;
+
+  const panoramaImage = decodeJpeg(panoramaBytes, { useTArray: true });
+  const thumbImage = decodeJpeg(thumbBytes, { useTArray: true });
+  const guess = guessCoverHalf(panoramaImage, thumbImage);
+  if (!guess) return null;
+
+  const cut = cropHalf(panoramaImage, guess.half);
+  const encoded = encodeJpeg({ data: cut.data, width: cut.width, height: cut.height }, 92);
+  return storeResource(rt, key, encoded.data, "image/jpeg");
 }
 
 export interface PosterDownloadResult {
@@ -142,7 +220,17 @@ export async function downloadPoster(
   const thumbCandidates = unique(metadata.thumb_urls);
   const thumb = await firstOk(rt, http, thumbCandidates, failures);
 
-  return { key: metadata.key, poster, thumb, tried: [...posterCandidates, ...thumbCandidates], failures };
+  // DMM 系站点给的"大图"是左封底+右封面的平铺图, 拿它当海报, Emby 的 2:3
+  // 槽位会把两侧裁掉只剩中间接缝。用缩略图当尺子裁出封面那一半。
+  let cover = poster;
+  if (poster) {
+    const cropped = await cropCoverFromPanorama(rt, poster, thumb).catch(() => null);
+    // 裁不出来 (非 JPEG / 证据不足) 就退回**竖版小图**, 而不是展开图:
+    // 147×200 放大后会糊, 但版面是对的; 展开图是又糊又错。
+    cover = cropped ?? (await portraitOnly(rt, thumb)) ?? poster;
+  }
+
+  return { key: metadata.key, poster: cover, thumb, tried: [...posterCandidates, ...thumbCandidates], failures };
 }
 
 /**
@@ -302,7 +390,14 @@ export function cachedThumb(rt: Runtime, metadata: Metadata): LocalResource | nu
 
 /** 整理时用: 已缓存的海报/封面里取第一张, 不做任何网络请求。 */
 export function cachedPoster(rt: Runtime, metadata: Metadata): LocalResource | null {
-  for (const url of [...(metadata.poster_urls ?? []), ...(metadata.cover_urls ?? [])]) {
+  const candidates = [...(metadata.poster_urls ?? []), ...(metadata.cover_urls ?? [])];
+
+  // 先找裁好的封面 —— 原图可能是包装展开图, 直接拷进媒体目录 Emby 会裁成一坨。
+  for (const url of candidates) {
+    const cropped = findResource(rt, croppedCoverKey(url));
+    if (cropped) return cropped;
+  }
+  for (const url of candidates) {
     const found = findResource(rt, url);
     if (found) return found;
   }
@@ -325,6 +420,25 @@ function pickExtension(contentType: string, url: string): string {
   return ".jpg";
 }
 
+/**
+ * 只有横版图才配当 `<thumb>` / `-thumb`。
+ *
+ * DMM 的 `ps.jpg` 是 147×200 的**竖版**小图 —— 它是封面的缩略, 不是横版缩略图。
+ * 塞进 Emby 的 thumb 位会被拉成一坑; 而海报位已经有裁好的封面, 不需要它。
+ * TMDB 的 backdrop 是 16:9 横图, 这里能过。
+ */
+async function landscapeOnly(image: LocalResource | null | undefined): Promise<LocalResource | null> {
+  if (!image) return null;
+  try {
+    const size = parseImageSize(await readFile(image.path));
+    // 读不出尺寸 (文件损坏 / 库里存的是假数据) 时按原样用 —— 旧行为。
+    // 只有真的判定成竖版才拦, 否则"读不懂"会默默变成"不写图"。
+    if (!size) return image;
+    return isLandscape(size) ? image : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * 把已缓存的图复制到视频旁边, 命名与 `findSidecarImages` 认的一致。
@@ -349,6 +463,8 @@ export async function placeImagesBesideVideo(
   // 剧集不逐集贴图: Emby / Jellyfin 要的是**目录级** `poster.jpg` + `fanart.jpg`,
   // 一部 165 集的剧逐集复制同一张海报 = 165 份冗余, 而且媒体服务器一张都不认。
   const domain = rt.db.get<{ domain: string }>("select domain from items where number = ?", [key])?.domain;
+  // 背景图必须是横的 —— 竖版小图当 fanart / -thumb 会被拉变形。
+  const background = await landscapeOnly(images.thumb);
   if (domain === "tv") {
     const roots = new Map<number, string>();
     for (const row of rt.db.all<{ id: number; root: string }>("select id, root from libraries")) roots.set(row.id, row.root);
@@ -362,7 +478,7 @@ export async function placeImagesBesideVideo(
     for (const dir of dirs) {
       for (const [name, image] of [
         ["poster", images.poster],
-        ["fanart", images.thumb],
+        ["fanart", background],
       ] as const) {
         if (!image) continue;
         const target = join(dir, `${name}${extname(image.path) || ".jpg"}`);
@@ -388,7 +504,7 @@ export async function placeImagesBesideVideo(
 
     for (const [suffix, image] of [
       ["-poster", images.poster],
-      ["-thumb", images.thumb],
+      ["-thumb", background],
     ] as const) {
       if (!image) continue;
       const target = `${base}${suffix}${extname(image.path) || ".jpg"}`;
