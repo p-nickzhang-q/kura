@@ -562,6 +562,7 @@ interface KuraBridge {
   fetchPoster(key: string): Promise<{
     key: string;
     saved: string[];
+    removed: string[];
     saveErrors: string[];
     poster: { path: string; size: number } | null;
     thumb: { path: string; size: number } | null;

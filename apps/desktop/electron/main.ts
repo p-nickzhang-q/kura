@@ -1369,12 +1369,14 @@ function registerIpc(): void {
       const placed =
         settings.saveImages !== false
           ? await placeImagesBesideVideo(rt, item, { poster: result.poster, thumb: result.thumb })
-          : { saved: [], skipped: [], errors: [] };
+          : { saved: [], skipped: [], removed: [], errors: [] };
       return {
         key: input.key,
         poster: file(result.poster),
         thumb: file(result.thumb),
         saved: placed.saved.length,
+        // 旧版本把 147×200 的竖版小图写成了 <番号>-thumb, Emby 会拉变形; 这次顺手删掉。
+        removed: placed.removed,
         saveErrors: placed.errors,
       };
     }),

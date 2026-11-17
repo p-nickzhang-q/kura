@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import { decode as decodeJpeg, encode as encodeJpeg } from "jpeg-js";
 import { cropHalf, guessCoverHalf } from "../domain/crop";
@@ -451,14 +451,16 @@ export async function placeImagesBesideVideo(
   rt: Runtime,
   metadata: Metadata,
   images: { poster?: LocalResource | null; thumb?: LocalResource | null },
-): Promise<{ saved: string[]; skipped: string[]; errors: string[] }> {
+): Promise<{ saved: string[]; skipped: string[]; removed: string[]; errors: string[] }> {
   const saved: string[] = [];
   const skipped: string[] = [];
+  // 删掉的旧文件 (竖版 -thumb): 与 saved 分开报, 免得界面把删除说成写入。
+  const removed: string[] = [];
   const errors: string[] = [];
 
   const key = metadata.number ?? metadata.key;
   const videos = rt.db.all<{ path: string }>("select path from media_files where number = ? order by path", [key]);
-  if (videos.length === 0) return { saved, skipped, errors };
+  if (videos.length === 0) return { saved, skipped, removed, errors };
 
   // 剧集不逐集贴图: Emby / Jellyfin 要的是**目录级** `poster.jpg` + `fanart.jpg`,
   // 一部 165 集的剧逐集复制同一张海报 = 165 份冗余, 而且媒体服务器一张都不认。
@@ -495,12 +497,29 @@ export async function placeImagesBesideVideo(
         }
       }
     }
-    return { saved, skipped, errors };
+    return { saved, skipped, removed, errors };
   }
 
   for (const video of videos) {
     if (!existsSync(video.path)) continue;
     const base = video.path.slice(0, video.path.length - extname(video.path).length);
+
+    // 来源确实给了 thumb、但它是**竖版** —— 这是旧版本写下的错文件 (把 147×200 的
+    // 封面缩略图当横版缩略图), Emby 会把它拉成一坑。海报位已经有正确的封面了,
+    // 这里把它删掉。只碰 `<番号>-thumb` 这个自己起的名字, 用户放的 poster.jpg /
+    // folder.jpg 一个都不动。
+    if (images.thumb && !background) {
+      for (const ext of [".jpg", ".png", ".webp"]) {
+        const stale = `${base}-thumb${ext}`;
+        if (!existsSync(stale)) continue;
+        try {
+          await rm(stale);
+          removed.push(stale);
+        } catch (err) {
+          errors.push(`${stale}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
 
     for (const [suffix, image] of [
       ["-poster", images.poster],
@@ -523,5 +542,5 @@ export async function placeImagesBesideVideo(
     }
   }
 
-  return { saved, skipped, errors };
+  return { saved, skipped, removed, errors };
 }

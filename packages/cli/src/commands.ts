@@ -983,7 +983,7 @@ export const COMMANDS: Command[] = [
       const placed =
         ctx.rt!.settings.saveImages !== false
           ? await placeImagesBesideVideo(ctx.rt!, item, { poster: result.poster, thumb: result.thumb })
-          : { saved: [], skipped: [], errors: [] };
+          : { saved: [], skipped: [], removed: [], errors: [] };
       if (!result.poster) {
         throw new AppError(
           result.tried.length === 0 ? "该条目没有图片 URL, 先刮削一次" : "所有海报地址都下载失败",
@@ -997,6 +997,7 @@ export const COMMANDS: Command[] = [
         thumb: result.thumb ? { path: result.thumb.path, size: result.thumb.size } : null,
         failures: result.failures,
         saved: placed.saved,
+        removed: placed.removed,
         saveErrors: placed.errors,
       };
     },

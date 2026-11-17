@@ -2182,8 +2182,14 @@ async function fetchOneImage(key: string): Promise<void> {
   if (!result) return;
   detail.value = await window.kura.item(key);
   const saved = result.saved?.length ?? 0;
+  // 删掉的旧竖版缩略图要说出来 —— 用户看不见磁盘, 只看到「文件少了」。
+  const removed = result.removed?.length ?? 0;
+  const notes = [
+    saved ? `并复制 ${saved} 个文件到视频旁` : "",
+    removed ? `清掉 ${removed} 个竖版缩略图` : "",
+  ].filter(Boolean);
   note.value = result.poster
-    ? `${key} 图片已缓存${saved ? `, 并复制 ${saved} 个文件到视频旁` : ""}`
+    ? `${key} 图片已缓存${notes.length ? `, ${notes.join(", ")}` : ""}`
     : `${key} 没取到海报`;
   await refreshItems();
 }
