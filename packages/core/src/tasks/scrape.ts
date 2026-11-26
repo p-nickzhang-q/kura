@@ -699,11 +699,17 @@ export function countItems(rt: Runtime, options: Omit<ListItemOptions, "limit" |
  * 按库限定条目: 条目的库归属是派生的, 只能反查 media_files。
  * 界面侧栏选中某个库时, 计数必须与列表口径一致 —— 否则"共 3883 条"会把
  * 别的库也算进来, 而扫描只扫选中的那个库。
+ *
+ * 用 `in (子查询)` 而不是 correlated `exists`: 语义一样, 但 SQLite 会把子查询
+ * 物化一次。`exists` 版本会被优化器挑中只有 library_id 的索引, 变成 items 每行
+ * 都扫一遍这个库的 media_files —— 2 万条目 10.6 秒(已知问题 #1 的"假死")。
+ * schema v17 补了 (library_id, number) 复合索引, 但两种写法同时保留是对的:
+ * 这里和 itemFilters() 里同一个条件必须同一种形状, 否则会各自漂移。
  */
 function libraryClause(libraryId: number | undefined): { sql: string; params: unknown[] } {
   if (libraryId === undefined) return { sql: "", params: [] };
   return {
-    sql: " and exists (select 1 from media_files m where m.number = items.number and m.library_id = ?)",
+    sql: " and items.number in (select number from media_files where library_id = ? and number is not null)",
     params: [libraryId],
   };
 }

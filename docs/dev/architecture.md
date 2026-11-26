@@ -236,6 +236,27 @@ rejection 当致命错误, 主进程一死就静默退出了。现在至少能�
 - **想在渲染进程里直接读写文件** → 不要。加一个 IPC 方法,而不是打开 `nodeIntegration`。
 - **想加第三个宿主(如 MCP server)** → 允许,但必须复用 `openRuntime()`,并遵守 cli-contract 的输出/退出码语义。
 
+## 按库限定条目的查询: 用 `in`, 不用 correlated `exists`
+
+条目的库归属是派生的(条目表没有 library_id),所以"只看这个库"必须反查 `media_files`。
+两种写法语义一样,复杂度差三个数量级:
+
+```sql
+-- 快: SQLite 把子查询物化一次
+and items.number in (select number from media_files where library_id = ? and number is not null)
+
+-- 慢: 优化器挑中只有 library_id 的索引, items 每行都扫一遍整个库
+and exists (select 1 from media_files m where m.number = items.number and m.library_id = ?)
+```
+
+第二种在 2 万条目时 **10.6 秒**(用户嘴里的"翻页假死"),第一种 15ms。
+`explain query plan` 里 `SEARCH m EXISTS USING INDEX media_files_library (library_id=?)`
+就是踩了这个坑 —— 注意它只用了 `library_id`,关联条件 `number` 没进索引。
+
+schema v17 补了 `(library_id, number)` 复合索引,所以现在两种写法都快;但**新代码一律写 `in`**,
+并且 `packages/core/tests/query-plan.test.ts` 会校验查询计划,退化回全表扫就红。
+改这条路径之前先跑一次 `explain query plan`,别凭感觉。
+
 ## 演员索引只有一个写入口
 
 `items.actors` 是快照，`item_actors` 是从它派生的索引。**写 JSON 与重建索引是一件事**，

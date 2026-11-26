@@ -208,6 +208,21 @@ const MIGRATIONS: string[] = [
     computed_at integer not null
   );
   `,
+
+  // v17 — 翻页卡死的真因: 按库限定条目那条 exists 选错了索引 (已知问题 #1)。
+  //
+  // `exists (… where m.number = items.number and m.library_id = ?)` 里优化器挑了只有
+  // library_id 的 media_files_library, 于是 items 的每一行都要把这个库的全部
+  // media_files 扫一遍找 number —— 复杂度 n×n。实测 2 万条目时 countPending 要
+  // 10.6 秒(用户嘴里的"假死"), 而同样条件的 `in (子查询)` 写法只要 15ms。
+  //
+  // 复合索引让它变成一次索引查找: 10,685ms → 8.8ms。
+  // 旧的 media_files_library 是这个复合索引的前缀, 冗余, 一并删掉(前面的查询
+  // 照样走它 —— 前缀列能用)。
+  `
+  create index if not exists media_files_library_number on media_files(library_id, number);
+  drop index if exists media_files_library;
+  `,
 ];
 
 /**
