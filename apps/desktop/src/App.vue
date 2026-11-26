@@ -260,6 +260,15 @@ function plainArray<T>(values: readonly T[] | undefined): T[] {
 
 /** 刷新请求的序号, 用来丢弃乱序返回的旧结果。 */
 let refreshSeq = 0;
+/**
+ * 在途的 item:list 请求数(用计数而不是布尔: 内部会自我递归重取一页)。
+ *
+ * 主进程算一页是同步的, 没法取消 —— 连点「下一页」只会让请求排队, 每个排队请求
+ * 都要重跑一遍全表计数, 越点越慢。所以直接在途期间禁用翻页。
+ * 这**不是**用长任务锁翻页: 锁的只是 64ms 量级的列表请求本身。
+ */
+const listInFlight = ref(0);
+const listBusy = computed(() => listInFlight.value > 0);
 /** 遮罩里的大图地址; null = 没在放大。 */
 const zoom = ref<string | null>(null);
 const lightboxEl = ref<HTMLElement | null>(null);
@@ -1646,35 +1655,43 @@ async function refreshItems(): Promise<void> {
   // 每次请求带一个序号: 刮削时进度会频繁触发刷新, 早发出的请求可能晚回来,
   // 用旧数据覆盖新数据 (页码突然只剩一页就是这么来的)。
   const seq = ++refreshSeq;
-  const result = await window.kura.items({
-    ...filters.value,
-    // 侧栏选中哪个库, 列表就只看哪个库 —— 否则"共 3883 条"与"扫描只扫一个库"互相矛盾
-    libraryId: selectedId.value ?? undefined,
-    // filters 里的值是 string 宽类型, 这里收窄回 IPC 契约上的枚举
-    state: filters.value.state as "unscraped" | "scraped" | "exhausted" | undefined,
-    sort: sort.value ? { ...sort.value } : undefined,
-    limit: pageSize.value,
-    offset: page.value * pageSize.value,
-  });
-  if (seq !== refreshSeq) return;
+  listInFlight.value++;
+  try {
+    const result = await window.kura.items({
+      ...filters.value,
+      // 侧栏选中哪个库, 列表就只看哪个库 —— 否则"共 3883 条"与"扫描只扫一个库"互相矛盾
+      libraryId: selectedId.value ?? undefined,
+      // filters 里的值是 string 宽类型, 这里收窄回 IPC 契约上的枚举
+      state: filters.value.state as "unscraped" | "scraped" | "exhausted" | undefined,
+      sort: sort.value ? { ...sort.value } : undefined,
+      limit: pageSize.value,
+      offset: page.value * pageSize.value,
+    });
+    if (seq !== refreshSeq) return;
 
-  firstLoad.value = false;
-  items.value = result.items;
-  itemTotal.value = result.total;
-  pendingTotal.value = result.pending;
-  exhaustedTotal.value = result.exhausted;
+    firstLoad.value = false;
+    items.value = result.items;
+    itemTotal.value = result.total;
+    pendingTotal.value = result.pending;
+    exhaustedTotal.value = result.exhausted;
 
-  // 总数变少 (筛选、刮削后条目合并等) 时, 停在越界的页码上会看到空列表
-  if (page.value > pageCount.value - 1) {
-    page.value = pageCount.value - 1;
+    // 总数变少 (筛选、刮削后条目合并等) 时, 停在越界的页码上会看到空列表
+    if (page.value > pageCount.value - 1) {
+      page.value = pageCount.value - 1;
+      pageInput.value = String(page.value + 1);
+      if (items.value.length === 0) void refreshItems();
+      return;
+    }
     pageInput.value = String(page.value + 1);
-    if (items.value.length === 0) void refreshItems();
-    return;
+  } finally {
+    // 抛错也必须减回去, 否则翻页按钮永久禁用 —— 比卡顿更糟
+    listInFlight.value--;
   }
-  pageInput.value = String(page.value + 1);
 }
 
 async function jumpToPage(): Promise<void> {
+  // 输入框还在焦点上时, 加载中按回车不该再排一个请求
+  if (listBusy.value) return;
   const target = Number(pageInput.value);
   if (!Number.isFinite(target)) {
     pageInput.value = String(page.value + 1);
@@ -1759,6 +1776,8 @@ async function clearFilters(): Promise<void> {
 
 
 async function goPage(next: number): Promise<void> {
+  // 按钮已经 disabled, 这里拦键盘/程序调用: 主进程算一页是同步的, 排队没有意义
+  if (listBusy.value) return;
   page.value = Math.min(Math.max(next, 0), pageCount.value - 1);
   pageInput.value = String(page.value + 1);
   await refreshItems();
@@ -2915,7 +2934,7 @@ async function testDmm(): Promise<void> {
 
             <div class="toolbar-row">
               <!-- 翻页是只读操作, 不该被长任务锁住: 刮削 200 条要十几分钟, 期间连看下一页都不行毫无道理 -->
-              <button type="button" title="上一页" aria-label="上一页" :disabled="page === 0" @click="goPage(page - 1)">‹</button>
+              <button type="button" title="上一页" aria-label="上一页" :disabled="listBusy || page === 0" @click="goPage(page - 1)">‹</button>
               <input
                 v-model="pageInput"
                 class="page-input"
@@ -2926,7 +2945,7 @@ async function testDmm(): Promise<void> {
                 @blur="jumpToPage"
               />
               <span class="muted nowrap">/ {{ pageCount }}</span>
-              <button type="button" title="下一页" aria-label="下一页" :disabled="page >= pageCount - 1" @click="goPage(page + 1)">›</button>
+              <button type="button" title="下一页" aria-label="下一页" :disabled="listBusy || page >= pageCount - 1" @click="goPage(page + 1)">›</button>
               <span class="muted nowrap">
                 共 {{ itemTotal }} 条 ·
                 <button type="button" class="link" :class="{ on: filters.state === 'unscraped' }" @click="applyFilter('state', 'unscraped')">
