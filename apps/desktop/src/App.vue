@@ -5699,7 +5699,7 @@ td.suggest-cell {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
+  padding: 4px 12px;
   border: none;
   border-radius: 0;
   background: var(--panel-2);
@@ -5845,7 +5845,7 @@ td.suggest-cell {
 
 .poster-sub {
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5855,11 +5855,11 @@ td.suggest-cell {
 .poster-type,
 .poster-lock {
   position: absolute;
-  top: 6px;
+  top: 8px;
   margin: 0;
-  padding: 2px 6px;
+  padding: 2px 8px;
   border-radius: var(--radius-pill);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.4;
   background: rgba(15, 17, 21, 0.78);
   border: 1px solid var(--line-strong);
@@ -5868,7 +5868,7 @@ td.suggest-cell {
 }
 
 .poster-ep {
-  right: 6px;
+  right: 8px;
   color: var(--muted);
 }
 
@@ -5879,24 +5879,24 @@ td.suggest-cell {
 }
 
 .poster-type {
-  left: 6px;
+  left: 8px;
   color: var(--text-faint);
 }
 
 /* 类型徽标与集数角标同在左上时让位: 影视库没有内容类型, 番号库没有集数, 很少撞 */
 .poster-lock {
-  left: 6px;
-  top: 32px;
+  left: 8px;
+  top: 36px;
 }
 
 .poster-card:has(.poster-type) .poster-lock {
-  top: 32px;
+  top: 36px;
 }
 
 .poster-pick {
   position: absolute;
-  top: 6px;
-  left: 6px;
+  top: 8px;
+  left: 8px;
   display: grid;
   place-items: center;
   width: 22px;
@@ -5914,11 +5914,14 @@ td.suggest-cell {
   opacity: 1;
 }
 
+/* 默认复选框只有 13px 见方, 在两指宽的海报角上很难点中。
+   不给死尺寸, 用 scale 放大视觉与命中区 —— label 本身是 22px 的点击面,
+   点 label 任意位置都会转发给 input。 */
 .poster-pick input {
-  width: 12px;
-  height: 12px;
   margin: 0;
   cursor: pointer;
+  transform: scale(1.35);
+  accent-color: var(--accent);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -6658,7 +6661,7 @@ td.pick {
     clamp(110px, 10vw, 168px);
   align-items: center;
   gap: clamp(12px, 1.3vw, 24px);
-  padding: clamp(14px, 1.4vw, 26px) clamp(16px, 1.7vw, 32px);
+  padding: clamp(16px, 1.4vw, 24px) clamp(16px, 1.7vw, 32px);
   border-bottom: 1px solid var(--line);
 }
 
