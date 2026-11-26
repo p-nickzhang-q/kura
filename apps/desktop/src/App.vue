@@ -3818,7 +3818,15 @@ async function testDmm(): Promise<void> {
           </div>
 
           <h2>数据源</h2>
-          <p class="muted">DMM 走官方 API, 需要 affiliate 凭据。配置保存在本地文件, 环境变量优先。</p>
+          <p class="muted">
+            DMM 走官方 API, 需要 affiliate 凭据（<code>api_id</code> 与 <code>affiliate_id</code>, 两个都要）。
+          </p>
+          <p class="muted">
+            申请是三道关: DMM 会员 → affiliate オーナー登録 → API 利用登録。第二道要<strong>日本住址</strong>与
+            <strong>日本银行账户</strong>（用于源泉徴収与付款）, 外加一个自运营站点或 SNS 地址, 审核约 3 个营业日 ——
+            没通过就拿不到这两串 id。另外 <code>affiliate_id</code> 末三位必须是 <code>990–999</code>,
+            否则 API 一律报错。拿不到不影响其它来源。
+          </p>
 
           <label class="field">
             <span>API ID</span>
@@ -3838,6 +3846,9 @@ async function testDmm(): Promise<void> {
             <button type="button" class="primary" :disabled="busy" @click="saveConfig">保存</button>
             <button type="button" :disabled="busy" @click="testDmm">测试 DMM</button>
             <button type="button" :disabled="busy" @click="testLlm">测试 LLM</button>
+            <a class="muted" href="https://affiliate.dmm.com/api/" target="_blank" rel="noreferrer">
+              去申请 / 查看凭据
+            </a>
             <span v-if="llmTest" class="muted">模型 {{ llmTest.model }} 回: {{ llmTest.sample }}</span>
             <span class="muted">
               {{ config?.dmmConfigured ? "DMM 已配置" : "DMM 未配置" }}

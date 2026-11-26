@@ -67,7 +67,10 @@ export function createDmmSource(http: HttpClient, env: DmmEnv): Source {
         throw new AppError(`DMM 缺少凭据: ${absent.join(", ")}`, EXIT.NEEDS_INPUT, {
           source: "dmm",
           missing: absent,
-          hint: "在 https://affiliate.dmm.com/api/ 申请 API ID 与 affiliate ID",
+          // 这串凭据不是"注册个账号就能拿到"的: affiliate 登録要日本住址与日本银行账户,
+          // 还要一个可审核的站点, 审核约 3 个营业日。不写清楚会让人以为填错格式了。
+          hint:
+            "在 https://affiliate.dmm.com/api/ 申请: DMM 会员 → affiliate オーナー登録(需日本住址与日本银行账户, 审核约 3 个营业日) → API 利用登録; affiliate_id 末三位须为 990–999",
         });
       }
 

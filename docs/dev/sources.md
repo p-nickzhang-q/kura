@@ -58,6 +58,8 @@ grep -ciE "女優|素人|人妻" tests/fixtures/*.html
 | JavDB | 检索结果番号恒省略开头数字段 | 复用 javbus 的 `selectCandidateIndex` |
 | DMM | 网页版对非日本 IP 301 到地区封锁页 | 改走官方 API, 不做 HTML 解析 |
 | DMM | 凭据无效返回 HTTP 400 + `errors.api_id` | 翻译成 `NEEDS_INPUT`, 不伪装成 NOT_FOUND |
+| DMM | **凭据申请门槛极高**: 会员 → affiliate オーナー登録(要日本住址 + 日本银行账户 + 可审核站点, 审核约 3 个营业日) → API 利用登録 | 报错 `hint` 里写全三段流程, 别让人以为只是格式填错 |
+| DMM | **`affiliate_id` 末三位必须是 `990`–`999`**, 否则 API 一律返回错误 | 官方申请页红字; 记为已知坑, 报错时不另外判断 |
 | Jav321 | 地址用 DMM 的 content_id(小写厂牌 + 集号补零), 补几位各时期不一致 | `contentIdCandidates` 依次试 5 位 / 3 位 / 原样, 404 就试下一个 |
 | Jav321 | 字段是 `<b>标签</b>: <a>…</a>` 平铺在一个 div 里, **没有行容器** | `nextUntil("b")` 取到下一个标签之前的兄弟节点 |
 | Jav321 | 标题的 h3 里演员名是**裸文本**接在后面 | `stripTrailingActors` 去掉结尾的演员名 |
