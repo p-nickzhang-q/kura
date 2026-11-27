@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, net, protocol, session, shell } from "electron";
-import { appendFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { mkdir, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -44,7 +45,7 @@ import {
   settingsPath,
   type Settings,
   findLibrary,
-  findResource,
+  findResources,
   findSidecarImages,
   resourceDir,
   getItem,
@@ -248,29 +249,107 @@ interface ItemListInput {
  * 第一级不能省: DMM 系的 `poster_urls` 是 800×537 的包装展开图, 只有 `#cover`
  * 那份是裁出来的竖版。跳过它就会把展开图塞进 2:3 的卡片, 显示成一堆小剧照。
  */
-function coverUrlFor(
-  rt: Runtime,
-  item: { key: string; poster_urls?: string[]; cover_urls?: string[]; thumb_urls?: string[] },
-): string | null {
-  const urls = [...(item.poster_urls ?? []), ...(item.cover_urls ?? []), ...(item.thumb_urls ?? [])];
-  for (const url of urls) {
-    const cropped = findResource(rt, croppedCoverKey(url));
-    if (cropped) return `kura-res://local/${basename(cropped.path)}`;
+interface CoverItem {
+  key: string;
+  poster_urls?: string[];
+  cover_urls?: string[];
+  thumb_urls?: string[];
+}
+
+/**
+ * 版本化 URL: 路径 + 文件修改时间。
+ *
+ * 界面上的图片走自定义协议, 而那个 URL 只由路径决定 —— 覆盖同名文件后 URL 不变,
+ * 浏览器就会一直拿旧图 (改完海报不重启看不见效果)。把 mtime 拼进去之后, 内容变
+ * 则 URL 变, 协议那边就能给长缓存; 没变则每次都命中内存缓存, 不用重读磁盘。
+ */
+function versioned(scheme: "kura-res" | "kura-file", path: string, mtime: number | undefined): string {
+  const body =
+    scheme === "kura-res" ? `kura-res://local/${basename(path)}` : `kura-file://local/${encodeURIComponent(path)}`;
+  // mtime 缺失时退回不带版本的老 URL: 宁可缓存不准, 也不要缓存永远失效。
+  return mtime ? `${body}?v=${Math.round(mtime)}` : body;
+}
+
+/**
+ * 一整页条目的封面 URL。
+ *
+ * 逐条查是 N+1: 每条最多 3 次 SQL (裁好的 / 原图) + 一次目录扫描 (视频旁边现成的图)。
+ * 100 条一页就是 300+ 次同步调用, 在移动硬盘上直接把主线程堵住。这里改成:
+ * 一条 `in (...)` 查全部缓存、一条 `in (...)` 查全部文件路径, 只剩兜底的 sidecar
+ * 需要碰磁盘 (它自带目录缓存)。
+ */
+function coverUrlsFor(rt: Runtime, items: CoverItem[]): Map<string, string | null> {
+  const urlsByItem = new Map<string, string[]>();
+  const allUrls: string[] = [];
+  for (const item of items) {
+    const urls = [...(item.poster_urls ?? []), ...(item.cover_urls ?? []), ...(item.thumb_urls ?? [])];
+    urlsByItem.set(item.key, urls);
+    allUrls.push(...urls, ...urls.map(croppedCoverKey));
   }
-  for (const url of urls) {
-    const found = findResource(rt, url);
-    if (found) return `kura-res://local/${basename(found.path)}`;
+  const cache = findResources(rt, allUrls);
+
+  // 每条目取它排序最小的那个文件 (与原来 `order by path limit 1` 同口径)。
+  const firstFile = new Map<string, string>();
+  const keys = items.map((item) => item.key);
+  for (let index = 0; index < keys.length; index += 400) {
+    const chunk = keys.slice(index, index + 400);
+    const rows = rt.db.all<{ number: string; path: string }>(
+      `select number, path from media_files where number in (${chunk.map(() => "?").join(",")}) order by path`,
+      chunk,
+    );
+    for (const row of rows) if (!firstFile.has(row.number)) firstFile.set(row.number, row.path);
   }
 
-  const file = rt.db.get<{ path: string }>(
-    "select path from media_files where number = ? order by path limit 1",
-    [item.key],
-  );
-  if (file) {
-    const sidecar = findSidecarImages(file.path).poster;
-    if (sidecar) return `kura-file://local/${encodeURIComponent(sidecar)}`;
+  const result = new Map<string, string | null>();
+  for (const item of items) {
+    const urls = urlsByItem.get(item.key) ?? [];
+    // 裁好的优先: poster_urls 是 800×537 的包装展开图, 只有 `#cover` 那份是竖版。
+    const cropped = urls.map(croppedCoverKey).find((url) => cache.has(url));
+    if (cropped) {
+      const hit = cache.get(cropped)!;
+      result.set(item.key, versioned("kura-res", hit.path, hit.mtime));
+      continue;
+    }
+    const raw = urls.find((url) => cache.has(url));
+    if (raw) {
+      const hit = cache.get(raw)!;
+      result.set(item.key, versioned("kura-res", hit.path, hit.mtime));
+      continue;
+    }
+
+    const file = firstFile.get(item.key);
+    const sidecar = file ? findSidecarImages(file).poster : null;
+    result.set(item.key, sidecar ? versioned("kura-file", sidecar, statMtime(sidecar)) : null);
   }
-  return null;
+  return result;
+}
+
+function statMtime(path: string): number | undefined {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 异步判目录, 超时就当"不存在"。
+ *
+ * `fs.promises.stat` 不支持 AbortSignal (Node 至今没加), 所以用 race 封顶:
+ * 超时先返回, 真正的 stat 继续在后台跑, 结果丢弃即可 —— 它不会阻塞任何人。
+ * 宁可提示"盘没插", 也不要界面陪着等系统超时。
+ */
+async function isDirectoryWithin(path: string, timeoutMs: number): Promise<boolean> {
+  const probe = stat(path).then(
+    (info) => info.isDirectory(),
+    () => false,
+  );
+  return Promise.race([
+    probe,
+    new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(false), timeoutMs).unref?.();
+    }),
+  ]);
 }
 
 /** 翻译是可选后处理: 没开或没配置就返回 null, 刮削照常继续。 */
@@ -280,18 +359,25 @@ async function buildTranslator() {
 }
 
 /**
- * 本地图片一律不缓存。
+ * 本地图片: 可以放心长缓存, 因为 URL 里带了 `?v=<mtime>`。
  *
- * 这两个协议的 URL 只由**路径**决定: 整理/「下载图片」覆盖 `-poster.jpg` 之后
- * URL 一个字符都没变, Chromium 于是拿旧图继续显示 —— 用户看到的是"改了没生效",
- * 只有重启才能刷出来。文件都在本地, 重读一次是微秒级, 不值得为它省。
+ * 覆盖 `-poster.jpg` 之后 mtime 变 → URL 变 → 浏览器当新资源重新取; mtime 没变
+ * 时 URL 一模一样, 直接命中内存缓存, 一次磁盘都不用读。
+ *
+ * 早先这里写的是 `no-store` —— 那确实解决了"改完图不生效", 代价是每次重渲染、
+ * 翻页、切视图都要重新读盘解码, 100 张图一页白扔几十毫秒。版本号才是两边都要的
+ * 那个解。
+ *
+ * 没有版本号的 URL (老书签 / mtime 读不到) 仍按不缓存处理 —— 不能为了快而让某
+ * 些路径永远拿旧图。
  */
-function noStore(response: Response): Response {
+function localImageResponse(request: Request, response: Response): Response {
+  const versioned = new URL(request.url).searchParams.has("v");
   return new Response(response.body, {
     status: response.status,
     headers: {
       "content-type": response.headers.get("content-type") ?? "application/octet-stream",
-      "cache-control": "no-store",
+      "cache-control": versioned ? "public, max-age=31536000, immutable" : "no-store",
     },
   });
 }
@@ -310,7 +396,7 @@ function registerProtocols(): void {
     const inside = roots.some((root) => target === root || target.startsWith(root + sep));
     const isImage = /\.(jpe?g|png|webp|gif)$/i.test(target);
     if (!inside || !isImage) return new Response("forbidden", { status: 403 });
-    return noStore(await net.fetch(pathToFileURL(target).href));
+    return localImageResponse(request, await net.fetch(pathToFileURL(target).href));
   });
 
   // Kura 自己下载的图片缓存: 渲染进程没有 file:// 权限, 也不该有。
@@ -319,7 +405,7 @@ function registerProtocols(): void {
     if (!/^[a-f0-9]{8,64}\.(jpg|jpeg|png|webp|gif)$/i.test(name)) {
       return new Response("bad resource name", { status: 400 });
     }
-    return noStore(await net.fetch(pathToFileURL(join(resourceDir(mustRuntime()), name)).href));
+    return localImageResponse(request, await net.fetch(pathToFileURL(join(resourceDir(mustRuntime()), name)).href));
   });
 }
 
@@ -594,9 +680,18 @@ function registerIpc(): void {
    */
   ipcMain.handle("update:check", () => checkUpdate({ current: app.getVersion(), fetch: browserFetch }));
 
-  ipcMain.handle("library:list", () =>
-    listLibraries(mustRuntime().db).map((library) => ({ ...library, rootMissing: !existsSync(library.root) })),
-  );
+  // 库根在不在 —— 异步 + 超时。
+  //
+  // 原来是同步 `existsSync`: 库在离线的网络盘上时 Windows 要等 20 秒系统超时,
+  // 而这发生在**主进程**, 整个 IPC 队列一起卡死 (实测冷启动卡 21065ms, 之后才好
+  // 因为系统记住了"这盘不可用")。异步 + 1 秒封顶, 慢盘最多让这个数字晚一点到,
+  // 界面不会陪着一起等。
+  ipcMain.handle("library:list", async () => {
+    const libraries = listLibraries(mustRuntime().db);
+    return Promise.all(
+      libraries.map(async (library) => ({ ...library, rootMissing: !(await isDirectoryWithin(library.root, 1000)) })),
+    );
+  });
 
   ipcMain.handle("library:add", async (_event, input: { domain?: string } = {}) => {
     const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
@@ -1109,6 +1204,7 @@ function registerIpc(): void {
       sort: input.sort,
     };
     const items = listItems(rt, { ...filters, limit: input.limit ?? 100, offset: input.offset ?? 0 });
+    const covers = coverUrlsFor(rt, items);
     // 集数角标只对剧集有意义 (电影没有集); 一批 key 查一次, 不是逐条查
     const showKeys = items.filter((item) => item.domain === "tv").map((item) => item.key);
     const stats = episodeStats(rt, showKeys);
@@ -1116,7 +1212,7 @@ function registerIpc(): void {
       // 封面是本地缓存的文件, 走自定义协议给渲染进程读 (不给它 file:// 权限)
       items: items.map((item) => ({
         ...item,
-        coverUrl: coverUrlFor(rt, item),
+        coverUrl: covers.get(item.key) ?? null,
         ...(item.domain === "tv" ? { episodeStats: stats[item.key] ?? { declared: 0, bound: 0 } } : {}),
       })),
       total: countItems(rt, filters),
@@ -1313,7 +1409,8 @@ function registerIpc(): void {
     const rt = mustRuntime();
     const item = getItem(rt, number);
     // 详情面板要显示图, 与列表用同一套解析 (缓存 → 视频旁现成图)
-    return item ? { ...item, coverUrl: coverUrlFor(rt, item) } : null;
+    if (!item) return null;
+    return { ...item, coverUrl: coverUrlsFor(rt, [item]).get(item.key) ?? null };
   });
 
   ipcMain.handle("item:update", (_event, input: { key: string; pin?: string[]; unpin?: string[] }) =>
