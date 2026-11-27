@@ -1,0 +1,29 @@
+# 带命令行工具的安装包。
+#
+# 单独一份是因为它比普通安装包大 30MB 左右 (CLI 压缩后 ~40MB), 不该让只用 GUI 的人
+# 一起承担。`electron-builder.yml` 保持原样, 这文件 `extends` 它再补三处:
+#
+#   1. extraFiles —— 把 kura.exe 装到 $INSTDIR\cli\
+#   2. nsis.include —— 安装时接进 PATH, 卸载时还原
+#   3. nsis.artifactName —— 产物名必须能和普通安装包区分开
+#
+# **不依赖 extends 的合并语义**: 需要覆盖的 nsis 字段这里全写一遍。electron-builder
+# 的配置合并是按 key 深合并的, 而 `include` 与 `artifactName` 混在同一个 map 里时
+# 行为不直观 —— 写全了就不必去猜。
+extends: ./electron-builder.yml
+
+extraFiles:
+  - from: build/cli/kura.exe
+    to: cli/kura.exe
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Kura
+  uninstallDisplayName: Kura ${version}
+  deleteAppDataOnUninstall: false
+  artifactName: Kura-${version}-setup-cli.exe
+  include: build/installer.nsh

@@ -2,6 +2,8 @@ node_modules/
 dist/
 dist-electron/
 release/
+# 发版时拷进来的 CLI (110MB), 由 scripts 生成, 不进仓库
+apps/desktop/build/cli/
 *.log
 *.db
 *.db-wal

@@ -39,6 +39,32 @@ electron-builder 会下载 electron 的 win32 包与 nsis 工具, 直连 GitHub 
 3. **完全离线**: 解压一份 `electron-v<ver>-win32-x64.zip` 到本地目录, 配置 `electronDist: <目录>`,
    electron-builder 就不再下载。
 
+## 带命令行工具的安装包
+
+`Kura-<ver>-setup-cli.exe` 比普通安装包多一个 `kura.exe`, 装完能直接敲 `kura`。
+
+```bash
+node scripts/prepare-cli.mjs                                 # dist/kura.exe -> apps/desktop/build/cli/
+pnpm --filter @kura/desktop package:installer:cli            # -> Kura-<ver>-setup-cli.exe
+```
+
+`apps/desktop/electron-builder.cli.yml` 是独立一份配置, `extends` 普通的再补三处:
+`extraFiles` 装 CLI、`nsis.include` 改 PATH、`artifactName` 区分产物。
+
+**三个坑, 都是实测踩出来的:**
+
+1. **CLI 不能和 GUI 放同一目录**。Windows 文件名不区分大小写, `Kura.exe` 与 `kura.exe`
+   是同一个文件 —— 摊在 `$INSTDIR` 会把 GUI 覆盖掉。所以装到 `$INSTDIR\cli\`。
+2. **NSIS 用 `-WX` 编译, warning 就是 error**。两种 warning 会让人卡很久:
+   - `label not used` —— 顺次落入的代码不要给它加标签
+   - `function not referenced` —— 装在 `!macro` 外面定义的 `Function` 会被判"未引用",
+     宁可把子串判断**内联**进宏, 也不要拆成 Function
+3. **改 PATH 是危险操作**。脚本只做三件事: 没有才追加、保留原值、卸载时按分号切分
+   **只删自己那一段**(不做字符串替换 —— 那会把 `...\kura\cli-extra` 这种同前缀路径切坏)。
+
+安装后 PATH 生效需要**新开终端**: 安装器会广播 `WM_WININICHANGE`, 但已经打开的终端
+读不到新环境变量。这是 Windows 的机制, 不是安装器的 bug。
+
 ## 尚未做
 
 - **代码签名**: 未签名, Windows 会弹 SmartScreen 警告。需要证书与 `CSC_LINK`/`CSC_KEY_PASSWORD`。

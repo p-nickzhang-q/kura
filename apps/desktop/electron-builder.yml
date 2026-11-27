@@ -17,6 +17,15 @@ files:
 extraMetadata:
   main: dist-electron/main.mjs
 
+# 命令行工具: 装到 $INSTDIR\cli\kura.exe。
+#
+# 为什么必须放子目录: Windows 文件名不区分大小写, `Kura.exe`(GUI) 和 `kura.exe`
+# (CLI) 在同一个目录里是同一个文件, 摊在 $INSTDIR 会把 GUI 覆盖掉。
+# 源文件由 `node scripts/prepare-cli.mjs` 从 dist/kura.exe 拷过来 (110MB, 不入库)。
+extraFiles:
+  - from: build/cli/kura.exe
+    to: cli/kura.exe
+
 win:
   target:
     - target: nsis
@@ -37,6 +46,8 @@ nsis:
   # 卸载时不删 %APPDATA%\kura: 里面有媒体库索引与配置, 误删代价远大于残留
   deleteAppDataOnUninstall: false
   artifactName: Kura-${version}-setup.exe
+  # 把 $INSTDIR\cli 接进用户 PATH, 卸载时还原 —— 脚本里写清了为什么改的是 HKCU
+  include: build/installer.nsh
 
 portable:
   artifactName: Kura-${version}-portable.exe

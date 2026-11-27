@@ -13,8 +13,10 @@
     "package:win": "electron-builder --win portable",
     "package:dir": "electron-builder --win dir",
     "package:installer": "electron-builder --win nsis",
-    "package:all": "electron-builder --win nsis portable",
-    "typecheck": "vue-tsc --noEmit -p tsconfig.json"
+    "package:all": "pnpm run package:installer && pnpm run package:installer:cli && electron-builder --win portable",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "prepare:cli": "node ../../scripts/prepare-cli.mjs",
+    "package:installer:cli": "pnpm run prepare:cli && electron-builder --config electron-builder.cli.yml --win nsis"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.0",
