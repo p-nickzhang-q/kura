@@ -178,6 +178,8 @@ export {
   downloadPoster,
   downloadResource,
   findResource,
+  findResources,
+  clearSidecarCache,
   findSidecarImages,
   refillArtworkUrls,
   placeImagesBesideVideo,

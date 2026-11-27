@@ -31,6 +31,10 @@ describe("findSidecarImages", () => {
     await writeFile(join(root, "ABC-123.jpg"), "p");
     expect(findSidecarImages(join(root, "ABC-123.mp4")).poster).toBe(join(root, "ABC-123.jpg"));
 
+    // 目录内容有缓存 (按目录 mtime 失效)。停 10ms 是为了让 mtime 真的往前走 ——
+    // 文件系统的 mtimeMs 精度不足以区分"同一毫秒里写了两次", 而真实场景里两次
+    // 改目录不会挨得这么近。
+    await new Promise((resolve) => setTimeout(resolve, 10));
     await writeFile(join(root, "poster.jpg"), "p");
     expect(findSidecarImages(join(root, "XYZ-001.mp4")).poster).toBe(join(root, "poster.jpg"));
   });

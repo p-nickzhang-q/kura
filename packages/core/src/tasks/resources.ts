@@ -24,6 +24,14 @@ export interface LocalResource {
   path: string;
   contentType: string;
   size: number;
+  /**
+   * 文件修改时间(毫秒)。
+   *
+   * 界面上图片走自定义协议, URL 只由**路径**决定 —— 覆盖同名文件后 URL 一个字符
+   * 都没变, 浏览器拿旧图继续显示。把 mtime 拼进 URL 当版本号, 内容一变 URL 就变,
+   * 缓存才能既长又不会过期。
+   */
+  mtime?: number;
 }
 
 const EXT_BY_TYPE: Record<string, string> = {
@@ -49,9 +57,45 @@ export function findResource(rt: Runtime, url: string | undefined): LocalResourc
   if (!url) return null;
   const row = rt.db.get<ResourceRow>("select url, path, content_type, size from resources where url = ?", [url]);
   if (!row) return null;
+  // 一次 stat 同时回答"还在不在"和"什么时候改的", 比 existsSync + 再 stat 省一趟系统调用。
   // 文件被人手工删掉时按未缓存处理, 否则整理会复制一个不存在的文件。
-  if (!existsSync(row.path)) return null;
-  return { url: row.url, path: row.path, contentType: row.content_type ?? "", size: row.size };
+  const mtime = statMtime(row.path);
+  if (mtime === null) return null;
+  return { url: row.url, path: row.path, contentType: row.content_type ?? "", size: row.size, mtime };
+}
+
+function statMtime(path: string): number | null {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 一次查一批 URL 的缓存。
+ *
+ * 列表页要为一整页条目找封面, 逐条调 `findResource` 就是 N 次 SQL + N 次 stat ——
+ * 100 条一页白等几十毫秒, 库越大越明显。这里换成一条 `in (...)` 查询。
+ *
+ * SQLite 的变量个数有上限 (老版本 999), 所以按 400 一批切。
+ */
+export function findResources(rt: Runtime, urls: (string | undefined)[]): Map<string, LocalResource> {
+  const wanted = [...new Set(urls.filter((url): url is string => Boolean(url)))];
+  const found = new Map<string, LocalResource>();
+  for (let index = 0; index < wanted.length; index += 400) {
+    const chunk = wanted.slice(index, index + 400);
+    const rows = rt.db.all<ResourceRow>(
+      `select url, path, content_type, size from resources where url in (${chunk.map(() => "?").join(",")})`,
+      chunk,
+    );
+    for (const row of rows) {
+      const mtime = statMtime(row.path);
+      if (mtime === null) continue;
+      found.set(row.url, { url: row.url, path: row.path, contentType: row.content_type ?? "", size: row.size, mtime });
+    }
+  }
+  return found;
 }
 
 /**
@@ -309,17 +353,65 @@ export function findSidecarImages(videoPath: string): { poster: string | null; t
   return { poster: null, thumb: null };
 }
 
+/**
+ * 目录内容缓存。
+ *
+ * 列表页每条目都要看"视频旁边有没有现成的 poster.jpg", 一页 100 条就是 100 次
+ * `readdirSync` —— 在移动硬盘 / 网络盘上每次都几十毫秒, 翻页直接卡住。
+ *
+ * 用目录自己的 mtime 校验: 文件增删会改目录 mtime, 所以用户往目录里丢了图, 下一次
+ * 就能认出来 —— 不需要重启。校验只花一次 stat, 比重新 readdir 便宜一个量级。
+ * (测试里"写图 → 再查"的用例就是靠这条过的。)
+ */
+interface DirCacheEntry {
+  /** 目录 mtime; null 表示这个目录当下读不到 (盘没插 / 没权限)。 */
+  mtime: number | null;
+  names: Map<string, string> | null;
+  /** 读不到时记下来, 用来算负面缓存的过期时间。 */
+  at: number;
+}
+
+const sidecarDirs = new Map<string, DirCacheEntry>();
+const SIDECAR_CACHE_LIMIT = 4000;
+/** 读不到的目录, 5 秒内不再去碰 —— 盘离线时每次 stat 都可能是几十秒的系统超时。 */
+const SIDECAR_MISS_TTL_MS = 5000;
+
+export function clearSidecarCache(): void {
+  sidecarDirs.clear();
+}
+
+function readDirNames(directory: string): Map<string, string> | null {
+  const cached = sidecarDirs.get(directory);
+  if (cached && cached.mtime === null && Date.now() - cached.at < SIDECAR_MISS_TTL_MS) return null;
+
+  let mtime: number | null = null;
+  try {
+    mtime = statSync(directory).mtimeMs;
+  } catch {
+    mtime = null;
+  }
+  if (cached && cached.mtime === mtime) return cached.names;
+
+  let names: Map<string, string> | null = null;
+  if (mtime !== null) {
+    try {
+      // 先列目录再按小写比对: 用户那边可能是 POSTER.JPG / Fanart.PNG,
+      // 靠文件系统的大小写不敏感只在一个平台上能用。
+      names = new Map(readdirSync(directory).map((entry) => [entry.toLowerCase(), entry]));
+    } catch {
+      names = null;
+    }
+  }
+  if (sidecarDirs.size >= SIDECAR_CACHE_LIMIT) sidecarDirs.clear();
+  sidecarDirs.set(directory, { mtime, names, at: Date.now() });
+  return names;
+}
+
 function findInDirectory(directory: string, videoPath: string): { poster: string | null; thumb: string | null } {
   const base = basename(videoPath, extname(videoPath));
 
-  // 先列目录再按小写比对: 用户那边可能是 POSTER.JPG / Fanart.PNG,
-  // 靠文件系统的大小写不敏感只在一个平台上能用。
-  let names: Map<string, string>;
-  try {
-    names = new Map(readdirSync(directory).map((entry) => [entry.toLowerCase(), entry]));
-  } catch {
-    return { poster: null, thumb: null };
-  }
+  const names = readDirNames(directory);
+  if (!names) return { poster: null, thumb: null };
 
   const pick = (candidates: string[]): string | null => {
     for (const name of candidates) {
