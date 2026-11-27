@@ -89,3 +89,55 @@ SEARCH m EXISTS USING COVERING INDEX media_files_library_number (library_id=? AN
    现在 24ms 没必要了。
 3. **keyset 分页**(`where updated_at < ?` 替代 `offset`):解决深翻页。改动面大,等真有需求。
 4. **给 `items` 补索引**(`content_type` / `scrape_attempts` / `domain`):实测无收益,不做。
+
+## 2. 点「待办」再点「条目」会「未响应」 — ✅ 已修
+
+**来源**:用户报(2026-11-27)。原话「只要从待办, 进入条目, 就会未响应」。
+
+### 一开始找不到
+
+开发机上复现不出来:切 tab、翻页、切库,每个操作 1~12ms,主线程长任务 0 个。
+差别在**媒体盘** —— 同步 `stat`/`readdir` 落在一块离线或慢速网络盘上,一次就是
+一次系统超时,而主进程是单线程,整个 IPC 队列陪着一起等。
+
+**所以先加度量, 再改代码**:`registerIpc` 里所有 handler 统一过一个计时包装,超过
+150ms 写 `logs/slow-ipc.log`。用户复现一次, 日志第一次就指认了:
+
+```
+22505ms  todo:plans
+```
+
+### 根因
+
+切到「待办」时, `todo_cache` 一过期就 `todoPlans(force)`, 而它要整库干跑
+(`organize`) —— 每个库根先过一次同步 `statSync`(`assertLibraryMounted`)。
+三块离线盘 × 每个约 7 秒系统超时 = 22505ms,全程锁死主进程。
+
+上一轮给 `item:list` 加的可达性判断只护住了"拼封面 URL"这条路径,`todo:plans` 没护到。
+
+### 修法
+
+`isLibraryReachable(root, 800ms)`:异步 `stat` + `race` 封顶。`todoPlans` 先把库分两批,
+读不到的直接不参与(整理计划与 nfo 比对都一样)。
+
+**没有**把 `assertLibraryMounted` 改成异步 —— 两道门各司其职:探测走异步(要的是别卡),
+真动手前仍走同步断言(那时卡住是对的,宁可拒绝也不能在半离线的盘上搬文件)。
+
+顺带:`reachableLibraryIds` 加 in-flight 去重,`library:list` 复用它 —— 以前启动时
+`libraries` / `items` / `todo` 各探一轮盘,三处各自白等 1 秒。
+
+### 验收
+
+- ✅ `todo:plans` 全部库(三块离线盘):22505ms → **813ms**
+- ✅ 启动日志:三条 1000ms → 一条 804ms
+- ✅ 用户复现:未再出现
+- ⬜ 盘**在线但响应 > 800ms** 时会被判"不可达":那一轮少显示几张封面、整理计划显示 0。
+
+### 学到什么
+
+1. **复现不了就先加度量**。这次如果继续按"猜哪条路径"改,大概率改错地方 ——
+   前一轮已经修了 `item:list`、`libraries()`,都不是它。
+2. **主进程被同步阻塞时, 同期别的 handler 也会一起变慢**。看到日志里一片 channel
+   同时几百毫秒,说明卡的不是它们,而是中间夹着的那次同步 IO。
+3. 加包装时 `replace("ipcMain.handle(", "handle(")` 会把包装自己内部那行也换掉,
+   变成自我递归、启动即爆栈。改完要**真的跑一次**,typecheck 不会报这个。
