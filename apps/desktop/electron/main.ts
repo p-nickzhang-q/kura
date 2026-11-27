@@ -278,7 +278,7 @@ function versioned(scheme: "kura-res" | "kura-file", path: string, mtime: number
  * 一条 `in (...)` 查全部缓存、一条 `in (...)` 查全部文件路径, 只剩兜底的 sidecar
  * 需要碰磁盘 (它自带目录缓存)。
  */
-function coverUrlsFor(rt: Runtime, items: CoverItem[]): Map<string, string | null> {
+function coverUrlsFor(rt: Runtime, items: CoverItem[], reachable: Set<number>): Map<string, string | null> {
   const urlsByItem = new Map<string, string[]>();
   const allUrls: string[] = [];
   for (const item of items) {
@@ -289,17 +289,25 @@ function coverUrlsFor(rt: Runtime, items: CoverItem[]): Map<string, string | nul
   const cache = findResources(rt, allUrls);
 
   // 每条目取它排序最小的那个文件 (与原来 `order by path limit 1` 同口径)。
+  // 只认**盘在**的库: 离线网络盘上一次 stat 就是一次系统超时, 一页 100 条能把主进程
+  // 锁死几十秒 —— 用户看到的是窗口标题变成"未响应"。拿不到文件路径就按"无封面"处理,
+  // 比让整个界面卡住强。
   const firstFile = new Map<string, string>();
   const keys = items.map((item) => item.key);
   for (let index = 0; index < keys.length; index += 400) {
     const chunk = keys.slice(index, index + 400);
-    const rows = rt.db.all<{ number: string; path: string }>(
-      `select number, path from media_files where number in (${chunk.map(() => "?").join(",")}) order by path`,
+    const rows = rt.db.all<{ number: string; path: string; library_id: number }>(
+      `select number, path, library_id from media_files where number in (${chunk.map(() => "?").join(",")}) order by path`,
       chunk,
     );
-    for (const row of rows) if (!firstFile.has(row.number)) firstFile.set(row.number, row.path);
+    for (const row of rows) {
+      if (reachable.has(row.library_id) && !firstFile.has(row.number)) firstFile.set(row.number, row.path);
+    }
   }
 
+  if (items.length === 0) return new Map();
+  // 整页共用一个预算 (毫秒): 100 条每条都去 stat 一遍慢盘, 累加起来就是十几秒。
+  let sidecarBudget = 50;
   const result = new Map<string, string | null>();
   for (const item of items) {
     const urls = urlsByItem.get(item.key) ?? [];
@@ -317,8 +325,16 @@ function coverUrlsFor(rt: Runtime, items: CoverItem[]): Map<string, string | nul
       continue;
     }
 
-    const file = firstFile.get(item.key);
-    const sidecar = file ? findSidecarImages(file).poster : null;
+    // 兜底要读目录, 是同步 IO —— 慢盘上单个目录可能几十毫秒, 而它没有超时机制。
+    // 给整页一个预算: 超了就这一页剩下的条目先不显示封面 (下次刷新还能补上),
+    // 不能让一次列表请求把主线程拖成"未响应"。
+    const file = sidecarBudget > 0 ? firstFile.get(item.key) : undefined;
+    let sidecar: string | null = null;
+    if (file) {
+      const started = Date.now();
+      sidecar = findSidecarImages(file).poster;
+      sidecarBudget -= Date.now() - started;
+    }
     result.set(item.key, sidecar ? versioned("kura-file", sidecar, statMtime(sidecar)) : null);
   }
   return result;
@@ -339,6 +355,40 @@ function statMtime(path: string): number | undefined {
  * 超时先返回, 真正的 stat 继续在后台跑, 结果丢弃即可 —— 它不会阻塞任何人。
  * 宁可提示"盘没插", 也不要界面陪着等系统超时。
  */
+/**
+ * 库根可达性 (异步, 带缓存)。
+ *
+ * 整个列表路径上唯一会碰**媒体盘**的地方, 是"视频旁边有没有现成的图"。盘是映射
+ * 网络盘时, 服务器不在线的那几秒里一次 stat 就要等系统超时 —— 而这是主进程, 窗口
+ * 直接"未响应"。
+ *
+ * 缓存 30 秒, **连"不可达"一起缓存**: 要防的正是这个结论被反复推翻。盘插回来了
+ * 最多等 30 秒, 比每翻一页都可能冻几十秒划算得多。
+ */
+const libraryReachable = new Map<number, { ok: boolean; at: number }>();
+const REACHABLE_TTL_MS = 30_000;
+
+async function reachableLibraryIds(rt: Runtime): Promise<Set<number>> {
+  const libraries = listLibraries(rt.db);
+  const now = Date.now();
+  const ok = new Set<number>();
+  await Promise.all(
+    libraries.map(async (library) => {
+      const cached = libraryReachable.get(library.id);
+      const fresh = cached !== undefined && now - cached.at < REACHABLE_TTL_MS;
+      const isOk = fresh ? cached.ok : await isDirectoryWithin(library.root, 800);
+      if (!fresh) libraryReachable.set(library.id, { ok: isOk, at: Date.now() });
+      if (isOk) ok.add(library.id);
+    }),
+  );
+  return ok;
+}
+
+/** 新增 / 改库之后要重新问一遍 —— 刚接上的盘不该等满 30 秒。 */
+function forgetLibraryReachability(): void {
+  libraryReachable.clear();
+}
+
 async function isDirectoryWithin(path: string, timeoutMs: number): Promise<boolean> {
   const probe = stat(path).then(
     (info) => info.isDirectory(),
@@ -699,7 +749,9 @@ function registerIpc(): void {
     const root = result.filePaths[0];
     // 域决定识别方式、来源与模板; 建库时落定, 之后不可改 (ADR 0008 决策 2)
     const domain = isLibraryDomain(input.domain) ? input.domain : "av";
-    return createLibrary(mustRuntime().db, { name: basename(root), root, domain });
+    const library = createLibrary(mustRuntime().db, { name: basename(root), root, domain });
+    forgetLibraryReachability();
+    return library;
   });
 
   // ── 影视域 ────────────────────────────────────────────────────────────────
@@ -946,7 +998,10 @@ function registerIpc(): void {
             : "\n\n新目录里的文件都对得上。"),
       });
       if (answer.response !== 0) return { ...dry, cancelled: false as const, applied: false };
-      return { ...relocateLibrary(rt.db, library, picked, { apply: true }), cancelled: false as const, applied: true };
+      const applied = relocateLibrary(rt.db, library, picked, { apply: true });
+      // 换了地方 = 换了盘: 可达性结论作废。
+      forgetLibraryReachability();
+      return { ...applied, cancelled: false as const, applied: true };
     },
   );
 
@@ -1066,7 +1121,9 @@ function registerIpc(): void {
   ipcMain.handle("library:remove", (_event, input: { libraryId: number }) => {
     mustLibrary(input.libraryId);
     // 只删索引, 磁盘不动: 误删的代价是重扫一次, 不是丢文件
-    return deleteLibrary(mustRuntime().db, input.libraryId);
+    const removed = deleteLibrary(mustRuntime().db, input.libraryId);
+    forgetLibraryReachability();
+    return removed;
   });
 
   // 拖动排序: 传进来的 id 顺序就是新顺序。只改索引, 不碰磁盘。
@@ -1187,7 +1244,7 @@ function registerIpc(): void {
     return { cancelled };
   });
 
-  ipcMain.handle("item:list", (_event, input: ItemListInput = {}) => {
+  ipcMain.handle("item:list", async (_event, input: ItemListInput = {}) => {
     const rt = mustRuntime();
     // 逐字段转发, 少写一个界面上的筛选就静默失效 (漏过 state 与 sort)。
     const filters = {
@@ -1204,7 +1261,7 @@ function registerIpc(): void {
       sort: input.sort,
     };
     const items = listItems(rt, { ...filters, limit: input.limit ?? 100, offset: input.offset ?? 0 });
-    const covers = coverUrlsFor(rt, items);
+    const covers = coverUrlsFor(rt, items, await reachableLibraryIds(rt));
     // 集数角标只对剧集有意义 (电影没有集); 一批 key 查一次, 不是逐条查
     const showKeys = items.filter((item) => item.domain === "tv").map((item) => item.key);
     const stats = episodeStats(rt, showKeys);
@@ -1405,12 +1462,12 @@ function registerIpc(): void {
   // 失败详情来自任务日志(jsonl), 不在数据库里: 它是"记录", 不是"状态"。
   ipcMain.handle("tasks:failures", (_event, input: { id: number; limit?: number }) => taskFailures(mustRuntime(), input.id, input.limit ?? 200));
 
-  ipcMain.handle("item:get", (_event, number: string) => {
+  ipcMain.handle("item:get", async (_event, number: string) => {
     const rt = mustRuntime();
     const item = getItem(rt, number);
     // 详情面板要显示图, 与列表用同一套解析 (缓存 → 视频旁现成图)
     if (!item) return null;
-    return { ...item, coverUrl: coverUrlsFor(rt, [item]).get(item.key) ?? null };
+    return { ...item, coverUrl: coverUrlsFor(rt, [item], await reachableLibraryIds(rt)).get(item.key) ?? null };
   });
 
   ipcMain.handle("item:update", (_event, input: { key: string; pin?: string[]; unpin?: string[] }) =>
