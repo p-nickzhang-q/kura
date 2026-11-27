@@ -1,4 +1,5 @@
 import { statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { basename, dirname, resolve, sep } from "node:path";
 import type { Db } from "./driver";
 import type { Library } from "../domain/materialize";
@@ -42,6 +43,29 @@ function volumeRoot(root: string): string {
  *    在那个规则下会被静默清空 —— 盘没插上就点扫描, 索引没了。
  * 2. **卷指纹不一致** → 插错盘了。这条才是"换了一块盘, 盘符还是 E:"的正面回答。
  */
+/**
+ * 库根现在能不能读到 —— 异步 + 超时。
+ *
+ * 为什么不能直接用 `assertLibraryMounted`: 它跑的是同步 `statSync`。库在离线的网络
+ * 盘上时 Windows 要等 20 秒系统超时, 而这是主进程 —— 整个 IPC 队列陪着一起卡死。
+ * 实测 `todo:plans` 因此在三块离线盘上卡了 22505ms, 用户看到的是"未响应"。
+ *
+ * 异步 + 封顶, 慢盘最多让这个判断晚一点到; `fs.promises.stat` 不支持 AbortSignal
+ * (Node 至今没加), 所以用 race 封顶, 迟到的结果丢弃即可 —— 它不阻塞任何人。
+ */
+export async function isLibraryReachable(root: string, timeoutMs = 800): Promise<boolean> {
+  const probe = stat(root).then(
+    (info) => info.isDirectory(),
+    () => false,
+  );
+  return Promise.race([
+    probe,
+    new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(false), timeoutMs).unref?.();
+    }),
+  ]);
+}
+
 export function assertLibraryMounted(
   library: Library,
   deps: { stat?: typeof statSync; platform?: NodeJS.Platform } = {},

@@ -1,4 +1,5 @@
 import type { Runtime } from "../runtime";
+import { isLibraryReachable } from "../db/volume";
 import { findLibrary, listLibraries } from "../db/rows";
 import { countUnrecognized } from "./bind";
 import { syncNfo } from "./nfo-sync";
@@ -171,7 +172,16 @@ export async function todoPlansCached(rt: Runtime, options: { libraryId?: number
 }
 
 export async function todoPlans(rt: Runtime, options: { libraryId?: number } = {}): Promise<TodoPlans> {
-  const libraries = scopeLibraries(rt, options.libraryId).filter((library) => library.organizeEnabled !== false);
+  // 先剔掉读不到的库: 干跑要遍历整棵树, 而离线盘上一次 stat 就是一次系统超时。
+  // 实测三块离线盘让这个函数跑了 22505ms —— 界面在等它, 用户看到"未响应"。
+  const scoped = scopeLibraries(rt, options.libraryId);
+  const reachable = new Set<number>();
+  await Promise.all(
+    scoped.map(async (library) => {
+      if (await isLibraryReachable(library.root)) reachable.add(library.id);
+    }),
+  );
+  const libraries = scoped.filter((library) => library.organizeEnabled !== false && reachable.has(library.id));
 
   const total = { move: 0, writeNfo: 0, copyImage: 0, skip: 0 };
   for (const library of libraries) {
@@ -189,7 +199,7 @@ export async function todoPlans(rt: Runtime, options: { libraryId?: number } = {
   try {
     let created = 0;
     let written = 0;
-    for (const library of scopeLibraries(rt, options.libraryId)) {
+    for (const library of scoped.filter((item) => reachable.has(item.id))) {
       if (library.domain === "av") {
         const report = await syncNfo(rt, { libraryId: library.id });
         created += report.created;
