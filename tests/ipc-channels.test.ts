@@ -17,17 +17,26 @@ function channels(source: string, pattern: RegExp): string[] {
   return [...source.matchAll(pattern)].map((match) => match[1]!).sort();
 }
 
+/**
+ * 主进程注册通道的两种写法都要认。
+ *
+ * `registerIpc()` 里为了量慢 IPC 耗时, 统一改走一个本地 `handle()` 包装 (见 main.ts
+ * 的 logSlowIpc); 包装自己调的是 `ipcMain.handle`。只匹配其中一种就会把另一批通道
+ * 当成"没注册"。
+ */
+const HANDLE_PATTERN = /^\s*(?:ipcMain\.)?handle\(\s*"([^"]+)"/gm;
+
 describe("IPC 通道契约", () => {
   test("preload 调用的每个通道都在主进程注册了", () => {
     const invoked = channels(preload, /ipcRenderer\.invoke\("([^"]+)"/g);
-    const handled = new Set(channels(main, /ipcMain\.handle\(\s*"([^"]+)"/g));
+    const handled = new Set(channels(main, HANDLE_PATTERN));
     expect(invoked.length).toBeGreaterThan(10);
     expect(invoked.filter((channel) => !handled.has(channel))).toEqual([]);
   });
 
   test("主进程没有登记了却没人调用的死通道", () => {
     const invoked = new Set(channels(preload, /ipcRenderer\.invoke\("([^"]+)"/g));
-    const handled = channels(main, /ipcMain\.handle\(\s*"([^"]+)"/g);
+    const handled = channels(main, HANDLE_PATTERN);
     expect(handled.filter((channel) => !invoked.has(channel))).toEqual([]);
   });
 

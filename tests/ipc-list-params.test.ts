@@ -24,7 +24,8 @@ describe("item:list 参数转发", () => {
   test("ListItemOptions 的每个字段都在主进程里转发了", () => {
     const fields = listItemFields();
     expect(fields.length).toBeGreaterThan(10);
-    const handler = main.slice(main.indexOf('ipcMain.handle("item:list"'));
+    // registerIpc() 里统一走本地 handle() 包装, 不再直接写 ipcMain.handle。
+    const handler = main.slice(main.indexOf('handle("item:list"'));
     const handlerBody = handler.slice(0, handler.indexOf("});"));
     const dropped = fields.filter((field) => !new RegExp(`\\b${field}: input\\.${field}\\b`).test(handlerBody));
     expect(dropped).toEqual([]);

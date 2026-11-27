@@ -367,8 +367,18 @@ function statMtime(path: string): number | undefined {
  */
 const libraryReachable = new Map<number, { ok: boolean; at: number }>();
 const REACHABLE_TTL_MS = 30_000;
+/** 同一时刻只探一轮: `refreshAll` 会并发打 libraries / items / todo, 各探一次就是 3 倍等待。 */
+let reachableInFlight: Promise<Set<number>> | null = null;
 
 async function reachableLibraryIds(rt: Runtime): Promise<Set<number>> {
+  if (reachableInFlight) return reachableInFlight;
+  reachableInFlight = probeLibraries(rt).finally(() => {
+    reachableInFlight = null;
+  });
+  return reachableInFlight;
+}
+
+async function probeLibraries(rt: Runtime): Promise<Set<number>> {
   const libraries = listLibraries(rt.db);
   const now = Date.now();
   const ok = new Set<number>();
@@ -387,6 +397,7 @@ async function reachableLibraryIds(rt: Runtime): Promise<Set<number>> {
 /** 新增 / 改库之后要重新问一遍 —— 刚接上的盘不该等满 30 秒。 */
 function forgetLibraryReachability(): void {
   libraryReachable.clear();
+  reachableInFlight = null;
 }
 
 async function isDirectoryWithin(path: string, timeoutMs: number): Promise<boolean> {
@@ -693,7 +704,26 @@ async function createWindow(): Promise<void> {
 }
 
 function registerIpc(): void {
-  ipcMain.handle("app:info", () => {
+  /**
+   * 所有 handler 都从这里注册, 为了量耗时 (见 logSlowIpc)。
+   *
+   * 用 async 包一层不影响行为: IPC 的返回值本来就是异步送回去的, 而同步 handler
+   * 抛的错照样会变成 rejection。唯一的变化是耗时能被记下来。
+   */
+  const handle = (channel: string, listener: (event: Electron.IpcMainInvokeEvent, ...args: never[]) => unknown): void => {
+    // 这里必须是 ipcMain.handle 本身 —— 写成 handle 就是自己调自己, 直接爆栈。
+    ipcMain.handle(channel, async (event, ...args) => {
+      const started = Date.now();
+      try {
+        return await listener(event, ...(args as never[]));
+      } finally {
+        const elapsed = Date.now() - started;
+        if (elapsed >= SLOW_IPC_MS) logSlowIpc(channel, elapsed);
+      }
+    });
+  };
+
+  handle("app:info", () => {
     const rt = mustRuntime();
     const counts = rt.db.get<{ items: number; files: number; libraries: number }>(
       "select (select count(*) from items) as items, (select count(*) from media_files) as files, (select count(*) from libraries) as libraries",
@@ -728,7 +758,7 @@ function registerIpc(): void {
    * 产物未签名, 自动更新在 Windows 上体验很差(每次装都要点"仍要运行"), 所以这里只
    * 回答问题"线上有没有比我新的", 下载由人点发布页。**只在用户点按钮时调用**。
    */
-  ipcMain.handle("update:check", () => checkUpdate({ current: app.getVersion(), fetch: browserFetch }));
+  handle("update:check", () => checkUpdate({ current: app.getVersion(), fetch: browserFetch }));
 
   // 库根在不在 —— 异步 + 超时。
   //
@@ -736,14 +766,15 @@ function registerIpc(): void {
   // 而这发生在**主进程**, 整个 IPC 队列一起卡死 (实测冷启动卡 21065ms, 之后才好
   // 因为系统记住了"这盘不可用")。异步 + 1 秒封顶, 慢盘最多让这个数字晚一点到,
   // 界面不会陪着一起等。
-  ipcMain.handle("library:list", async () => {
-    const libraries = listLibraries(mustRuntime().db);
-    return Promise.all(
-      libraries.map(async (library) => ({ ...library, rootMissing: !(await isDirectoryWithin(library.root, 1000)) })),
-    );
+  // 复用可达性缓存, 不再单独探盘 —— 否则启动时 libraries / items / todo 各探一轮,
+  // 侧栏、列表、待办三处各自白等 1 秒。
+  handle("library:list", async () => {
+    const rt = mustRuntime();
+    const reachable = await reachableLibraryIds(rt);
+    return listLibraries(rt.db).map((library) => ({ ...library, rootMissing: !reachable.has(library.id) }));
   });
 
-  ipcMain.handle("library:add", async (_event, input: { domain?: string } = {}) => {
+  handle("library:add", async (_event, input: { domain?: string } = {}) => {
     const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
     if (result.canceled || !result.filePaths[0]) return null;
     const root = result.filePaths[0];
@@ -755,7 +786,7 @@ function registerIpc(): void {
   });
 
   // ── 影视域 ────────────────────────────────────────────────────────────────
-  ipcMain.handle(
+  handle(
     "file:dirs",
     (
       _event,
@@ -774,7 +805,7 @@ function registerIpc(): void {
     },
   );
 
-  ipcMain.handle("tmdb:test", async (_event, probeId?: number) => {
+  handle("tmdb:test", async (_event, probeId?: number) => {
     const rt = mustRuntime();
     const tmdb = await tmdbClient(rt);
     if (!tmdb) return { ok: false, status: "missing-key", error: "未配置 TMDB API key" };
@@ -801,7 +832,7 @@ function registerIpc(): void {
    * 走任务队列 + 进度事件: 一个目录一次 TMDB 往返, 40 个目录就是几十秒,
    * 没有进度的话界面看起来像卡死了。
    */
-  ipcMain.handle(
+  handle(
     "tmdb:suggest",
     async (
       _event,
@@ -838,7 +869,7 @@ function registerIpc(): void {
    * 一次绑多个目录 + 顺手刮: 走任务队列, 所以「任务」页能看到跑到第几个、哪几个失败、能停。
    * 绑定不可逆(文件从此归属某个 TMDB 条目), 更该留痕。
    */
-  ipcMain.handle(
+  handle(
     "file:bind-many",
     async (_event, input: { libraryId: number; items: { dir: string; key: string; paths?: string[] }[] }) =>
       exclusive("绑定并刮削", async (signal) => {
@@ -859,7 +890,7 @@ function registerIpc(): void {
       }),
   );
 
-  ipcMain.handle("tmdb:search", async (_event, input: { kind: "tv" | "movie"; query: string }) => {
+  handle("tmdb:search", async (_event, input: { kind: "tv" | "movie"; query: string }) => {
     const rt = mustRuntime();
     const tmdb = await tmdbClient(rt);
     if (!tmdb) throw new Error("未配置 TMDB API key（设置页填写，或环境变量 KURA_TMDB_API_KEY）");
@@ -867,7 +898,7 @@ function registerIpc(): void {
   });
 
   // 影视库的未识别**树**: 目录一层 + 文件一层, 两种粒度都能绑/手动加入
-  ipcMain.handle("file:unrecognized", (_event, input: { libraryId?: number; limit?: number }) => {
+  handle("file:unrecognized", (_event, input: { libraryId?: number; limit?: number }) => {
     const rt = mustRuntime();
     return {
       dirs: listUnrecognizedDirs(rt, {
@@ -889,7 +920,7 @@ function registerIpc(): void {
    * 盘上每个剧目录都有 `tvshow.nfo`、每部电影旁边都有 `<片名>.nfo`，里面带着
    * `<uniqueid type="tmdb">` —— 身份就在文件里。干跑先数，有东西可恢复才弹确认。
    */
-  ipcMain.handle("nfo:recover", async (_event, input: { libraryId: number; apply?: boolean }) => {
+  handle("nfo:recover", async (_event, input: { libraryId: number; apply?: boolean }) => {
     const rt = mustRuntime();
     const dry = await recoverFromNfo(rt, { libraryId: input.libraryId });
     if (input.apply !== true) return { ...dry, confirmed: false };
@@ -919,17 +950,17 @@ function registerIpc(): void {
    * 单独一个 IPC 而不是并进 `todo:plans`: 后者要跑整理计划(遍历全部文件)+ nfo 比对,
    * 移动硬盘上实测 11.9 秒 —— 而这一行是"换电脑第一眼要看的东西", 等它等于看不到。
    */
-  ipcMain.handle("todo:recover", async (_event, input: { libraryId?: number } = {}) =>
+  handle("todo:recover", async (_event, input: { libraryId?: number } = {}) =>
     todoRecover(mustRuntime(), input?.libraryId === undefined ? {} : { libraryId: input.libraryId }),
   );
 
-  ipcMain.handle("todo:counts", (_event, input: { libraryId?: number } = {}) =>
+  handle("todo:counts", (_event, input: { libraryId?: number } = {}) =>
     todoCounts(mustRuntime(), input?.libraryId === undefined ? {} : { libraryId: input.libraryId }),
   );
 
   // 默认**不读盘**: 只返回上次算出的数字(GUI 先拿它顶着)。带 `force` 才真算 ——
   // 整理干跑 + nfo 比对在移动硬盘上要 12 秒, 点一下侧栏就重算一遍毫无道理。
-  ipcMain.handle("todo:plans", async (_event, input: { libraryId?: number; force?: boolean } = {}) =>
+  handle("todo:plans", async (_event, input: { libraryId?: number; force?: boolean } = {}) =>
     todoPlansCached(mustRuntime(), {
       ...(input?.libraryId === undefined ? {} : { libraryId: input.libraryId }),
       force: input?.force === true,
@@ -942,7 +973,7 @@ function registerIpc(): void {
    * 干跑先算, 有得修就弹一次确认再改索引 —— 这类状态多半来自旧版整理或中途崩溃,
    * 用户看到的是"打开位置没反应", 而他并不知道索引是旧的。
    */
-  ipcMain.handle("library:repair-paths", async (_event, input: { libraryId?: number } = {}) => {
+  handle("library:repair-paths", async (_event, input: { libraryId?: number } = {}) => {
     const rt = mustRuntime();
     const scope = input?.libraryId === undefined ? {} : { libraryId: input.libraryId };
     const dry = await repairIndexPaths(rt, scope);
@@ -968,7 +999,7 @@ function registerIpc(): void {
    * 移动硬盘换了盘符、或者目录改了名, 路径变了但相对结构一样 —— 改索引前缀就能
    * 保住全部绑定关系(不用重扫、不用重新找建议)。只改索引, 一个视频文件都不动。
    */
-  ipcMain.handle(
+  handle(
     "library:relocate",
     async (_event, input: { libraryId: number; root?: string }) => {
       const rt = mustRuntime();
@@ -1006,7 +1037,7 @@ function registerIpc(): void {
   );
 
   // 手动加入: 不连任何来源, 只建一个本地条目 (local: 身份, ugc 标记)
-  ipcMain.handle(
+  handle(
     "file:bind-local",
     (
       _event,
@@ -1023,7 +1054,7 @@ function registerIpc(): void {
     },
   );
 
-  ipcMain.handle("file:bind", async (_event, input: { libraryId: number; dir: string; key: string; paths?: string[]; season?: number }) => {
+  handle("file:bind", async (_event, input: { libraryId: number; dir: string; key: string; paths?: string[]; season?: number }) => {
     const rt = mustRuntime();
     const result = bindDirectory(rt, {
       libraryId: input.libraryId,
@@ -1040,7 +1071,7 @@ function registerIpc(): void {
   });
 
   // 改绑: 绑错了换一个 TMDB 身份 (不用删库重来)
-  ipcMain.handle(
+  handle(
     "item:rebind",
     async (_event, input: { key: string; newKey: string }) => {
       const rt = mustRuntime();
@@ -1056,11 +1087,11 @@ function registerIpc(): void {
    * 合并条目: 同一部片被拆成两个条目(一个 tmdb 身份 + 一个手动加的 local)时,
    * 各自占一个文件, 整理时互相判"目标已存在", 谁都搬不动。只做电影。
    */
-  ipcMain.handle("item:merge", (_event, input: { from: string; into: string }) =>
+  handle("item:merge", (_event, input: { from: string; into: string }) =>
     mergeItems(mustRuntime(), { from: input.from, into: input.into }),
   );
 
-  ipcMain.handle("item:unbind", (_event, input: { key: string }) => {
+  handle("item:unbind", (_event, input: { key: string }) => {
     const rt = mustRuntime();
     const files = rt.db.all<{ path: string; library_id: number }>(
       "select path, library_id from media_files where lower(number) = lower(?)",
@@ -1073,13 +1104,13 @@ function registerIpc(): void {
     return { unbound };
   });
 
-  ipcMain.handle("item:dirs", (_event, input: { key: string }) => ({
+  handle("item:dirs", (_event, input: { key: string }) => ({
     key: input.key,
     dirs: listItemDirs(mustRuntime(), input.key),
   }));
 
   // 同一部剧拆成多个目录时(仁医 / 仁医2), 把其中一个目录整体改成第 N 季
-  ipcMain.handle("file:set-season", (_event, input: { libraryId: number; dir: string; season: number; key?: string }) => {
+  handle("file:set-season", (_event, input: { libraryId: number; dir: string; season: number; key?: string }) => {
     const rt = mustRuntime();
     const result = setDirectorySeason(rt, {
       dir: input.dir,
@@ -1091,17 +1122,17 @@ function registerIpc(): void {
   });
 
   // 合集包常见"001集…165集"跨季连续编号: 按播出顺序摊到各季
-  ipcMain.handle("item:spread-seasons", (_event, input: { key: string; dir?: string }) => {
+  handle("item:spread-seasons", (_event, input: { key: string; dir?: string }) => {
     const rt = mustRuntime();
     return spreadAbsoluteEpisodes(rt, { key: input.key, ...(input.dir ? { dir: input.dir } : {}) });
   });
 
-  ipcMain.handle("item:episodes", (_event, input: { key: string }) => {
+  handle("item:episodes", (_event, input: { key: string }) => {
     const rt = mustRuntime();
     return { key: input.key, episodes: listEpisodes(rt, input.key), stats: episodeStats(rt, [input.key])[input.key] ?? { declared: 0, bound: 0 } };
   });
 
-  ipcMain.handle("scrape:show", async (_event, input: { key: string }) => {
+  handle("scrape:show", async (_event, input: { key: string }) => {
     const rt = mustRuntime();
     const tmdb = await tmdbClient(rt);
     if (!tmdb) throw new Error("未配置 TMDB API key（设置页填写，或环境变量 KURA_TMDB_API_KEY）");
@@ -1109,7 +1140,7 @@ function registerIpc(): void {
   });
 
   // 「整理」只清它这次搬空的目录; 影片早就搬完、旧目录里只剩海报时, 得单独清一次
-  ipcMain.handle("library:cleanup", (_event, input: { libraryId?: number; apply?: boolean }) =>
+  handle("library:cleanup", (_event, input: { libraryId?: number; apply?: boolean }) =>
     exclusive("清理空目录", () =>
       cleanupEmptyDirs(mustRuntime(), {
         ...(input.libraryId !== undefined ? { libraryId: input.libraryId } : {}),
@@ -1118,7 +1149,7 @@ function registerIpc(): void {
     ),
   );
 
-  ipcMain.handle("library:remove", (_event, input: { libraryId: number }) => {
+  handle("library:remove", (_event, input: { libraryId: number }) => {
     mustLibrary(input.libraryId);
     // 只删索引, 磁盘不动: 误删的代价是重扫一次, 不是丢文件
     const removed = deleteLibrary(mustRuntime().db, input.libraryId);
@@ -1127,22 +1158,22 @@ function registerIpc(): void {
   });
 
   // 拖动排序: 传进来的 id 顺序就是新顺序。只改索引, 不碰磁盘。
-  ipcMain.handle("library:reorder", (_event, input: { ids: number[] }) =>
+  handle("library:reorder", (_event, input: { ids: number[] }) =>
     reorderLibraries(mustRuntime().db, input.ids),
   );
 
-  ipcMain.handle("library:rename", (_event, input: { libraryId: number; name: string }) => {
+  handle("library:rename", (_event, input: { libraryId: number; name: string }) => {
     mustLibrary(input.libraryId);
     return renameLibrary(mustRuntime().db, input.libraryId, input.name);
   });
 
-  ipcMain.handle("library:set-organize", (_event, input: { libraryId: number; enabled: boolean }) => {
+  handle("library:set-organize", (_event, input: { libraryId: number; enabled: boolean }) => {
     const library = mustLibrary(input.libraryId);
     updateLibraryOrganize(mustRuntime().db, library.id, input.enabled);
     return { ...library, organizeEnabled: input.enabled };
   });
 
-  ipcMain.handle("library:set-template", (_event, input: { libraryId: number; dimension: string }) => {
+  handle("library:set-template", (_event, input: { libraryId: number; dimension: string }) => {
     const library = mustLibrary(input.libraryId);
     const template = dimensionTemplate(input.dimension);
     if (!template) throw new AppError(`未知维度: ${input.dimension}`, EXIT.USAGE, { dimension: input.dimension });
@@ -1150,7 +1181,7 @@ function registerIpc(): void {
     return { ...library, template };
   });
 
-  ipcMain.handle("scan:start", (_event, input: { libraryId: number; force?: boolean }) =>
+  handle("scan:start", (_event, input: { libraryId: number; force?: boolean }) =>
     exclusive("扫描", async () => {
       return scan(mustRuntime(), {
         library: mustLibrary(input.libraryId),
@@ -1160,7 +1191,7 @@ function registerIpc(): void {
     }),
   );
 
-  ipcMain.handle("scrape:pending", (_event, input: { limit?: number }) =>
+  handle("scrape:pending", (_event, input: { limit?: number }) =>
     exclusive("刮削", async (signal) => {
       const rt = mustRuntime();
       // 走 *Task 版本: 它会在 tasks 表里留一行, 「任务」页才不是空的。
@@ -1181,7 +1212,7 @@ function registerIpc(): void {
     }),
   );
 
-  ipcMain.handle("llm:test", async () => {
+  handle("llm:test", async () => {
     const config = resolveLlm(settings);
     if (!config) {
       throw new AppError("未配置 LLM", EXIT.NEEDS_INPUT, { hint: "先填地址、Key、模型并保存" });
@@ -1192,7 +1223,7 @@ function registerIpc(): void {
     return { ok: true, model: config.model, endpoint: config.baseUrl, sample };
   });
 
-  ipcMain.handle("translate:pending", (_event, input: { limit?: number } = {}) =>
+  handle("translate:pending", (_event, input: { limit?: number } = {}) =>
     exclusive("翻译", async (signal) => {
       const rt = mustRuntime();
       const translator = await buildTranslator();
@@ -1220,7 +1251,7 @@ function registerIpc(): void {
     }),
   );
 
-  ipcMain.handle("translate:items", (_event, input: { keys?: unknown }) =>
+  handle("translate:items", (_event, input: { keys?: unknown }) =>
     exclusive("翻译", async (signal) => {
       const rt = mustRuntime();
       const translator = await buildTranslator();
@@ -1233,18 +1264,18 @@ function registerIpc(): void {
     }),
   );
 
-  ipcMain.handle("translate:cancel", () => {
+  handle("translate:cancel", () => {
     currentAbort?.abort();
     return { cancelled: Boolean(currentAbort) };
   });
 
-  ipcMain.handle("scrape:cancel", () => {
+  handle("scrape:cancel", () => {
     const cancelled = Boolean(currentAbort);
     currentAbort?.abort();
     return { cancelled };
   });
 
-  ipcMain.handle("item:list", async (_event, input: ItemListInput = {}) => {
+  handle("item:list", async (_event, input: ItemListInput = {}) => {
     const rt = mustRuntime();
     // 逐字段转发, 少写一个界面上的筛选就静默失效 (漏过 state 与 sort)。
     const filters = {
@@ -1279,7 +1310,7 @@ function registerIpc(): void {
     };
   });
 
-  ipcMain.handle(
+  handle(
     "files:unparsed",
     (_event, input: { libraryId?: number; limit?: number; offset?: number } = {}) => {
       const rt = mustRuntime();
@@ -1295,7 +1326,7 @@ function registerIpc(): void {
     },
   );
 
-  ipcMain.handle("data:open", async () => {
+  handle("data:open", async () => {
     const dir = mustRuntime().paths.dataDir;
     const error = await shell.openPath(dir);
     if (error) throw new AppError(`打不开数据目录: ${error}`, EXIT.RETRYABLE, { dir });
@@ -1303,7 +1334,7 @@ function registerIpc(): void {
   });
 
   // 详情面板"打开位置"要用: 这个番号在磁盘上的文件。
-  ipcMain.handle("item:files", (_event, key: string) => {
+  handle("item:files", (_event, key: string) => {
     const rt = mustRuntime();
     return rt.db
       .all<{ path: string; size: number }>("select path, size from media_files where number = ? order by path", [key])
@@ -1315,12 +1346,12 @@ function registerIpc(): void {
    * 人在详情面板里显式改; 自动改只发生在 scan 对"从没刮过网络"的条目。
    */
   /** 批量: 按当前解析器找出判错的条目; apply 才真的改。 */
-  ipcMain.handle("item:retype-detect", (_event, input: { apply?: boolean } = {}) => {
+  handle("item:retype-detect", (_event, input: { apply?: boolean } = {}) => {
     const changes = detectRetypes(mustRuntime(), { apply: input.apply === true });
     return { applied: input.apply === true, changes };
   });
 
-  ipcMain.handle("item:retype", (_event, input: { key: string; contentType: string }) => {
+  handle("item:retype", (_event, input: { key: string; contentType: string }) => {
     const rt = mustRuntime();
     const result = retypeItem(rt, input.key, input.contentType);
     return { ...result, item: getItem(rt, input.key) };
@@ -1339,22 +1370,22 @@ function registerIpc(): void {
    * `frame: false` 之后系统的最小化/最大化/关闭都没了, 只能由渲染进程点、主进程做 ——
    * 所以这三个必须走 IPC, 而不是 window.close() 之类的网页 API(那会退化成"隐藏")。
    */
-  ipcMain.handle("window:minimize", () => win?.minimize());
-  ipcMain.handle("window:toggle-maximize", () => {
+  handle("window:minimize", () => win?.minimize());
+  handle("window:toggle-maximize", () => {
     if (!win) return false;
     if (win.isMaximized()) win.unmaximize();
     else win.maximize();
     return win.isMaximized();
   });
-  ipcMain.handle("window:close", () => win?.close());
-  ipcMain.handle("window:is-maximized", () => win?.isMaximized() ?? false);
-  ipcMain.handle("window:toggle-devtools", () => {
+  handle("window:close", () => win?.close());
+  handle("window:is-maximized", () => win?.isMaximized() ?? false);
+  handle("window:toggle-devtools", () => {
     if (!win) return false;
     win.webContents.isDevToolsOpened() ? win.webContents.closeDevTools() : win.webContents.openDevTools({ mode: "detach" });
     return win.webContents.isDevToolsOpened();
   });
 
-  ipcMain.handle("files:reveal", (_event, path: string) => {
+  handle("files:reveal", (_event, path: string) => {
     if (!existsSync(path)) return { ok: false as const, reason: "missing" as const, path };
     shell.showItemInFolder(path);
     return { ok: true as const, path };
@@ -1363,7 +1394,7 @@ function registerIpc(): void {
   // NFO 双向同步: Emby/Jellyfin 读的是文件, 不是这个库。
   // 一次过: 库里没网络数据的读 nfo 入库, 有数据的把库写回 nfo。
   // 网络盘上 4000 个文件很慢, 所以任务是异步 + 并发 + 逐条回报进度, 并且能被「停止」打断。
-  ipcMain.handle(
+  handle(
     "nfo:sync",
     (
       _event,
@@ -1429,7 +1460,7 @@ function registerIpc(): void {
       }),
   );
 
-  ipcMain.handle("tasks:list", (_event, input: { limit?: number } = {}) =>
+  handle("tasks:list", (_event, input: { limit?: number } = {}) =>
     listTasks(mustRuntime(), { limit: input.limit ?? 20 }),
   );
 
@@ -1439,7 +1470,7 @@ function registerIpc(): void {
    * 有两段路: 还没开始的 `queued` 直接改状态; 正在跑的只能 abort 进程内的那个信号 ——
    * 没有守护进程, 所以"停一个别的进程发起的任务"是做不到的, 这时要说清楚而不是假装成功。
    */
-  ipcMain.handle("tasks:stop", (_event, input: { id: number }) => {
+  handle("tasks:stop", (_event, input: { id: number }) => {
     const rt = mustRuntime();
     const task = getTask(rt, input.id);
     if (!task) throw new AppError(`任务不存在: ${input.id}`, EXIT.NOT_FOUND, { id: input.id });
@@ -1457,12 +1488,12 @@ function registerIpc(): void {
     return { stopped: true, reason: null };
   });
 
-  ipcMain.handle("tasks:retry", (_event, input: { id: number; onlyFailed?: boolean }) => rerunTask(input.id, input.onlyFailed === true));
+  handle("tasks:retry", (_event, input: { id: number; onlyFailed?: boolean }) => rerunTask(input.id, input.onlyFailed === true));
 
   // 失败详情来自任务日志(jsonl), 不在数据库里: 它是"记录", 不是"状态"。
-  ipcMain.handle("tasks:failures", (_event, input: { id: number; limit?: number }) => taskFailures(mustRuntime(), input.id, input.limit ?? 200));
+  handle("tasks:failures", (_event, input: { id: number; limit?: number }) => taskFailures(mustRuntime(), input.id, input.limit ?? 200));
 
-  ipcMain.handle("item:get", async (_event, number: string) => {
+  handle("item:get", async (_event, number: string) => {
     const rt = mustRuntime();
     const item = getItem(rt, number);
     // 详情面板要显示图, 与列表用同一套解析 (缓存 → 视频旁现成图)
@@ -1470,11 +1501,11 @@ function registerIpc(): void {
     return { ...item, coverUrl: coverUrlsFor(rt, [item], await reachableLibraryIds(rt)).get(item.key) ?? null };
   });
 
-  ipcMain.handle("item:update", (_event, input: { key: string; pin?: string[]; unpin?: string[] }) =>
+  handle("item:update", (_event, input: { key: string; pin?: string[]; unpin?: string[] }) =>
     updateItem(mustRuntime(), { key: input.key, pin: input.pin as never, unpin: input.unpin as never }),
   );
 
-  ipcMain.handle("scrape:keys", (_event, input: { keys: string[] }) =>
+  handle("scrape:keys", (_event, input: { keys: string[] }) =>
     exclusive("刮削", async (signal) => {
       const rt = mustRuntime();
       // 勾选里可能既有番号条目也有影视条目: 影视走 TMDB(按剧记账), 番号走来源路由。
@@ -1518,7 +1549,7 @@ function registerIpc(): void {
     }),
   );
 
-  ipcMain.handle("resource:fetch", (_event, input: { key: string }) =>
+  handle("resource:fetch", (_event, input: { key: string }) =>
     exclusive("下载海报", async () => {
       const rt = mustRuntime();
       let item = getItem(rt, input.key);
@@ -1561,7 +1592,7 @@ function registerIpc(): void {
     }),
   );
 
-  ipcMain.handle("config:get", () => ({
+  handle("config:get", () => ({
     path: settingsPath(mustRuntime().paths),
     settings: maskSettings(settings),
     dmmConfigured: isDmmConfigured(resolveDmmEnv(settings)),
@@ -1572,7 +1603,7 @@ function registerIpc(): void {
     tmdbFromEnv: Boolean(process.env.KURA_TMDB_API_KEY),
   }));
 
-  ipcMain.handle(
+  handle(
     "config:set",
     async (
       _event,
@@ -1628,7 +1659,7 @@ function registerIpc(): void {
    * 代理自查: 报出"配置的是什么"和"实际在用的是什么", 以及端口通不通。
    * 代理类故障的排查全靠这一步, 否则用户只会看到 net::ERR_PROXY_CONNECTION_FAILED。
    */
-  ipcMain.handle("proxy:test", async () => {
+  handle("proxy:test", async () => {
     const configured = resolveProxy(settings) ?? "";
     const targets = await Promise.all(
       proxyCandidates(process.platform).map(async (candidate) => ({
@@ -1643,7 +1674,7 @@ function registerIpc(): void {
     };
   });
 
-  ipcMain.handle("dmm:test", async (_event, probe?: string) => {
+  handle("dmm:test", async (_event, probe?: string) => {
     const source = createDmmSource(createHttp(), resolveDmmEnv(settings));
     const missing = source.requirements();
     if (missing.length > 0) return { ok: false, status: "missing-config", missing };
@@ -1666,7 +1697,7 @@ function registerIpc(): void {
   });
 
   // 影视库是另一套形状(剧目录 / Season 目录 / SxxEyy 文件名), 不走模板
-  ipcMain.handle("organize:preview", (_event, input: { libraryId: number }) => {
+  handle("organize:preview", (_event, input: { libraryId: number }) => {
     const library = mustLibrary(input.libraryId);
     return library.domain === "av"
       ? organize(mustRuntime(), { library })
@@ -1675,7 +1706,7 @@ function registerIpc(): void {
 
   // 真搬运走任务: 搬几百个文件 + 写上千份 nfo 要好几分钟, 这一步又会**移动用户文件**,
   // 不给进度、不能停、关掉窗口就不知道跑到哪, 说不过去。
-  ipcMain.handle("organize:apply", (_event, input: { libraryId: number }) =>
+  handle("organize:apply", (_event, input: { libraryId: number }) =>
     exclusive("整理", async (signal) => {
       const rt = mustRuntime();
       const { task, report } = await organizeTask(
@@ -1707,6 +1738,33 @@ function logFatal(kind: string, detail: unknown): void {
     // 连日志都写不了就没办法了, 至少别在错误处理里再抛一次
   }
   console.error(`[${kind}]`, detail);
+}
+
+/**
+ * 慢 IPC 留痕。
+ *
+ * 动机: 用户报「点一下就未响应」, 但本机复现不出来 —— 每个操作都在 10ms 内。差别在
+ * 媒体盘: 同步 stat/readdir 落在一块慢盘上, 一条就是几十秒, 而主进程是单线程,
+ * 整个 IPC 队列陪着一起等。没有度量就只能猜"是哪条路径", 猜错就是白改。
+ *
+ * 所以把每个 handler 的耗时记下来, 超过阈值写一行。用户复现一次, 日志直接指认
+ * 是哪个 channel、卡了多少毫秒 —— 比任何猜测都快。
+ *
+ * 主进程被同步阻塞时, **同期别的 handler 也会一起变慢**; 看到一片 channel 同时
+ * 几百毫秒, 说明卡的不是它们, 而是中间夹着的那次同步 IO。
+ */
+const SLOW_IPC_MS = 150;
+
+function logSlowIpc(channel: string, ms: number): void {
+  const line = `[${new Date().toISOString()}] ${String(ms).padStart(6)}ms  ${channel}\n`;
+  try {
+    const { logDir } = resolvePaths();
+    mkdirSync(logDir, { recursive: true });
+    appendFileSync(join(logDir, "slow-ipc.log"), line, "utf8");
+  } catch {
+    // 日志写不了也要让 console 有痕迹 (dev 壳的 stderr 能直接看到)
+  }
+  console.warn(`[slow-ipc] ${ms}ms ${channel}`);
 }
 
 process.on("uncaughtException", (err) => logFatal("uncaughtException", err));
