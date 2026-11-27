@@ -546,17 +546,28 @@ async function refreshAll(): Promise<void> {
 
   errors.value = [];
   invalidateTodoPlan();
-  info.value = (await step("读取状态", () => window.kura.info())) ?? info.value;
-  config.value = (await step("读取配置", () => window.kura.configGet())) ?? config.value;
+  // 这四个互不依赖, 一起发。原来是一条一条 await: 切库要排队走完 7 个 IPC,
+  // 每个几十毫秒, 累计起来就是"点了没反应"的那半秒。
+  const [nextInfo, nextConfig, nextLibraries, nextTasks] = await Promise.all([
+    step("读取状态", () => window.kura.info()),
+    step("读取配置", () => window.kura.configGet()),
+    step("读取媒体库", () => window.kura.libraries()),
+    step("读取任务", () => window.kura.tasks(20)),
+  ]);
+  info.value = nextInfo ?? info.value;
+  config.value = nextConfig ?? config.value;
   translateOn.value = config.value?.settings.translate ?? false;
   saveImagesOn.value = config.value?.settings.saveImages !== false;
   suggestAliasesOn.value = config.value?.settings.suggestAliases !== false;
-  libraries.value = (await step("读取媒体库", () => window.kura.libraries())) ?? libraries.value;
+  libraries.value = nextLibraries ?? libraries.value;
+  tasks.value = nextTasks ?? tasks.value;
   if (selectedId.value === null && libraries.value[0]) selectedId.value = libraries.value[0].id;
-  await step("读取条目", () => refreshItems());
-  await step("读取未识别文件", () => refreshUnparsed());
-  await step("读取待办", () => refreshTodo());
-  tasks.value = (await step("读取任务", () => window.kura.tasks(20))) ?? tasks.value;
+  // 下面三个都按 selectedId 取数, 所以只能等 media 库回来之后发; 但彼此之间可以并行。
+  await Promise.all([
+    step("读取条目", () => refreshItems()),
+    step("读取未识别文件", () => refreshUnparsed()),
+    step("读取待办", () => refreshTodo()),
+  ]);
   // 把当前模板反查成维度, 让下拉框显示"现在是什么"。
   // 不能只做精确比对: 默认建的番号库模板是 `{content_type}/{studio}/{number}`,
   // 而"按类型"这个维度的模板是 `{content_type}/{number}` —— 精确比对不上, 下拉框
