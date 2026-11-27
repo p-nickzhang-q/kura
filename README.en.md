@@ -215,11 +215,22 @@ Missing credentials exit with **4 (NEEDS_INPUT)** rather than silently returning
 
 **[Releases](https://github.com/p-nickzhang-q/kura/releases/latest)**
 
-| Artifact | What it is |
-|---|---|
-| `Kura-x.y.z-setup.exe` | Windows installer (choose directory, shortcuts, uninstaller) |
-| `Kura-x.y.z-portable.exe` | Portable, double-click to run |
-| `kura-x.y.z-win-x64.exe` | The CLI, for people and agents |
+| Artifact | Size | What it is |
+|---|---|---|
+| `Kura-x.y.z-setup.exe` | ~98MB | Windows installer (choose directory, shortcuts, uninstaller) |
+| `Kura-x.y.z-setup-cli.exe` | ~125MB | Same, **plus the CLI** — `kura` works in a terminal afterwards |
+| `Kura-x.y.z-portable.exe` | ~90MB | Portable, double-click to run |
+| `kura-x.y.z-win-x64.exe` | ~110MB | The single-file CLI, if you don't want the GUI |
+
+**Pick `-setup-cli` if you want to type `kura` in a terminal.** It installs to
+`%LOCALAPPDATA%\Programs\Kura\cli\` and appends that to your user PATH (the uninstaller
+removes it again, character for character).
+
+> The CLI cannot live next to `Kura.exe`: Windows filenames are case-insensitive, so
+> `Kura.exe` and `kura.exe` are the *same file* — putting them together overwrites the GUI.
+>
+> **Open a new terminal** for the PATH change to apply. The installer broadcasts the
+> environment change, but already-running windows never see it.
 
 > **Unsigned.** Windows will say "unknown publisher" — click *More info → Run anyway*.
 > Uninstalling does **not** delete `%APPDATA%\kura` (index and config).
@@ -242,6 +253,8 @@ bun test                         # all tests are offline
 pnpm typecheck
 bun run build:cli                # -> dist/kura
 pnpm --filter @kura/desktop package:win
+pnpm --filter @kura/desktop package:installer      # NSIS installer (needs wine on Linux)
+pnpm --filter @kura/desktop package:installer:cli  # same + the CLI (+27MB)
 ```
 
 Layout:

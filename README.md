@@ -71,11 +71,22 @@ Electron 桌面应用 + 面向 agent 的 CLI，共享一份 TypeScript core 和�
 
 最新版：**[Releases](https://github.com/p-nickzhang-q/kura/releases/latest)**
 
-| 产物 | 说明 |
-|---|---|
-| `Kura-x.y.z-setup.exe` | Windows 安装包（选目录、桌面/开始菜单快捷方式、卸载器） |
-| `Kura-x.y.z-portable.exe` | 免安装，双击即用 |
-| `kura-x.y.z-win-x64.exe` | 命令行工具，给人和 agent 用 |
+| 产物 | 大小 | 说明 |
+|---|---|---|
+| `Kura-x.y.z-setup.exe` | ~98MB | Windows 安装包（选目录、桌面/开始菜单快捷方式、卸载器） |
+| `Kura-x.y.z-setup-cli.exe` | ~125MB | 同上，**另带命令行工具**，装完就能敲 `kura` |
+| `Kura-x.y.z-portable.exe` | ~90MB | 免安装，双击即用 |
+| `kura-x.y.z-win-x64.exe` | ~110MB | 单文件 CLI，不装 GUI 也能用 |
+
+**想让终端里直接敲 `kura`，就选 `-setup-cli`。** 它会装到
+`%LOCALAPPDATA%\Programs\Kura\cli\` 并加进用户 PATH（卸载时还原）。
+
+> CLI 不能和 `Kura.exe` 同目录 —— Windows 文件名不区分大小写，`Kura.exe` 与
+> `kura.exe` 是同一个文件，摊在一起会把 GUI 覆盖掉。
+>
+> **PATH 要新开终端才生效**：安装器会广播环境变量变化，但已经打开的窗口读不到。
+>
+> 不用命令行就选普通 `setup.exe`，小 27MB。
 
 > 均**未签名**，Windows 会提示「未知发布者」，点「更多信息 → 仍要运行」。
 > 卸载**不会删除** `%APPDATA%\kura`（媒体库索引与配置）。
@@ -330,6 +341,7 @@ bun run build:cli                # -> dist/kura
 bun run build:cli:win            # -> dist/kura.exe
 pnpm --filter @kura/desktop package:win         # Windows portable
 pnpm --filter @kura/desktop package:installer   # NSIS 安装包（Linux 上需 wine）
+pnpm --filter @kura/desktop package:installer:cli  # 同上 + 命令行工具（+27MB）
 ```
 
 打包细节（含无 sudo 时的 Windows 侧构建、离线缓存）见 [docs/dev/packaging.md](docs/dev/packaging.md)；
